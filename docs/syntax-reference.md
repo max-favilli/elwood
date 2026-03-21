@@ -364,11 +364,19 @@ elwood
 # Evaluate single expression
 elwood eval "$.users[*] | where $.active" --input data.json
 
-# Run script file
+# Run a script file
 elwood run transform.elwood --input payload.json
 
 # Pipe JSON via stdin
-echo '{"x":1}' | elwood eval "$.x + 1"
+echo '{"x":1}' | elwood eval "$.x * 2"
+
+# Save output to file (shell redirection — errors go to stderr, not the file)
+elwood eval "$.orders[*] | where o => o.total > 100" --input orders.json > filtered.json
+elwood run transform.elwood --input payload.json > result.json
+
+# Chain with other tools
+curl -s https://api.example.com/data | elwood eval "$.results[*] | select r => r.name" > names.json
+cat large.json | elwood eval "$.items[*] | where i => i.active | count"
 ```
 
 ### REPL Commands
