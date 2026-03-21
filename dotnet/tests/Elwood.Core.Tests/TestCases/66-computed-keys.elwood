@@ -1,0 +1,6 @@
+{
+  static: "fixed",
+  [`{$.prefix}_id`]: $.product.id,
+  [$.product.season]: "current",
+  attributes: $.fields[*] | reduce (acc, f) => { ...acc, [f.name]: f.value } from {}
+}

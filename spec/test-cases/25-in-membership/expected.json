@@ -1,0 +1,5 @@
+{
+  "fromArray": ["Jacket", "Boots", "Gloves"],
+  "fromLiteral": ["Jacket", "Boots", "Gloves"],
+  "fromMixed": ["Jacket", "Boots", "Backpack", "Gloves", "Hat"]
+}

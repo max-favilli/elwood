@@ -1,0 +1,9 @@
+{
+  "users": [
+    { "name": "Alice", "age": 30, "active": true },
+    { "name": "Bob", "age": 17, "active": false },
+    { "name": "Charlie", "age": 25, "active": true },
+    { "name": "Diana", "age": 42, "active": false },
+    { "name": "Eve", "age": 35, "active": true }
+  ]
+}

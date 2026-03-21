@@ -1,0 +1,36 @@
+{
+  "name": "@elwood-lang/core",
+  "version": "0.1.0",
+  "description": "Elwood — a functional JSON transformation DSL",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "json",
+    "jsonpath",
+    "dsl",
+    "transformation",
+    "query",
+    "functional"
+  ],
+  "author": "Massimiliano Favilli",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}

@@ -1,0 +1,20 @@
+let activeSystems = $.systems[*] | where s => s.status == "active"
+
+let clusters = activeSystems
+  | groupBy s => s.domain
+  | select g => {
+      domain: g.key,
+      systemCount: g.items | count,
+      systems: g.items | select s => s.name
+    }
+
+let middlewareIntegrations = $.integrations[*]
+  | where i => i.middleware == "Elwood Middleware"
+
+return {
+  company: $.company,
+  totalActive: activeSystems | count,
+  clusters: clusters,
+  middlewareIntegrationCount: middlewareIntegrations | count,
+  frequencies: middlewareIntegrations | select i => i.frequency | distinct
+}

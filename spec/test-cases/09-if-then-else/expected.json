@@ -1,0 +1,4 @@
+[
+  { "name": "Alice", "label": "adult" },
+  { "name": "Bob", "label": "minor" }
+]

@@ -1,0 +1,6 @@
+[
+  { "name": "Winter Jacket", "isSpecial": true },
+  { "name": "Socks", "isSpecial": false },
+  { "name": "Hiking Boot", "isSpecial": true },
+  { "name": "Cap", "isSpecial": false }
+]

@@ -1,0 +1,1 @@
+$.users[*] | select u => { name: u.name, label: if u.age >= 18 then "adult" else "minor" }

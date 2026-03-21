@@ -1,0 +1,14 @@
+{
+  "employees": [
+    { "name": "Alice", "fullTime": true },
+    { "name": "Bob", "fullTime": false },
+    { "name": "Charlie", "fullTime": true },
+    { "name": "Diana", "fullTime": false }
+  ],
+  "benefits": [
+    { "name": "Health Insurance", "fullTimeOnly": true },
+    { "name": "Parking", "fullTimeOnly": false },
+    { "name": "401k Match", "fullTimeOnly": true },
+    { "name": "Gym", "fullTimeOnly": false }
+  ]
+}

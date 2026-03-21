@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 60" width="560" height="120">
+  <!-- {elwood} — clean, monospace, one color -->
+  <text x="140" y="44" font-family="JetBrains Mono, Consolas, monospace" font-size="42" font-weight="600" fill="#1a1a2e" text-anchor="middle" letter-spacing="1">{elwood}</text>
+</svg>

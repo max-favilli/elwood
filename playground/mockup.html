@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{elwood} Playground</title>
+<style>
+  :root {
+    --bg-primary: #1e1e1e;
+    --bg-secondary: #252526;
+    --bg-tertiary: #2d2d30;
+    --bg-hover: #3e3e42;
+    --bg-active: #094771;
+    --border: #3e3e42;
+    --text-primary: #cccccc;
+    --text-secondary: #969696;
+    --text-muted: #5a5a5a;
+    --accent: #cccccc;
+    --accent-hover: #ffffff;
+    --error-bg: #3a1d1d;
+    --error-text: #f48771;
+    --success: #89d185;
+    --keyword: #569cd6;
+    --string: #ce9178;
+    --number: #b5cea8;
+    --comment: #6a9955;
+    --operator: #d4d4d4;
+    --function: #dcdcaa;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ===== TOOLBAR ===== */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    height: 40px;
+    padding: 0 12px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .toolbar-logo {
+    font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0.5px;
+    margin-right: 16px;
+    user-select: none;
+  }
+
+  .toolbar-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+    height: 26px;
+    font-family: inherit;
+  }
+  .toolbar-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--text-secondary);
+  }
+  .toolbar-btn:active {
+    background: var(--bg-active);
+  }
+  .toolbar-btn.primary {
+    background: #0e639c;
+    border-color: #1177bb;
+  }
+  .toolbar-btn.primary:hover {
+    background: #1177bb;
+  }
+
+  .toolbar-separator {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+  }
+
+  .toolbar-spacer { flex: 1; }
+
+  .toolbar-link {
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-decoration: none;
+  }
+  .toolbar-link:hover { color: var(--text-primary); }
+
+  /* ===== MAIN LAYOUT ===== */
+  .main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* ===== LEFT PANELS ===== */
+  .left-panels {
+    width: 50%;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    min-width: 300px;
+  }
+
+  /* ===== RIGHT PANEL ===== */
+  .right-panel {
+    width: 50%;
+    display: flex;
+    flex-direction: column;
+    min-width: 300px;
+  }
+
+  /* ===== PANEL ===== */
+  .panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .panel.expression-panel {
+    flex: 1;
+    border-bottom: 1px solid var(--border);
+  }
+  .panel.input-panel {
+    flex: 1;
+  }
+  .panel.output-panel {
+    flex: 1;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 12px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+    gap: 8px;
+  }
+
+  .panel-header-spacer { flex: 1; }
+
+  .panel-action {
+    padding: 2px 6px;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 11px;
+    cursor: pointer;
+    border-radius: 2px;
+    font-family: inherit;
+  }
+  .panel-action:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+  }
+
+  .panel-body {
+    flex: 1;
+    overflow: auto;
+  }
+
+  /* ===== EDITOR (textarea mockup) ===== */
+  .editor {
+    width: 100%;
+    height: 100%;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: none;
+    padding: 10px 12px 10px 48px;
+    font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    resize: none;
+    outline: none;
+    tab-size: 2;
+  }
+  .editor:focus {
+    background: #1f1f1f;
+  }
+  .editor.readonly {
+    color: var(--text-primary);
+    cursor: default;
+  }
+
+  /* ===== ERROR DISPLAY ===== */
+  .error-display {
+    display: none;
+    padding: 12px 16px;
+    background: var(--error-bg);
+    border-top: 2px solid #f44747;
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-size: 13px;
+    color: var(--error-text);
+    line-height: 1.5;
+    flex-shrink: 0;
+  }
+  .error-display.visible { display: block; }
+  .error-location {
+    color: #d19a66;
+    margin-right: 8px;
+  }
+  .error-suggestion {
+    display: block;
+    margin-top: 6px;
+    color: #98c379;
+  }
+
+  /* ===== STATUS BAR ===== */
+  .statusbar {
+    display: flex;
+    align-items: center;
+    height: 24px;
+    padding: 0 12px;
+    background: #007acc;
+    color: #ffffff;
+    font-size: 11px;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  .statusbar-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .statusbar-spacer { flex: 1; }
+
+  /* ===== EXAMPLE GALLERY SIDEBAR ===== */
+  .gallery-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 100;
+  }
+  .gallery-overlay.visible { display: block; }
+
+  .gallery {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 340px;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    z-index: 101;
+    display: none;
+    flex-direction: column;
+    box-shadow: 4px 0 16px rgba(0,0,0,0.3);
+  }
+  .gallery.visible {
+    display: flex;
+  }
+
+  .gallery-header {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .gallery-header-spacer { flex: 1; }
+  .gallery-close {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0 4px;
+  }
+  .gallery-close:hover { color: var(--text-primary); }
+
+  .gallery-search {
+    margin: 8px 12px;
+    padding: 6px 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+  }
+  .gallery-search:focus {
+    border-color: #007acc;
+  }
+
+  .gallery-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+
+  .gallery-category {
+    padding: 8px 16px 4px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+
+  .gallery-item {
+    display: flex;
+    align-items: center;
+    padding: 6px 16px 6px 24px;
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--text-primary);
+  }
+  .gallery-item:hover {
+    background: var(--bg-hover);
+  }
+  .gallery-item.active {
+    background: var(--bg-active);
+  }
+  .gallery-item-badge {
+    margin-left: auto;
+    padding: 1px 6px;
+    border-radius: 2px;
+    font-size: 10px;
+    background: #3e3e42;
+    color: var(--text-secondary);
+  }
+  .gallery-item-badge.cli-only {
+    background: #5a3e1e;
+    color: #e0a050;
+  }
+
+  /* ===== SHARE MODAL ===== */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 200;
+    justify-content: center;
+    align-items: center;
+  }
+  .modal-overlay.visible { display: flex; }
+
+  .modal {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 24px;
+    width: 480px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+  .modal h3 {
+    font-size: 15px;
+    margin-bottom: 12px;
+  }
+  .modal-url {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .modal-url input {
+    flex: 1;
+    padding: 6px 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-primary);
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-size: 12px;
+  }
+  .modal-hint {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+  }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  /* ===== FILE DROP ZONE ===== */
+  .drop-active {
+    outline: 2px dashed #007acc;
+    outline-offset: -4px;
+  }
+
+  /* ===== RESIZE HANDLE ===== */
+  .resize-handle-h {
+    height: 4px;
+    background: var(--border);
+    cursor: ns-resize;
+    flex-shrink: 0;
+  }
+  .resize-handle-h:hover {
+    background: #007acc;
+  }
+</style>
+</head>
+<body>
+
+<!-- TOOLBAR -->
+<div class="toolbar">
+  <span class="toolbar-logo">{elwood}</span>
+
+  <button class="toolbar-btn" onclick="toggleGallery()">
+    <span>&#9776;</span> Examples
+  </button>
+
+  <button class="toolbar-btn primary" onclick="mockEvaluate()">
+    &#9654; Run
+  </button>
+
+  <div class="toolbar-separator"></div>
+
+  <button class="toolbar-btn" onclick="toggleShareModal()">
+    &#128279; Share
+  </button>
+
+  <button class="toolbar-btn" onclick="copyOutput()">
+    &#128203; Copy Output
+  </button>
+
+  <div class="toolbar-spacer"></div>
+
+  <a class="toolbar-link" href="#">Docs</a>
+  <a class="toolbar-link" href="#">GitHub</a>
+</div>
+
+<!-- MAIN LAYOUT -->
+<div class="main">
+
+  <!-- LEFT PANELS -->
+  <div class="left-panels">
+    <!-- EXPRESSION PANEL -->
+    <div class="panel expression-panel">
+      <div class="panel-header">
+        <span>Expression</span>
+        <div class="panel-header-spacer"></div>
+        <button class="panel-action" onclick="clearExpression()">Clear</button>
+      </div>
+      <div class="panel-body">
+        <textarea class="editor" id="expression-editor" spellcheck="false"
+          placeholder="// Type an Elwood expression...&#10;// Example: $.users | where(.age > 30) | select(.name)"
+>let filtered = $.users | where(u => u.age > 25 and u.active)
+let result = filtered | select(u => {
+  name: u.name,
+  email: u.email.toLower(),
+  tag: `user-{u.name.toLower()}`
+})
+return { users: result, count: filtered | count }</textarea>
+      </div>
+    </div>
+
+    <div class="resize-handle-h"></div>
+
+    <!-- INPUT PANEL -->
+    <div class="panel input-panel">
+      <div class="panel-header">
+        <span>Input JSON</span>
+        <div class="panel-header-spacer"></div>
+        <button class="panel-action" onclick="document.getElementById('file-input').click()">Load File</button>
+        <button class="panel-action" onclick="formatInput()">Format</button>
+        <input type="file" id="file-input" accept=".json" style="display:none" onchange="loadFile(event)">
+      </div>
+      <div class="panel-body" id="input-drop-zone"
+           ondragover="event.preventDefault(); this.classList.add('drop-active')"
+           ondragleave="this.classList.remove('drop-active')"
+           ondrop="event.preventDefault(); this.classList.remove('drop-active'); handleDrop(event)">
+        <textarea class="editor" id="input-editor" spellcheck="false"
+          placeholder="// Paste JSON or drop a file here..."
+>{
+  "users": [
+    { "name": "Alice",  "age": 30, "active": true,  "email": "Alice@Example.com" },
+    { "name": "Bob",    "age": 22, "active": false, "email": "Bob@Example.com" },
+    { "name": "Carol",  "age": 35, "active": true,  "email": "Carol@Example.com" },
+    { "name": "Dave",   "age": 28, "active": true,  "email": "Dave@Example.com" },
+    { "name": "Eve",    "age": 19, "active": false, "email": "Eve@Example.com" }
+  ]
+}</textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div class="right-panel">
+    <div class="panel output-panel">
+      <div class="panel-header">
+        <span>Output</span>
+        <div class="panel-header-spacer"></div>
+        <span style="color: var(--success);">&#10003; Evaluated in 1.8ms</span>
+      </div>
+      <div class="panel-body">
+        <textarea class="editor readonly" id="output-editor" readonly spellcheck="false"
+>{
+  "users": [
+    {
+      "name": "Alice",
+      "email": "alice@example.com",
+      "tag": "user-alice"
+    },
+    {
+      "name": "Carol",
+      "email": "carol@example.com",
+      "tag": "user-carol"
+    },
+    {
+      "name": "Dave",
+      "email": "dave@example.com",
+      "tag": "user-dave"
+    }
+  ],
+  "count": 3
+}</textarea>
+      </div>
+
+      <!-- ERROR DISPLAY (toggle with the error button below) -->
+      <div class="error-display" id="error-display">
+        <span class="error-location">Line 2, Col 25:</span>
+        Unknown function 'wher'.
+        <span class="error-suggestion">Did you mean 'where'?</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- STATUS BAR -->
+<div class="statusbar">
+  <div class="statusbar-item">
+    <span>&#10003;</span> Ready
+  </div>
+  <div class="statusbar-item">Input: 412 B</div>
+  <div class="statusbar-item">Output: 298 B</div>
+  <div class="statusbar-spacer"></div>
+  <div class="statusbar-item">
+    <button class="panel-action" style="color:#fff;font-size:11px;" onclick="toggleError()">Toggle Error Demo</button>
+  </div>
+  <div class="statusbar-item">Elwood v0.1.0</div>
+</div>
+
+<!-- EXAMPLE GALLERY SIDEBAR -->
+<div class="gallery-overlay" id="gallery-overlay" onclick="toggleGallery()"></div>
+<div class="gallery" id="gallery">
+  <div class="gallery-header">
+    Examples
+    <div class="gallery-header-spacer"></div>
+    <button class="gallery-close" onclick="toggleGallery()">&times;</button>
+  </div>
+  <input type="text" class="gallery-search" placeholder="Search examples..." oninput="filterGallery(this.value)">
+  <div class="gallery-list" id="gallery-list">
+    <div class="gallery-category">Basics</div>
+    <div class="gallery-item" onclick="loadExample('property')">Property Access</div>
+    <div class="gallery-item" onclick="loadExample('arithmetic')">Arithmetic</div>
+    <div class="gallery-item" onclick="loadExample('boolean')">Boolean Logic</div>
+    <div class="gallery-item" onclick="loadExample('interpolation')">String Interpolation</div>
+
+    <div class="gallery-category">Filtering & Selection</div>
+    <div class="gallery-item active" onclick="loadExample('where')">Where Filter</div>
+    <div class="gallery-item" onclick="loadExample('select')">Select / Projection</div>
+    <div class="gallery-item" onclick="loadExample('selectmany')">SelectMany (Flatten)</div>
+    <div class="gallery-item" onclick="loadExample('complex-where')">Complex Where</div>
+
+    <div class="gallery-category">Aggregation</div>
+    <div class="gallery-item" onclick="loadExample('count')">Count</div>
+    <div class="gallery-item" onclick="loadExample('sum')">Sum</div>
+    <div class="gallery-item" onclick="loadExample('min-max')">Min / Max</div>
+    <div class="gallery-item" onclick="loadExample('groupby')">GroupBy + Count</div>
+    <div class="gallery-item" onclick="loadExample('distinct')">Distinct</div>
+
+    <div class="gallery-category">Ordering & Pagination</div>
+    <div class="gallery-item" onclick="loadExample('orderby')">OrderBy</div>
+    <div class="gallery-item" onclick="loadExample('orderby-multi')">OrderBy (Multi-Key)</div>
+    <div class="gallery-item" onclick="loadExample('range-skip')">Range / Skip / Take</div>
+    <div class="gallery-item" onclick="loadExample('batch')">Batch</div>
+
+    <div class="gallery-category">String Operations</div>
+    <div class="gallery-item" onclick="loadExample('string-methods')">String Methods</div>
+    <div class="gallery-item" onclick="loadExample('case-trim')">Case & Trim</div>
+    <div class="gallery-item" onclick="loadExample('regex')">Regex</div>
+    <div class="gallery-item" onclick="loadExample('url-encode')">URL Encode / Decode</div>
+
+    <div class="gallery-category">Data Transformation</div>
+    <div class="gallery-item" onclick="loadExample('join')">Join</div>
+    <div class="gallery-item" onclick="loadExample('join-modes')">Join Modes (Left/Right/Full)</div>
+    <div class="gallery-item" onclick="loadExample('reduce')">Reduce</div>
+    <div class="gallery-item" onclick="loadExample('spread')">Spread Operator</div>
+    <div class="gallery-item" onclick="loadExample('clone-keep')">Clone / Keep / Remove</div>
+
+    <div class="gallery-category">Control Flow</div>
+    <div class="gallery-item" onclick="loadExample('if-then')">If / Then / Else</div>
+    <div class="gallery-item" onclick="loadExample('match')">Pattern Match</div>
+    <div class="gallery-item" onclick="loadExample('let')">Let Bindings (Scripts)</div>
+    <div class="gallery-item" onclick="loadExample('memo')">Memo Functions</div>
+
+    <div class="gallery-category">DateTime & Crypto</div>
+    <div class="gallery-item" onclick="loadExample('dateformat')">Date Format</div>
+    <div class="gallery-item" onclick="loadExample('datetime-add')">Date Arithmetic</div>
+    <div class="gallery-item" onclick="loadExample('hash')">Hash (MD5/SHA)</div>
+    <div class="gallery-item" onclick="loadExample('rsa')">RSA Sign</div>
+
+    <div class="gallery-category">Benchmarks (CLI Only)</div>
+    <div class="gallery-item" onclick="loadBenchmarkInfo()">
+      Large Array Pipeline (100K items)
+      <span class="gallery-item-badge cli-only">CLI</span>
+    </div>
+    <div class="gallery-item" onclick="loadBenchmarkInfo()">
+      Short-Circuit (take 1 of 100K)
+      <span class="gallery-item-badge cli-only">CLI</span>
+    </div>
+  </div>
+</div>
+
+<!-- SHARE MODAL -->
+<div class="modal-overlay" id="share-modal" onclick="if(event.target===this)toggleShareModal()">
+  <div class="modal">
+    <h3>Share Playground</h3>
+    <div class="modal-url">
+      <input type="text" value="https://youruser.github.io/elwood/#data=eJxLzs8ry0xRSMsvyklRBAAAjwI..." readonly onclick="this.select()">
+      <button class="toolbar-btn primary" onclick="alert('Copied!')">Copy</button>
+    </div>
+    <div class="modal-hint">
+      This link contains your expression and input data. Anyone with the link can open it in the playground.
+    </div>
+    <div class="modal-actions">
+      <button class="toolbar-btn" onclick="toggleShareModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Gallery toggle
+  function toggleGallery() {
+    document.getElementById('gallery').classList.toggle('visible');
+    document.getElementById('gallery-overlay').classList.toggle('visible');
+  }
+
+  // Share modal toggle
+  function toggleShareModal() {
+    document.getElementById('share-modal').classList.toggle('visible');
+  }
+
+  // Error toggle demo
+  function toggleError() {
+    const el = document.getElementById('error-display');
+    el.classList.toggle('visible');
+  }
+
+  // Mock evaluate
+  function mockEvaluate() {
+    // In real implementation, this calls evaluate() from @elwood-lang/core
+    alert('In the real playground, this evaluates the expression using the Elwood TypeScript engine running in your browser.');
+  }
+
+  // Copy output
+  function copyOutput() {
+    const output = document.getElementById('output-editor');
+    navigator.clipboard.writeText(output.value);
+  }
+
+  // Clear expression
+  function clearExpression() {
+    document.getElementById('expression-editor').value = '';
+    document.getElementById('expression-editor').focus();
+  }
+
+  // Format input
+  function formatInput() {
+    const editor = document.getElementById('input-editor');
+    try {
+      const parsed = JSON.parse(editor.value);
+      editor.value = JSON.stringify(parsed, null, 2);
+    } catch (e) {
+      alert('Invalid JSON');
+    }
+  }
+
+  // Load file
+  function loadFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Warning: Large file (' + (file.size / 1024 / 1024).toFixed(1) + ' MB). For best performance with large data, use the Elwood CLI.');
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      document.getElementById('input-editor').value = reader.result;
+    };
+    reader.readAsText(file);
+  }
+
+  // Drag and drop
+  function handleDrop(event) {
+    const file = event.dataTransfer.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        document.getElementById('input-editor').value = reader.result;
+      };
+      reader.readAsText(file);
+    }
+  }
+
+  // Load example (mock)
+  function loadExample(id) {
+    const examples = {
+      'property': {
+        expr: '$.users[0].name',
+        input: '{\n  "users": [\n    { "name": "Alice", "age": 30 },\n    { "name": "Bob", "age": 25 }\n  ]\n}'
+      },
+      'where': {
+        expr: '$.users | where(u => u.age > 25)',
+        input: '{\n  "users": [\n    { "name": "Alice", "age": 30 },\n    { "name": "Bob", "age": 22 },\n    { "name": "Carol", "age": 35 }\n  ]\n}'
+      }
+    };
+
+    const ex = examples[id];
+    if (ex) {
+      document.getElementById('expression-editor').value = ex.expr;
+      document.getElementById('input-editor').value = ex.input;
+    }
+    toggleGallery();
+  }
+
+  // Load benchmark info
+  function loadBenchmarkInfo() {
+    document.getElementById('expression-editor').value =
+      '// This benchmark processes 100K+ items.\n' +
+      '// Too large for the browser.\n' +
+      '//\n' +
+      '// Try it with the Elwood CLI:\n' +
+      '//   elwood run spec/test-cases/66-benchmark-large-array/script.elwood \\\n' +
+      '//     --input spec/test-cases/66-benchmark-large-array/input.json';
+    document.getElementById('input-editor').value = '{}';
+    document.getElementById('output-editor').value = '';
+    toggleGallery();
+  }
+
+  // Gallery search filter
+  function filterGallery(query) {
+    const items = document.querySelectorAll('.gallery-item, .gallery-category');
+    const q = query.toLowerCase();
+
+    if (!q) {
+      items.forEach(el => el.style.display = '');
+      return;
+    }
+
+    let lastCategory = null;
+    let categoryHasVisible = false;
+
+    items.forEach(el => {
+      if (el.classList.contains('gallery-category')) {
+        if (lastCategory && !categoryHasVisible) {
+          lastCategory.style.display = 'none';
+        }
+        lastCategory = el;
+        categoryHasVisible = false;
+        el.style.display = '';
+      } else {
+        const match = el.textContent.toLowerCase().includes(q);
+        el.style.display = match ? '' : 'none';
+        if (match) categoryHasVisible = true;
+      }
+    });
+
+    if (lastCategory && !categoryHasVisible) {
+      lastCategory.style.display = 'none';
+    }
+  }
+</script>
+
+</body>
+</html>

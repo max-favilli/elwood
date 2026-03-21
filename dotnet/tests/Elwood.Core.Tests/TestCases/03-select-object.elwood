@@ -1,0 +1,1 @@
+$.users[*] | select u => { name: u.name, isAdult: u.age >= 18 }

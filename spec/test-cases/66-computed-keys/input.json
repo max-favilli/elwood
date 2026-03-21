@@ -1,0 +1,9 @@
+{
+  "fields": [
+    { "name": "color", "value": "red" },
+    { "name": "size", "value": "XL" },
+    { "name": "material", "value": "cotton" }
+  ],
+  "prefix": "attr",
+  "product": { "id": "JW-001", "season": "FW26" }
+}

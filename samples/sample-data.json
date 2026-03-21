@@ -1,0 +1,34 @@
+{
+  "company": "Acme Corp",
+  "systems": [
+    { "name": "SAP ERP", "domain": "ERP", "status": "active", "owner": "Max", "type": "on-premise" },
+    { "name": "Shopify", "domain": "E-Commerce", "status": "active", "owner": "Anna", "type": "cloud" },
+    { "name": "Salesforce", "domain": "CRM", "status": "active", "owner": "Tom", "type": "cloud" },
+    { "name": "Legacy CMS", "domain": "E-Commerce", "status": "retired", "owner": "Anna", "type": "on-premise" },
+    { "name": "PLM System", "domain": "PLM", "status": "active", "owner": "Lisa", "type": "cloud" },
+    { "name": "Azure Data Lake", "domain": "Data", "status": "active", "owner": "Max", "type": "cloud" },
+    { "name": "Old Warehouse", "domain": "ERP", "status": "retired", "owner": "Tom", "type": "on-premise" },
+    { "name": "Elwood Middleware", "domain": "Integration", "status": "active", "owner": "Max", "type": "cloud" }
+  ],
+  "integrations": [
+    { "source": "SAP ERP", "target": "Shopify", "middleware": "Elwood Middleware", "frequency": "hourly" },
+    { "source": "SAP ERP", "target": "Salesforce", "middleware": "Elwood Middleware", "frequency": "daily" },
+    { "source": "PLM System", "target": "SAP ERP", "middleware": "Elwood Middleware", "frequency": "on-demand" },
+    { "source": "Shopify", "target": "SAP ERP", "middleware": "Elwood Middleware", "frequency": "real-time" },
+    { "source": "Azure Data Lake", "target": "Salesforce", "middleware": "Direct", "frequency": "daily" },
+    { "source": "SAP ERP", "target": "Azure Data Lake", "middleware": "Elwood Middleware", "frequency": "nightly" }
+  ],
+  "orders": [
+    { "id": "ORD-001", "customer": "John", "items": [
+      { "sku": "JW-001", "name": "Jacket", "qty": 1, "price": 199.99 },
+      { "sku": "JW-002", "name": "Boots", "qty": 2, "price": 149.50 }
+    ]},
+    { "id": "ORD-002", "customer": "Sarah", "items": [
+      { "sku": "JW-003", "name": "Backpack", "qty": 1, "price": 89.00 },
+      { "sku": "JW-001", "name": "Jacket", "qty": 1, "price": 199.99 }
+    ]},
+    { "id": "ORD-003", "customer": "Mike", "items": [
+      { "sku": "JW-002", "name": "Boots", "qty": 1, "price": 149.50 }
+    ]}
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  sum: $.numbers[*] | reduce (acc, x) => acc + x,
+  sentence: $.words[*] | reduce (acc, w) => acc + " " + w,
+  totalValue: $.orders[*] | reduce (acc, o) => acc + o.qty * o.price from 0
+}

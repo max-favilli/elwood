@@ -1,0 +1,7 @@
+{
+  "products": [
+    { "sku": "JW-JACKET-001", "name": "Texapore Ecosphere" },
+    { "sku": "JW-BOOT-002", "name": "Woodland Texapore" },
+    { "sku": "JW-PACK-003", "name": "Highland Trail" }
+  ]
+}

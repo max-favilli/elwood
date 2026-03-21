@@ -1,0 +1,6 @@
+[
+  { "id": "001", "email": "vicki@illumity.aero", "username": "vicki25", "profile": { "name": "Vicki", "company": "Illumity" } },
+  { "id": "002", "email": "zamora@progenex.ngo", "username": "zamora25", "profile": { "name": "Zamora", "company": "Progenex" } },
+  { "id": "003", "email": "calderon@kage.bf", "username": "calderon25", "profile": { "name": "Calderon", "company": "Kage" } },
+  { "id": "004", "email": "judith@bizmatic.bi", "username": "judith25", "profile": { "name": "Judith", "company": "Bizmatic" } }
+]

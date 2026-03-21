@@ -1,0 +1,37 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.vs/
+.vs/
+
+## NuGet
+packages/
+*.nupkg
+
+## Node
+node_modules/
+dist/
+
+## IDE
+.idea/
+*.swp
+*~
+
+## OS
+Thumbs.db
+.DS_Store
+
+## Build
+TestResults/
+BenchmarkDotNet.Artifacts/
+
+## Benchmark logs (machine-specific, regenerated on each run)
+**/Benchmarks/results.log
+**/Benchmarks/timing.log
+
+## Private planning docs (not for public repo)
+.private/
+.claude/

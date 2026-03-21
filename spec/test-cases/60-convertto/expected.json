@@ -1,0 +1,7 @@
+{
+  "toInt": 5,
+  "toDouble": 5.6,
+  "toBoolFromFlag": true,
+  "toBoolFromString": true,
+  "boolArray": [true, true, true, false, false, true]
+}

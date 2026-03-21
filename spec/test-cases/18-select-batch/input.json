@@ -1,0 +1,82 @@
+[
+  {
+    "id": "67856433125f70fe6c01e64b",
+    "email": "vicki_richard@illumity.aero",
+    "username": "vicki25",
+    "createdAt": "2010-01-28T18:02:03.862Z",
+    "profile": { "name": "Vicki Richard", "company": "Illumity" },
+    "updatedAt": "2010-01-29T18:02:03.862Z"
+  },
+  {
+    "id": "6785643386ebf8e9c32edba8",
+    "email": "zamora_whitney@progenex.ngo",
+    "username": "zamora25",
+    "createdAt": "2011-06-01T00:54:27.115Z",
+    "profile": { "name": "Zamora Whitney", "company": "Progenex" },
+    "updatedAt": "2011-06-02T00:54:27.115Z"
+  },
+  {
+    "id": "678564338db209066117f84b",
+    "email": "calderon_bray@kage.blackfriday",
+    "username": "calderon25",
+    "createdAt": "2013-08-21T00:47:29.908Z",
+    "profile": { "name": "Calderon Bray", "company": "Kage" },
+    "updatedAt": "2013-08-22T00:47:29.908Z"
+  },
+  {
+    "id": "67856433c8528701782a154b",
+    "email": "judith_walton@bizmatic.bi",
+    "username": "judith25",
+    "createdAt": "2013-11-10T12:30:07.09Z",
+    "profile": { "name": "Judith Walton", "company": "Bizmatic" },
+    "updatedAt": "2013-11-11T12:30:07.09Z"
+  },
+  {
+    "id": "6785643356791d7a16b455b0",
+    "email": "bettye_bartlett@kiosk.otsuka",
+    "username": "bettye25",
+    "createdAt": "2011-04-19T08:31:19.934Z",
+    "profile": { "name": "Bettye Bartlett", "company": "Kiosk" },
+    "updatedAt": "2011-04-20T08:31:19.934Z"
+  },
+  {
+    "id": "6785643390f9f4e2127874b3",
+    "email": "marta_palmer@nurali.fitness",
+    "username": "marta25",
+    "createdAt": "2011-08-14T06:46:01.682Z",
+    "profile": { "name": "Marta Palmer", "company": "Nurali" },
+    "updatedAt": "2011-08-15T06:46:01.682Z"
+  },
+  {
+    "id": "67856433fb25c1b81274418a",
+    "email": "terry_salazar@freakin.jlc",
+    "username": "terry25",
+    "createdAt": "2010-08-09T10:57:43.439Z",
+    "profile": { "name": "Terry Salazar", "company": "Freakin" },
+    "updatedAt": "2010-08-10T10:57:43.439Z"
+  },
+  {
+    "id": "67856433b46fb19658822eb0",
+    "email": "klein_shelton@shopabout.click",
+    "username": "klein25",
+    "createdAt": "2010-03-22T11:03:12.139Z",
+    "profile": { "name": "Klein Shelton", "company": "Shopabout" },
+    "updatedAt": "2010-03-23T11:03:12.139Z"
+  },
+  {
+    "id": "6785643359bf4d4a8a51db9b",
+    "email": "gilbert_william@sportan.vn",
+    "username": "gilbert25",
+    "createdAt": "2010-08-12T01:52:03.332Z",
+    "profile": { "name": "Gilbert William", "company": "Sportan" },
+    "updatedAt": "2010-08-13T01:52:03.332Z"
+  },
+  {
+    "id": "678564334ce0e80cc708867c",
+    "email": "ayala_morris@tropolis.bm",
+    "username": "ayala25",
+    "createdAt": "2014-10-31T09:13:08.106Z",
+    "profile": { "name": "Ayala Morris", "company": "Tropolis" },
+    "updatedAt": "2014-11-01T09:13:08.106Z"
+  }
+]
