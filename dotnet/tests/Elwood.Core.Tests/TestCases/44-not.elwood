@@ -1,0 +1,4 @@
+{
+  barNot: $.bar.not(),
+  arrayNot: $.foo[*] | select v => v.not()
+}

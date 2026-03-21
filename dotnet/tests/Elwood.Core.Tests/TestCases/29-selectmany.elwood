@@ -1,0 +1,8 @@
+let allTeams = $.departments[*] | selectMany d => d.teams
+let allMembers = allTeams | selectMany t => t.members
+
+return {
+  teamLeads: allTeams | select t => t.lead,
+  allMembers: allMembers,
+  totalPeople: allMembers | count
+}

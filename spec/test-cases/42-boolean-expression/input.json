@@ -1,0 +1,8 @@
+{
+  "products": [
+    { "name": "Winter Jacket", "price": 199, "category": "simple", "type": "seasonal" },
+    { "name": "Socks", "price": 5, "category": "simple", "type": "basic" },
+    { "name": "Hiking Boot", "price": 149, "category": "configurable", "type": "seasonal" },
+    { "name": "Cap", "price": 15, "category": "configurable", "type": "basic" }
+  ]
+}

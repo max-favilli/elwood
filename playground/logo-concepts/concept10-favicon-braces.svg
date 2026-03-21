@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="200" height="200">
+  <!-- Favicon version: just { } — works at 16x16 -->
+  <text x="50" y="68" font-family="JetBrains Mono, Consolas, monospace" font-size="64" font-weight="700" fill="#1a1a2e" text-anchor="middle" letter-spacing="-2">
+    <tspan fill="#3178c6">{</tspan><tspan fill="#3178c6">}</tspan>
+  </text>
+</svg>

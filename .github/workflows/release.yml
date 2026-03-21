@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  test:
+    name: Test
+    uses: ./.github/workflows/ci.yml
+
+  nuget:
+    name: Publish NuGet
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Pack
+        run: |
+          dotnet pack dotnet/src/Elwood.Core/Elwood.Core.csproj -c Release
+          dotnet pack dotnet/src/Elwood.Json/Elwood.Json.csproj -c Release
+          dotnet pack dotnet/src/Elwood.Cli/Elwood.Cli.csproj -c Release
+      - name: Push to NuGet
+        run: |
+          dotnet nuget push dotnet/src/Elwood.Core/bin/Release/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push dotnet/src/Elwood.Json/bin/Release/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push dotnet/src/Elwood.Cli/bin/Release/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+  npm:
+    name: Publish npm
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Install & Build
+        working-directory: ts
+        run: |
+          npm ci
+          npm run build
+      - name: Publish
+        working-directory: ts
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  native-binaries:
+    name: Native AOT (${{ matrix.os }})
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+            artifact: elwood-linux-x64
+          - os: macos-latest
+            rid: osx-x64
+            artifact: elwood-macos-x64
+          - os: windows-latest
+            rid: win-x64
+            artifact: elwood-win-x64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish AOT
+        run: dotnet publish dotnet/src/Elwood.Cli/Elwood.Cli.csproj -c Release -r ${{ matrix.rid }} -p:PublishAot=true
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dotnet/src/Elwood.Cli/bin/Release/net10.0/${{ matrix.rid }}/publish/

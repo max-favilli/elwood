@@ -1,0 +1,4 @@
+$.products[*] | select p => {
+  name: p.name,
+  isSpecial: p.price > 10 && (p.category == "simple" || p.type == "seasonal")
+}

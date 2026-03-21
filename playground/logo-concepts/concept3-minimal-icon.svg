@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="200" height="200">
+  <!-- Concept 3: Square icon / favicon format - sunglasses only, very minimal -->
+
+  <!-- Left lens -->
+  <rect x="10" y="32" width="33" height="28" rx="4" ry="4" fill="#1a1a2e"/>
+  <!-- Right lens -->
+  <rect x="57" y="32" width="33" height="28" rx="4" ry="4" fill="#1a1a2e"/>
+
+  <!-- Bridge -->
+  <line x1="43" y1="42" x2="57" y2="42" stroke="#1a1a2e" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Temple arms -->
+  <line x1="10" y1="38" x2="3" y2="33" stroke="#1a1a2e" stroke-width="3.5" stroke-linecap="round"/>
+  <line x1="90" y1="38" x2="97" y2="33" stroke="#1a1a2e" stroke-width="3.5" stroke-linecap="round"/>
+
+  <!-- { in left lens -->
+  <text x="26.5" y="52" font-family="JetBrains Mono, Consolas, monospace" font-size="18" font-weight="700" fill="#ffffff" text-anchor="middle">{</text>
+
+  <!-- | between -->
+  <text x="50" y="52" font-family="JetBrains Mono, Consolas, monospace" font-size="16" font-weight="700" fill="#1a1a2e" text-anchor="middle">|</text>
+
+  <!-- } in right lens -->
+  <text x="73.5" y="52" font-family="JetBrains Mono, Consolas, monospace" font-size="18" font-weight="700" fill="#ffffff" text-anchor="middle">}</text>
+</svg>

@@ -1,0 +1,7 @@
+{
+  "items": [
+    { "name": "A", "status": "active" },
+    { "name": "B", "status": "retired" },
+    { "name": "C", "status": "pending" }
+  ]
+}

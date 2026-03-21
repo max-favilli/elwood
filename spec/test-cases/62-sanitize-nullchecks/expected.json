@@ -1,0 +1,17 @@
+{
+  "sanitizedGerman": "Strasse Munchen",
+  "sanitizedGreek": "Athhna",
+  "sanitizedAccent": "cafe resume naive",
+  "checks": {
+    "presentEmpty": false,
+    "emptyEmpty": true,
+    "wsEmpty": false,
+    "wsWhitespace": true,
+    "nullEmpty": true
+  },
+  "fallbacks": {
+    "present": "hello",
+    "empty": "default",
+    "nothing": "default"
+  }
+}

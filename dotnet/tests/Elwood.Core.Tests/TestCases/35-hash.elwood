@@ -1,0 +1,6 @@
+$.products[*] | select p => {
+  sku: p.sku,
+  fullHash: p.sku.hash(),
+  shortHash: p.sku.hash(8),
+  idempotent: p.sku.hash(8) == p.sku.hash(8)
+}

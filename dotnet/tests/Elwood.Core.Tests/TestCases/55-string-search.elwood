@@ -1,0 +1,5 @@
+{
+  xlsx: $.files[*] | where f => f.name.endsWith(".xlsx") | select f => f.name,
+  reports: $.files[*] | where f => f.name.startsWith("report") | select f => f.name,
+  finance: $.files[*] | where f => f.path.contains("finance") | select f => f.name
+}

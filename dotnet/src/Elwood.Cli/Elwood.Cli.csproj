@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!-- dotnet tool metadata -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>elwood</ToolCommandName>
+    <PackageId>Elwood.Cli</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Massimiliano Favilli</Authors>
+    <Description>CLI for the Elwood JSON transformation DSL — REPL, eval, and script execution.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/max-favilli/elwood</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/max-favilli/elwood</RepositoryUrl>
+    <PackageTags>json;jsonpath;dsl;transformation;cli;elwood</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <!-- Native AOT — enabled via: dotnet publish -p:PublishAot=true -r win-x64 -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Elwood.Core\Elwood.Core.csproj" />
+    <ProjectReference Include="..\Elwood.Json\Elwood.Json.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+</Project>

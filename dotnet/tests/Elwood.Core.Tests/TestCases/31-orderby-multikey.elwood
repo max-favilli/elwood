@@ -1,0 +1,1 @@
+$.employees[*] | orderBy e => e.department asc, e => e.salary desc, e => e.name asc | select e => { name: e.name, dept: e.department, salary: e.salary }

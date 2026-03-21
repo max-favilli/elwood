@@ -1,0 +1,5 @@
+let customers = $.customers[*]
+
+$.orders[*]
+| join customers on o => o.customerId equals c => c.id into customer
+| select o => { orderId: o.id, customerName: o.customer.name, total: o.total }

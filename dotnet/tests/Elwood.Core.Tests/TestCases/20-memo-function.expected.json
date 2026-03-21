@@ -1,0 +1,6 @@
+[
+  { "name": "Alice", "benefits": ["Health Insurance", "401k Match"] },
+  { "name": "Bob", "benefits": ["Parking", "Gym"] },
+  { "name": "Charlie", "benefits": ["Health Insurance", "401k Match"] },
+  { "name": "Diana", "benefits": ["Parking", "Gym"] }
+]

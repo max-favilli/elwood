@@ -1,0 +1,14 @@
+{
+  "foo": [
+    { "company": "Illumity", "score": 90 },
+    { "company": "Progenex", "score": 75 },
+    { "company": "Kage", "score": 60 }
+  ],
+  "bar": [
+    { "name": "Alice", "profile": { "company": "Illumity" } },
+    { "name": "Bob", "profile": { "company": "Tropolis" } },
+    { "name": "Charlie", "profile": { "company": "Progenex" } },
+    { "name": "Diana", "profile": { "company": "Nebulean" } },
+    { "name": "Eve", "profile": { "company": "Kage" } }
+  ]
+}

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 100" width="600" height="200">
+  <!-- Concept 4: Full logo with sunglasses icon + "elwood" text -->
+
+  <!-- Left lens -->
+  <rect x="15" y="22" width="33" height="28" rx="4" ry="4" fill="#1a1a2e"/>
+  <!-- Right lens -->
+  <rect x="62" y="22" width="33" height="28" rx="4" ry="4" fill="#1a1a2e"/>
+
+  <!-- Bridge -->
+  <line x1="48" y1="32" x2="62" y2="32" stroke="#1a1a2e" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Temple arms -->
+  <line x1="15" y1="28" x2="6" y2="22" stroke="#1a1a2e" stroke-width="3.5" stroke-linecap="round"/>
+  <line x1="95" y1="28" x2="104" y2="22" stroke="#1a1a2e" stroke-width="3.5" stroke-linecap="round"/>
+
+  <!-- { in left lens -->
+  <text x="31.5" y="42" font-family="JetBrains Mono, Consolas, monospace" font-size="18" font-weight="700" fill="#ffffff" text-anchor="middle">{</text>
+
+  <!-- | between -->
+  <text x="55" y="42" font-family="JetBrains Mono, Consolas, monospace" font-size="16" font-weight="700" fill="#1a1a2e" text-anchor="middle">|</text>
+
+  <!-- } in right lens -->
+  <text x="78.5" y="42" font-family="JetBrains Mono, Consolas, monospace" font-size="18" font-weight="700" fill="#ffffff" text-anchor="middle">}</text>
+
+  <!-- "elwood" text -->
+  <text x="55" y="75" font-family="JetBrains Mono, Consolas, monospace" font-size="28" font-weight="400" fill="#1a1a2e" text-anchor="middle" letter-spacing="2">elwood</text>
+</svg>

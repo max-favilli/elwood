@@ -1,0 +1,14 @@
+let categoryTier = memo catId =>
+    $.categories[*] | first c => c.id == catId
+
+$.orders[*]
+| where o => o.status == "confirmed" || o.status == "shipped"
+| select o => {
+    orderId: o.id,
+    customer: o.customerId,
+    date: o.date,
+    priorityLabel: if o.priority == "high" then "URGENT" else if o.priority == "medium" then "NORMAL" else "LOW",
+    premiumItemCount: o.items[*]
+        | where i => categoryTier(i.categoryId).tier == "premium"
+        | count
+}

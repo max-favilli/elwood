@@ -1,0 +1,5 @@
+{
+  encoded: $.product.urlEncode(),
+  roundtrip: $.product.urlEncode().urlDecode(),
+  url: `https://example.com/{$.path.urlEncode()}`
+}

@@ -1,0 +1,4 @@
+{
+  "foo": [1, false, 2, 0, null, "", true, "abc"],
+  "bar": false
+}

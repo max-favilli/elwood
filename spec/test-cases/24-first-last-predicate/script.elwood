@@ -1,0 +1,5 @@
+{
+  firstAdult: $.users[*] | first u => u.age >= 18,
+  lastActive: $.users[*] | last u => u.active,
+  firstAny: $.users[*] | first
+}

@@ -1,0 +1,6 @@
+{
+  original: $.order.createdAt,
+  plusOneDay: $.order.createdAt.add("1.00:00:00"),
+  plusProcessing: $.order.createdAt.add($.order.processingTime),
+  plus30min: $.order.createdAt.add("00:30:00")
+}

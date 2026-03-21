@@ -1,0 +1,5 @@
+{
+  "default": "Alice|Bob|Charlie",
+  "comma": "Alice, Bob, Charlie",
+  "merged": "Alice|Bob|Charlie|Diana|Eve|1|2"
+}

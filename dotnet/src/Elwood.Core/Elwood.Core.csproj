@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!-- NuGet package metadata -->
+    <PackageId>Elwood.Core</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Massimiliano Favilli</Authors>
+    <Description>Elwood — a functional JSON transformation DSL with KQL-style pipes, LINQ-style lambdas, and JSONPath navigation.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/max-favilli/elwood</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/max-favilli/elwood</RepositoryUrl>
+    <PackageTags>json;jsonpath;dsl;transformation;query;functional;elwood</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+</Project>

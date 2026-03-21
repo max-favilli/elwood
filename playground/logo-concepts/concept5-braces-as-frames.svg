@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 100" width="440" height="200">
+  <!-- Concept 5: The { and } ARE the sunglasses frames themselves - most abstract -->
+
+  <!-- Large { as left lens/frame -->
+  <text x="55" y="72" font-family="JetBrains Mono, Consolas, monospace" font-size="72" font-weight="900" fill="#1a1a2e" text-anchor="middle">{</text>
+
+  <!-- Large } as right lens/frame -->
+  <text x="165" y="72" font-family="JetBrains Mono, Consolas, monospace" font-size="72" font-weight="900" fill="#1a1a2e" text-anchor="middle">}</text>
+
+  <!-- Bridge connecting them (pipe) -->
+  <line x1="80" y1="42" x2="140" y2="42" stroke="#1a1a2e" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- Temple arms going outward -->
+  <line x1="28" y1="38" x2="10" y2="30" stroke="#1a1a2e" stroke-width="4" stroke-linecap="round"/>
+  <line x1="192" y1="38" x2="210" y2="30" stroke="#1a1a2e" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Subtle | pipe symbol in the bridge -->
+  <text x="110" y="52" font-family="JetBrains Mono, Consolas, monospace" font-size="28" font-weight="700" fill="#4a4a6a" text-anchor="middle">|</text>
+</svg>

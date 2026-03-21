@@ -1,0 +1,6 @@
+{
+  slice2to5: $.items[2:5],
+  first3: $.items[:3],
+  from5: $.items[5:],
+  lastTwo: $.items[-2:]
+}

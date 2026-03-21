@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  dotnet:
+    name: .NET
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build
+        run: dotnet build dotnet/Elwood.slnx
+      - name: Test
+        run: dotnet test dotnet/tests/Elwood.Core.Tests/ --verbosity normal
+
+  typescript:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install
+        working-directory: ts
+        run: npm ci
+      - name: Test
+        working-directory: ts
+        run: npm test
+
+  conformance:
+    name: Conformance Check
+    needs: [dotnet, typescript]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Both implementations passed all conformance tests"
