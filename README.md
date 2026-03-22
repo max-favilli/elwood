@@ -17,7 +17,7 @@ $.orders[*]
 
 Available as a **.NET library** (NuGet) and a **TypeScript/JavaScript package** (npm). Both implementations are behaviorally identical, validated by a shared conformance test suite.
 
-**[Try it in the Playground →](https://max-favilli.github.io/elwood/)**
+**[Syntax Reference →](docs/syntax-reference.md)** · **[Try it in the Playground →](https://max-favilli.github.io/elwood/)**
 
 [![Elwood Playground](docs/playground-screenshot.png)](https://max-favilli.github.io/elwood/)
 
