@@ -304,6 +304,14 @@ function evalPipeOp(op: PipeOperation, input: unknown, scope: Scope): unknown {
     case 'Slice':
       return op.kind === 'take' ? items.slice(0, evaluate(op.count, input, scope) as number)
         : items.slice(evaluate(op.count, input, scope) as number);
+    case 'TakeWhile': {
+      const result: unknown[] = [];
+      for (const item of items) {
+        if (!isTruthy(evalWithLambdaOrImplicit(op.predicate, item, scope))) break;
+        result.push(item);
+      }
+      return result;
+    }
     case 'OrderBy': return evalOrderBy(op, items, scope);
     case 'GroupBy': return evalGroupBy(op, items, scope);
     case 'Batch': {
@@ -467,8 +475,37 @@ function evalFunctionCall(expr: import('./ast.js').FunctionCallExpression, curre
     const args = expr.arguments.map(a => evaluate(a, current, scope));
     return funcVal.invoke(args, current);
   }
+
+  // iterate(seed, lambda) — needs raw lambda AST
+  if (expr.functionName === 'iterate' && expr.arguments.length >= 2) {
+    return evalIterate(expr, current, scope);
+  }
+
   const args = expr.arguments.map(a => evaluate(a, current, scope));
   return callBuiltin(expr.functionName, current, args, scope);
+}
+
+function evalIterate(expr: import('./ast.js').FunctionCallExpression, current: unknown, scope: Scope): unknown[] {
+  const seed = evaluate(expr.arguments[0], current, scope);
+  const lambdaExpr = expr.arguments[1];
+  if (lambdaExpr.type !== 'Lambda') throw new Error("iterate requires a lambda as second argument: iterate(seed, x => expr)");
+  const lambda = lambdaExpr;
+
+  // TS limitation: without generators, iterate eagerly generates items.
+  // The pipeline's take/takeWhile will slice the result.
+  // Safety limit prevents runaway memory usage.
+  const maxIterations = 10_000;
+  const results: unknown[] = [];
+  let val = seed;
+
+  for (let i = 0; i < maxIterations; i++) {
+    results.push(val);
+    const childScope = scope.child();
+    childScope.set(lambda.parameters[0], val);
+    val = evaluate(lambda.body, val, childScope);
+  }
+
+  return results;
 }
 
 function evalIndex(expr: import('./ast.js').IndexExpression, current: unknown, scope: Scope): unknown {

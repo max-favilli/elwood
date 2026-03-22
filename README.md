@@ -1,6 +1,6 @@
 # Elwood
 
-A lightweight JSON transformation language combining JSONPath navigation, pipe operators, lambda expressions, and a rich standard library.
+A functional, expression-oriented JSON transformation language combining JSONPath navigation, pipe operators, lambda expressions, and a rich standard library. [Why functional? →](docs/functional-programming.md)
 
 ```
 $.orders[*]
@@ -192,6 +192,7 @@ Both implementations share the same conformance test suite (`spec/test-cases/`).
 
 - **[Playground](https://max-favilli.github.io/elwood/)** — Try Elwood in your browser
 - **[Syntax Reference](docs/syntax-reference.md)** — Complete language reference
+- **[Why Functional?](docs/functional-programming.md)** — Design philosophy and functional programming concepts
 - **[Changelog](docs/changelog.md)** — Version history
 - **[Roadmap](docs/roadmap.md)** — Future plans
 - **[Test Cases](spec/test-cases/)** — 68 examples with explanations (also serve as tutorials)

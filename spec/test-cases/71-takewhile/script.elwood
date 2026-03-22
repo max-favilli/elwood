@@ -1,0 +1,1 @@
+iterate(1, x => x + 1) | takeWhile x => x < 6

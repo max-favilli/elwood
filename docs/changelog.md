@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-03-22 — iterate and takeWhile
+
+Added `iterate(seed, fn)` for generating lazy sequences and `takeWhile` pipe operator for conditional sequence limiting.
+
+### New features
+- `iterate(seed, fn)` — generates a lazy sequence: `[seed, fn(seed), fn(fn(seed)), ...]`. Must be limited by `take`, `takeWhile`, or `first`.
+- `| takeWhile predicate` — takes items while predicate is true, then short-circuits. Critical for infinite sequences.
+- Safety limit: iterate throws after 1,000,000 iterations (.NET) / 10,000 (TypeScript) without a limiting operator.
+
+### Test cases added
+- `69-iterate-basic` — powers of 2 with take
+- `70-iterate-state` — accumulating state across iterations
+- `71-takewhile` — conditional limit on infinite sequence
+- `72-iterate-fibonacci` — Fibonacci sequence via iterate
+
+### Files modified
+- `dotnet/src/Elwood.Core/Syntax/Ast.cs` — TakeWhileOperation
+- `dotnet/src/Elwood.Core/Parsing/Parser.cs` — takeWhile parser
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — takeWhile + iterate evaluation
+- `ts/src/ast.ts`, `ts/src/parser.ts`, `ts/src/evaluator.ts` — TypeScript ports
+- `docs/syntax-reference.md` — takeWhile + iterate documented
+
+---
+
 ## 2026-03-21 — Comprehensive function library, file-based tests, full function parity, join modes
 
 Massive expansion of built-in functions, covering all common JSON transformation operations. Added file-based test framework with 63+ test cases (each with input, expression, expected output, and explanation).

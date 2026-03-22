@@ -103,6 +103,8 @@ class Parser {
         return { type: 'Aggregate', name, span: this.span(start) };
       case 'take': case 'skip':
         return { type: 'Slice', kind: name as 'take' | 'skip', count: this.parsePipeArg(), span: this.span(start) };
+      case 'takeWhile':
+        return { type: 'TakeWhile', predicate: this.parsePipeArg(), span: this.span(start) };
       case 'batch': return { type: 'Batch', size: this.parsePipeArg(), span: this.span(start) };
       case 'join': return this.parseJoin(start);
       case 'concat': return this.parseConcat(start);
