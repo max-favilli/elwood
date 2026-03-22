@@ -507,6 +507,18 @@ public sealed class Parser
             // Standalone $
         }
 
+        // If the last path segment is immediately followed by ( it's a method call,
+        // not property access. This handles $.fromCsv() where DollarDot consumed the
+        // dot that ParsePostfix would normally need to recognize .method().
+        if (segments.Count > 0 && segments[^1] is PropertySegment lastProp && Check(TokenKind.LeftParen))
+        {
+            Advance(); // consume (
+            var args = ParseArgumentList();
+            Expect(TokenKind.RightParen, "Expected ')' after arguments");
+            var targetPath = new PathExpression(segments.Take(segments.Count - 1).ToList(), true, Span(start));
+            return new MethodCallExpression(targetPath, lastProp.Name, args, Span(start));
+        }
+
         var path = new PathExpression(segments, true, Span(start));
 
         // After the path, there might be postfix operations

@@ -395,6 +395,18 @@ class Parser {
       this.match(TokenKind.Dollar); // standalone $
     }
 
+    // If the last path segment is immediately followed by ( it's a method call,
+    // not property access. This handles $.fromCsv() where DollarDot consumed the
+    // dot that parsePostfix would normally need to recognize .method().
+    if (segments.length > 0 && segments[segments.length - 1].type === 'Property' && this.check(TokenKind.LeftParen)) {
+      const lastProp = segments[segments.length - 1] as { type: 'Property'; name: string; span: any };
+      this.advance(); // consume (
+      const args = this.parseArgList();
+      this.expect(TokenKind.RightParen, "Expected ')' after arguments");
+      const targetPath: ElwoodExpression = { type: 'Path', segments: segments.slice(0, -1), isRooted: true, span: this.span(start) };
+      return { type: 'MethodCall', target: targetPath, methodName: lastProp.name, arguments: args, span: this.span(start) };
+    }
+
     return { type: 'Path', segments, isRooted: true, span: this.span(start) };
   }
 

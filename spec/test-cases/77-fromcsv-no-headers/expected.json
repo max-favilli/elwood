@@ -1,0 +1,5 @@
+[
+  { "A": "id", "B": "name", "C": "city" },
+  { "A": "1", "B": "Alice", "C": "Berlin" },
+  { "A": "2", "B": "Bob", "C": "Munich" }
+]

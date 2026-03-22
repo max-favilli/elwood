@@ -1,0 +1,2 @@
+let parsed = $.raw.parseJson()
+return { name: parsed.name, top: parsed.scores[0], originalIsString: $.plain.parseJson().isNull() }

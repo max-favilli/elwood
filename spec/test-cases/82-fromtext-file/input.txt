@@ -1,0 +1,5 @@
+INFO  2026-03-22 Server started on port 8080
+WARN  2026-03-22 High memory usage: 85%
+ERROR 2026-03-22 Connection timeout to database
+INFO  2026-03-22 Request processed in 150ms
+ERROR 2026-03-22 Disk space critical: 95% used

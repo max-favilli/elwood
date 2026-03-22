@@ -1,0 +1,1 @@
+$.fromText() | where l => l.startsWith("ERROR") | select l => l.substring(6)

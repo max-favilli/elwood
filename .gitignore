@@ -36,4 +36,5 @@ BenchmarkDotNet.Artifacts/
 ## Private planning docs (not for public repo)
 .private/
 .claude/
+CLAUDE.md
 docs/prompts/

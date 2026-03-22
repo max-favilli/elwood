@@ -830,6 +830,7 @@ public sealed class Evaluator
             "toString" => EvaluateToString(target, args),
             "toNumber" => _factory.CreateNumber(double.TryParse(target.GetStringValue(), out var n) ? n : 0),
             "convertTo" => EvaluateConvertTo(target, args),
+            "parseJson" => EvaluateParseJson(target),
 
             // Null/empty checks — with optional fallback: .isNullOrEmpty(fallback)
             "isNull" => EvaluateNullCheck(target, args, checkWhitespace: false, nullOnly: true),
@@ -882,6 +883,8 @@ public sealed class Evaluator
         var delimiter = ",";
         var hasHeaders = true;
         var quote = '"';
+        var skipRows = 0;
+        var parseJson = false;
 
         // Parse options object if provided
         if (args.Count > 0 && args[0].Kind == ElwoodValueKind.Object)
@@ -893,10 +896,33 @@ public sealed class Evaluator
             if (h is not null) hasHeaders = IsTruthy(h);
             var q = opts.GetProperty("quote");
             if (q is not null && (q.GetStringValue()?.Length ?? 0) > 0) quote = q.GetStringValue()![0];
+            var s = opts.GetProperty("skipRows");
+            if (s is not null) skipRows = (int)s.GetNumberValue();
+            var pj = opts.GetProperty("parseJson");
+            if (pj is not null) parseJson = IsTruthy(pj);
         }
 
         var lines = ParseCsvLines(csv, delimiter[0], quote);
+
+        // Skip leading rows (metadata/title rows before headers or data)
+        if (skipRows > 0 && skipRows < lines.Count)
+            lines = lines.Skip(skipRows).ToList();
+
         if (lines.Count == 0) return _factory.CreateArray([]);
+
+        IElwoodValue CellValue(string val)
+        {
+            if (parseJson && !string.IsNullOrWhiteSpace(val))
+            {
+                var trimmed = val.Trim();
+                if ((trimmed.StartsWith('{') && trimmed.EndsWith('}')) ||
+                    (trimmed.StartsWith('[') && trimmed.EndsWith(']')))
+                {
+                    try { return _factory.Parse(trimmed); } catch { }
+                }
+            }
+            return _factory.CreateString(val);
+        }
 
         if (hasHeaders && lines.Count >= 1)
         {
@@ -909,7 +935,7 @@ public sealed class Evaluator
                 for (var j = 0; j < headers.Count; j++)
                 {
                     var val = j < row.Count ? row[j] : "";
-                    props.Add(new KeyValuePair<string, IElwoodValue>(headers[j], _factory.CreateString(val)));
+                    props.Add(new KeyValuePair<string, IElwoodValue>(headers[j], CellValue(val)));
                 }
                 rows.Add(_factory.CreateObject(props));
             }
@@ -917,9 +943,34 @@ public sealed class Evaluator
         }
         else
         {
+            // No headers: return array of objects with auto-generated column names (A, B, C, ... Z, AA, AB, ...)
+            var maxCols = lines.Max(r => r.Count);
+            var colNames = Enumerable.Range(0, maxCols).Select(GetAlphabeticColumnName).ToList();
+
             return _factory.CreateArray(lines.Select(row =>
-                _factory.CreateArray(row.Select(cell => _factory.CreateString(cell)))));
+            {
+                var props = new List<KeyValuePair<string, IElwoodValue>>();
+                for (var j = 0; j < colNames.Count; j++)
+                {
+                    var val = j < row.Count ? row[j] : "";
+                    props.Add(new KeyValuePair<string, IElwoodValue>(colNames[j], CellValue(val)));
+                }
+                return _factory.CreateObject(props);
+            }));
         }
+    }
+
+    private static string GetAlphabeticColumnName(int index)
+    {
+        var name = "";
+        index++;
+        while (index > 0)
+        {
+            index--;
+            name = (char)('A' + index % 26) + name;
+            index /= 26;
+        }
+        return name;
     }
 
     private static List<List<string>> ParseCsvLines(string csv, char delimiter, char quote)
@@ -982,6 +1033,7 @@ public sealed class Evaluator
         var delimiter = ",";
         var includeHeaders = true;
         var quote = '"';
+        var alwaysQuote = false;
 
         if (args.Count > 0 && args[0].Kind == ElwoodValueKind.Object)
         {
@@ -990,6 +1042,8 @@ public sealed class Evaluator
             if (d is not null) delimiter = d.GetStringValue() ?? ",";
             var h = opts.GetProperty("headers");
             if (h is not null) includeHeaders = IsTruthy(h);
+            var aq = opts.GetProperty("alwaysQuote");
+            if (aq is not null) alwaysQuote = IsTruthy(aq);
         }
 
         var items = target.EnumerateArray().ToList();
@@ -1013,7 +1067,7 @@ public sealed class Evaluator
 
         if (includeHeaders && allKeys.Count > 0)
         {
-            rows.Add(string.Join(delim, allKeys.Select(k => CsvEscape(k, delim, quote))));
+            rows.Add(string.Join(delim, allKeys.Select(k => CsvEscape(k, delim, quote, alwaysQuote))));
         }
 
         foreach (var item in items)
@@ -1025,11 +1079,11 @@ public sealed class Evaluator
                     var v = item.GetProperty(k);
                     return v is not null ? ValueToString(v) : "";
                 });
-                rows.Add(string.Join(delim, values.Select(v => CsvEscape(v, delim, quote))));
+                rows.Add(string.Join(delim, values.Select(v => CsvEscape(v, delim, quote, alwaysQuote))));
             }
             else if (item.Kind == ElwoodValueKind.Array)
             {
-                var values = item.EnumerateArray().Select(v => CsvEscape(ValueToString(v), delim, quote));
+                var values = item.EnumerateArray().Select(v => CsvEscape(ValueToString(v), delim, quote, alwaysQuote));
                 rows.Add(string.Join(delim, values));
             }
         }
@@ -1039,9 +1093,9 @@ public sealed class Evaluator
         return _factory.CreateString(sb.ToString().TrimEnd('\r', '\n'));
     }
 
-    private static string CsvEscape(string value, char delimiter, char quote)
+    private static string CsvEscape(string value, char delimiter, char quote, bool alwaysQuote = false)
     {
-        if (value.Contains(delimiter) || value.Contains(quote) || value.Contains('\n') || value.Contains('\r'))
+        if (alwaysQuote || value.Contains(delimiter) || value.Contains(quote) || value.Contains('\n') || value.Contains('\r'))
             return $"{quote}{value.Replace(quote.ToString(), $"{quote}{quote}")}{quote}";
         return value;
     }
@@ -1437,6 +1491,21 @@ public sealed class Evaluator
             "string" => _factory.CreateString(ValueToString(target)),
             _ => target
         };
+    }
+
+    private IElwoodValue EvaluateParseJson(IElwoodValue target)
+    {
+        var str = target.GetStringValue();
+        if (string.IsNullOrWhiteSpace(str))
+            return _factory.CreateNull();
+        try
+        {
+            return _factory.Parse(str);
+        }
+        catch
+        {
+            return _factory.CreateNull();
+        }
     }
 
     private IElwoodValue EvaluateIn(IElwoodValue target, List<IElwoodValue> args)

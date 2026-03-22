@@ -30,18 +30,26 @@ function discoverTestCases(): TestCase[] {
 
   const cases: TestCase[] = [];
 
+  // Supported input extensions in priority order
+  const inputExtensions = ['.json', '.csv', '.txt', '.xml'];
+
   for (const dir of dirs) {
     const scriptPath = join(specDir, dir, 'script.elwood');
-    const inputPath = join(specDir, dir, 'input.json');
     const expectedPath = join(specDir, dir, 'expected.json');
 
-    // Skip benchmark stubs (no input/expected)
-    if (!existsSync(scriptPath) || !existsSync(inputPath) || !existsSync(expectedPath)) {
-      continue;
-    }
+    // Skip benchmark stubs (no script/expected)
+    if (!existsSync(scriptPath) || !existsSync(expectedPath)) continue;
 
+    // Find the first matching input file
+    const inputExt = inputExtensions.find(ext => existsSync(join(specDir, dir, `input${ext}`)));
+    if (!inputExt) continue;
+
+    const inputPath = join(specDir, dir, `input${inputExt}`);
     const script = readFileSync(scriptPath, 'utf-8');
-    const input = JSON.parse(readFileSync(inputPath, 'utf-8'));
+    const inputContent = readFileSync(inputPath, 'utf-8');
+
+    // JSON input is parsed; all other formats (csv, txt, xml) are passed as raw strings
+    const input = inputExt === '.json' ? JSON.parse(inputContent) : inputContent;
     const expected = JSON.parse(readFileSync(expectedPath, 'utf-8'));
 
     cases.push({ name: dir, script, input, expected });

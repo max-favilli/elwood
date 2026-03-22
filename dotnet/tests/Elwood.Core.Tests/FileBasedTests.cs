@@ -10,11 +10,14 @@ namespace Elwood.Core.Tests;
 /// <summary>
 /// Discovers test cases from spec/test-cases/{name}/ directories:
 ///   script.elwood     — the script or expression
-///   input.json        — the input JSON
+///   input.json        — the input JSON (parsed as JSON)
+///   input.csv         — alternative: raw CSV string ($ = the file content)
+///   input.txt         — alternative: raw text string ($ = the file content)
+///   input.xml         — alternative: raw XML string ($ = the file content)
 ///   expected.json     — the expected output
 ///   explanation.md    — documentation (not used by runner)
 ///
-/// Each directory with script.elwood + input.json + expected.json becomes a test case.
+/// Each directory with script.elwood + input.* + expected.json becomes a test case.
 /// Directories with only script.elwood + explanation.md are documentation stubs (benchmark examples).
 /// Execution times are logged to Benchmarks/timing.log (last 10 runs).
 /// </summary>
@@ -54,14 +57,24 @@ public class FileBasedTests
             .OrderBy(d => Path.GetFileName(d))
             .ToList();
 
+        // Supported input extensions in priority order
+        string[] inputExtensions = [".json", ".csv", ".txt", ".xml"];
+
         foreach (var dir in testDirs)
         {
             var name = Path.GetFileName(dir);
             var scriptFile = Path.Combine(dir, "script.elwood");
-            var inputFile = Path.Combine(dir, "input.json");
             var expectedFile = Path.Combine(dir, "expected.json");
 
-            if (File.Exists(scriptFile) && File.Exists(inputFile) && File.Exists(expectedFile))
+            if (!File.Exists(scriptFile) || !File.Exists(expectedFile))
+                continue;
+
+            // Find the first matching input file
+            var inputFile = inputExtensions
+                .Select(ext => Path.Combine(dir, $"input{ext}"))
+                .FirstOrDefault(File.Exists);
+
+            if (inputFile is not null)
             {
                 yield return [name, scriptFile, inputFile, expectedFile];
             }
@@ -73,10 +86,14 @@ public class FileBasedTests
     public void TestCase(string name, string scriptFile, string inputFile, string expectedFile)
     {
         var script = File.ReadAllText(scriptFile);
-        var inputJson = File.ReadAllText(inputFile);
+        var inputContent = File.ReadAllText(inputFile);
         var expectedJson = File.ReadAllText(expectedFile);
 
-        var input = Factory.Parse(inputJson);
+        // JSON input is parsed; all other formats (csv, txt, xml) are passed as raw strings
+        var inputExt = Path.GetExtension(inputFile).ToLowerInvariant();
+        var input = inputExt == ".json"
+            ? Factory.Parse(inputContent)
+            : Factory.CreateString(inputContent);
 
         var isScript = script.TrimStart().StartsWith("let ") || script.Contains("\nlet ") || script.Contains("return ");
 

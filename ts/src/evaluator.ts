@@ -631,6 +631,11 @@ function callBuiltin(name: string, target: unknown, args: unknown[], _scope?: Sc
     }
     case 'toNumber': return typeof target === 'number' ? target : (parseFloat(str()) || 0);
     case 'convertTo': return convertTo(target, args);
+    case 'parseJson': {
+      const s = str();
+      if (!s) return null;
+      try { return JSON.parse(s); } catch { return null; }
+    }
 
     // Math
     case 'round': return evalRound(num(), args);
@@ -892,23 +897,63 @@ function getOptBool(args: unknown[], key: string, defaultVal: boolean): boolean 
   return defaultVal;
 }
 
+function getOptNumber(args: unknown[], key: string, defaultVal: number): number {
+  if (args.length > 0 && isObject(args[0])) {
+    const v = (args[0] as any)[key];
+    if (v !== undefined && v !== null) return Number(v);
+  }
+  return defaultVal;
+}
+
+function getAlphabeticColumnName(index: number): string {
+  let name = '';
+  let i = index + 1;
+  while (i > 0) { i--; name = String.fromCharCode(65 + i % 26) + name; i = Math.floor(i / 26); }
+  return name;
+}
+
 function evalFromCsv(csv: string, args: unknown[]): unknown {
   const delimiter = getOpt(args, 'delimiter', ',');
   const hasHeaders = getOptBool(args, 'headers', true);
   const quote = getOpt(args, 'quote', '"').charAt(0);
+  const skipRows = getOptNumber(args, 'skipRows', 0);
+  const parseJsonOpt = getOptBool(args, 'parseJson', false);
 
-  const lines = parseCsvLines(csv, delimiter.charAt(0), quote);
+  let lines = parseCsvLines(csv, delimiter.charAt(0), quote);
+
+  if (skipRows > 0 && skipRows < lines.length)
+    lines = lines.slice(skipRows);
+
   if (lines.length === 0) return [];
+
+  function cellValue(val: string): unknown {
+    if (parseJsonOpt && val) {
+      const trimmed = val.trim();
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+          (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try { return JSON.parse(trimmed); } catch { /* keep as string */ }
+      }
+    }
+    return val;
+  }
 
   if (hasHeaders && lines.length >= 1) {
     const headers = lines[0];
     return lines.slice(1).map(row => {
       const obj: Record<string, unknown> = {};
-      headers.forEach((h, j) => { obj[h] = j < row.length ? row[j] : ''; });
+      headers.forEach((h, j) => { obj[h] = cellValue(j < row.length ? row[j] : ''); });
       return obj;
     });
   }
-  return lines;
+
+  // No headers: return array of objects with auto-generated column names (A, B, C, ... Z, AA, AB, ...)
+  const maxCols = Math.max(...lines.map(r => r.length));
+  const colNames = Array.from({ length: maxCols }, (_, i) => getAlphabeticColumnName(i));
+  return lines.map(row => {
+    const obj: Record<string, unknown> = {};
+    colNames.forEach((col, j) => { obj[col] = cellValue(j < row.length ? row[j] : ''); });
+    return obj;
+  });
 }
 
 function parseCsvLines(csv: string, delimiter: string, quote: string): string[][] {
@@ -947,8 +992,8 @@ function parseCsvLines(csv: string, delimiter: string, quote: string): string[][
   return lines;
 }
 
-function csvEscape(value: string, delimiter: string, quote: string): string {
-  if (value.includes(delimiter) || value.includes(quote) || value.includes('\n') || value.includes('\r'))
+function csvEscape(value: string, delimiter: string, quote: string, alwaysQuote = false): string {
+  if (alwaysQuote || value.includes(delimiter) || value.includes(quote) || value.includes('\n') || value.includes('\r'))
     return `${quote}${value.replace(new RegExp(escapeRegex(quote), 'g'), quote + quote)}${quote}`;
   return value;
 }
@@ -957,6 +1002,7 @@ function evalToCsv(target: unknown, args: unknown[]): string {
   const delimiter = getOpt(args, 'delimiter', ',');
   const includeHeaders = getOptBool(args, 'headers', true);
   const quote = getOpt(args, 'quote', '"').charAt(0);
+  const alwaysQuote = getOptBool(args, 'alwaysQuote', false);
   const items = toArray(target);
   if (items.length === 0) return '';
 
@@ -971,14 +1017,14 @@ function evalToCsv(target: unknown, args: unknown[]): string {
 
   const rows: string[] = [];
   if (includeHeaders && allKeys.length > 0) {
-    rows.push(allKeys.map(k => csvEscape(k, delimiter, quote)).join(delimiter));
+    rows.push(allKeys.map(k => csvEscape(k, delimiter, quote, alwaysQuote)).join(delimiter));
   }
 
   for (const item of items) {
     if (isObject(item)) {
-      rows.push(allKeys.map(k => csvEscape(valueToString((item as any)[k] ?? ''), delimiter, quote)).join(delimiter));
+      rows.push(allKeys.map(k => csvEscape(valueToString((item as any)[k] ?? ''), delimiter, quote, alwaysQuote)).join(delimiter));
     } else if (isArray(item)) {
-      rows.push(item.map(v => csvEscape(valueToString(v), delimiter, quote)).join(delimiter));
+      rows.push(item.map(v => csvEscape(valueToString(v), delimiter, quote, alwaysQuote)).join(delimiter));
     }
   }
 

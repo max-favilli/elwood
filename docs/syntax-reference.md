@@ -270,6 +270,7 @@ Methods are called with dot notation on values. Most also work as pipe operators
 | `.convertTo("Int32")` | Convert to int (truncates decimals) |
 | `.convertTo("Double")` | Convert to double |
 | `.convertTo("Boolean")` | Convert to boolean |
+| `.parseJson()` | Deserialize JSON string into a navigable value (returns null if invalid) |
 | `.boolean()` | Coerce to boolean (truthiness) |
 | `.not()` | Negate truthiness |
 
@@ -317,8 +318,8 @@ Methods are called with dot notation on values. Most also work as pipe operators
 
 | Function | Description | Options |
 |---|---|---|
-| `.fromCsv(options?)` | Parse CSV string → array of objects | `delimiter`, `headers`, `quote` |
-| `.toCsv(options?)` | Array of objects → CSV string | `delimiter`, `headers` |
+| `.fromCsv(options?)` | Parse CSV string → array of objects | `delimiter`, `headers`, `quote`, `skipRows`, `parseJson` |
+| `.toCsv(options?)` | Array of objects → CSV string | `delimiter`, `headers`, `alwaysQuote` |
 | `.fromText(options?)` | Split text into array of lines | `delimiter` (default `\n`) |
 | `.toText(options?)` | Join array into text | `delimiter` (default `\n`) |
 

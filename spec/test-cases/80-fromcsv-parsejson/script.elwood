@@ -1,0 +1,1 @@
+$.data.fromCsv({ parseJson: true }) | select r => { name: r.name, role: r.metadata.role }

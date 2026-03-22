@@ -1,0 +1,1 @@
+($.users[*] | select u => { name: u.name, age: u.age }).toCsv({ alwaysQuote: true })

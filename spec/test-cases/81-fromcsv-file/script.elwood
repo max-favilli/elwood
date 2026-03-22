@@ -1,0 +1,1 @@
+$.fromCsv() | select r => { name: r.name, age: r.age.toNumber() }

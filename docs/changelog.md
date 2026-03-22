@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-03-22 — parseJson and CSV enhancements (Phase 2)
+
+Added `.parseJson()` method for deserializing embedded JSON strings, and enhanced `fromCsv`/`toCsv` with additional options.
+
+### New features
+- `.parseJson()` — general-purpose method to deserialize a JSON string into a navigable value; returns null if invalid
+- `fromCsv({ parseJson: true })` — automatically detect and parse JSON values in CSV cells
+- `fromCsv({ skipRows: n })` — skip leading metadata/title rows before parsing
+- `fromCsv({ headers: false })` — auto-generates alphabetic column names (A, B, C, ... Z, AA, AB) matching Excel convention
+- `toCsv({ alwaysQuote: true })` — forces all fields to be quoted, useful for strict RFC 4180 compliance
+
+### Test framework
+- Test runners now support `input.csv`, `input.txt`, `input.xml` as alternatives to `input.json`
+- Non-JSON input files are read as raw strings ($ = file content), enabling `$.fromCsv()` directly
+- Parser fix: `$.method()` now correctly resolves as a method call when `$` is a string value (DollarDot token consumed the dot that ParsePostfix needed)
+
+### Test cases added
+- `77-fromcsv-no-headers` — skipRows + auto-generated column names
+- `78-tocsv-always-quote` — alwaysQuote option
+- `79-parsejson` — standalone parseJson method with navigation and null fallback
+- `80-fromcsv-parsejson` — fromCsv with parseJson option for embedded JSON in cells
+- `81-fromcsv-file` — real CSV file as input (input.csv instead of input.json)
+- `82-fromtext-file` — real text file as input (input.txt, log filtering example)
+
+### Files modified
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — EvaluateParseJson, EvaluateFromCsv (skipRows, auto columns, parseJson), EvaluateToCsv (alwaysQuote), CsvEscape, GetAlphabeticColumnName
+- `dotnet/src/Elwood.Core/Parsing/Parser.cs` — ParsePath: detect method call on last path segment
+- `dotnet/tests/Elwood.Core.Tests/FileBasedTests.cs` — support input.csv/txt/xml, string input handling
+- `ts/src/evaluator.ts` — parseJson case, evalFromCsv (skipRows, auto columns, parseJson), evalToCsv (alwaysQuote), csvEscape, getAlphabeticColumnName, getOptNumber helper
+- `ts/src/parser.ts` — parsePath: detect method call on last path segment
+- `ts/tests/conformance.test.ts` — support input.csv/txt/xml, string input handling
+- `docs/syntax-reference.md` — added parseJson, updated fromCsv/toCsv option lists
+
 ## 2026-03-22 — iterate and takeWhile
 
 Added `iterate(seed, fn)` for generating lazy sequences and `takeWhile` pipe operator for conditional sequence limiting.
