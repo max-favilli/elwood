@@ -1,6 +1,0 @@
-let benefitsFor = memo isFullTime => $.benefits[*] | where b => b.fullTimeOnly == isFullTime | select b => b.name
-
-return $.employees[*] | select e => {
-  name: e.name,
-  benefits: benefitsFor(e.fullTime)
-}

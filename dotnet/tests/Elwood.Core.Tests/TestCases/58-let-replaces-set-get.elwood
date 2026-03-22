@@ -1,5 +1,0 @@
-let companies = $.foo[*] | select f => f.company
-
-{
-  names: $.bar[*] | where b => b.profile.company.in(companies) | select b => b.name
-}

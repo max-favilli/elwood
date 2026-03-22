@@ -1,8 +1,0 @@
-let defaults = $.defaults
-
-$.orders[*] | select o => {
-  ...o,
-  ...defaults,
-  total: o.price * o.qty,
-  processed: true
-}

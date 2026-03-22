@@ -1,1 +1,0 @@
-"query { products(first: 10) { edges { node { id } } } }"

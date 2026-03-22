@@ -1,9 +1,0 @@
-{
-  "numbers": [1, 2, 3, 4, 5],
-  "words": ["Hello", "World", "from", "Elwood"],
-  "orders": [
-    { "product": "Jacket", "qty": 2, "price": 199.99 },
-    { "product": "Boots", "qty": 1, "price": 149.50 },
-    { "product": "Gloves", "qty": 3, "price": 29.99 }
-  ]
-}

@@ -1,9 +1,0 @@
-{
-  "files": [
-    { "name": "report-2026-Q1.xlsx", "path": "/exports/finance/report-2026-Q1.xlsx" },
-    { "name": "invoice-A001.pdf", "path": "/exports/sales/invoice-A001.pdf" },
-    { "name": "photo-summer.jpg", "path": "/media/photos/photo-summer.jpg" },
-    { "name": "report-2026-Q2.xlsx", "path": "/exports/finance/report-2026-Q2.xlsx" },
-    { "name": "readme.txt", "path": "/docs/readme.txt" }
-  ]
-}

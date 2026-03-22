@@ -1,5 +1,0 @@
-{
-  awayFromZero: $.Qty.toNumber().round("awayFromZero"),
-  toEven: $.Qty.toNumber().round("toEven"),
-  default: $.Qty.toNumber().round()
-}

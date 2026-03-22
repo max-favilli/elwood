@@ -1,8 +1,0 @@
-{
-  "upper": "HELLO WORLD",
-  "upperFirst": "Hello world",
-  "lower": "hELLO WORLD",
-  "trimHash": "data",
-  "trimLeadingZeros": "42",
-  "trimTrailingDots": "report.txt"
-}
