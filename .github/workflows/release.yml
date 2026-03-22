@@ -16,7 +16,6 @@ jobs:
     name: Publish NuGet
     needs: test
     runs-on: ubuntu-latest
-    if: ${{ secrets.NUGET_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -28,6 +27,9 @@ jobs:
           dotnet pack dotnet/src/Elwood.Json/Elwood.Json.csproj -c Release
           dotnet pack dotnet/src/Elwood.Cli/Elwood.Cli.csproj -c Release
       - name: Push to NuGet
+        if: ${{ env.NUGET_API_KEY != '' }}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
           dotnet nuget push dotnet/src/Elwood.Core/bin/Release/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
           dotnet nuget push dotnet/src/Elwood.Json/bin/Release/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
@@ -37,7 +39,6 @@ jobs:
     name: Publish npm
     needs: test
     runs-on: ubuntu-latest
-    if: ${{ secrets.NPM_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,9 +51,11 @@ jobs:
           npm ci
           npm run build
       - name: Publish
+        if: ${{ env.NPM_TOKEN != '' }}
         working-directory: ts
         run: npm publish --access public
         env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   native-binaries:
