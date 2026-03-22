@@ -68,6 +68,16 @@ var result = engine.Evaluate("$.users[*] | where u => u.active | select u => u.n
 
 ### CLI
 
+Download a single binary (no runtime needed):
+
+| Platform | Download |
+|---|---|
+| Windows | [elwood-win-x64.exe](https://github.com/max-favilli/elwood/releases/latest/download/elwood-win-x64.exe) |
+| macOS | [elwood-macos-x64](https://github.com/max-favilli/elwood/releases/latest/download/elwood-macos-x64) |
+| Linux | [elwood-linux-x64](https://github.com/max-favilli/elwood/releases/latest/download/elwood-linux-x64) |
+
+Or install as a .NET tool: `dotnet tool install --global Elwood.Cli`
+
 ```bash
 # Evaluate an expression
 elwood eval "$.users[*] | where u => u.active" --input data.json
