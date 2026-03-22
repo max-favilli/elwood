@@ -4,6 +4,9 @@ on:
   push:
     tags: ['v*']
 
+permissions:
+  contents: write
+
 jobs:
   test:
     name: Test
@@ -13,6 +16,7 @@ jobs:
     name: Publish NuGet
     needs: test
     runs-on: ubuntu-latest
+    if: ${{ secrets.NUGET_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -33,6 +37,7 @@ jobs:
     name: Publish npm
     needs: test
     runs-on: ubuntu-latest
+    if: ${{ secrets.NPM_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -59,12 +64,15 @@ jobs:
           - os: ubuntu-latest
             rid: linux-x64
             artifact: elwood-linux-x64
+            binary: Elwood.Cli
           - os: macos-latest
             rid: osx-x64
             artifact: elwood-macos-x64
+            binary: Elwood.Cli
           - os: windows-latest
             rid: win-x64
-            artifact: elwood-win-x64.exe
+            artifact: elwood-win-x64
+            binary: Elwood.Cli.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -77,4 +85,33 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dotnet/src/Elwood.Cli/bin/Release/net10.0/${{ matrix.rid }}/publish/
+          path: dotnet/src/Elwood.Cli/bin/Release/net10.0/${{ matrix.rid }}/publish/${{ matrix.binary }}
+
+  github-release:
+    name: Create GitHub Release
+    needs: [native-binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          cp artifacts/elwood-linux-x64/Elwood.Cli release/elwood-linux-x64
+          cp artifacts/elwood-macos-x64/Elwood.Cli release/elwood-macos-x64
+          cp artifacts/elwood-win-x64/Elwood.Cli.exe release/elwood-win-x64.exe
+          chmod +x release/elwood-linux-x64 release/elwood-macos-x64
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/elwood-linux-x64
+            release/elwood-macos-x64
+            release/elwood-win-x64.exe
