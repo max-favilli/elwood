@@ -127,6 +127,14 @@ New features follow the workflow: spec test case first → implement in .NET →
 - [ ] GitHub Pages deployment via GitHub Actions
 - [ ] **Detailed spec:** See [`docs/playground-spec.md`](playground-spec.md)
 
+### API container
+- [ ] `Elwood.Api` project — minimal ASP.NET API (~50 lines): `POST /api/evaluate` with `{ script, input }` → result
+- [ ] Dockerfile (multi-stage, Alpine-based, Native AOT for small image ~20MB)
+- [ ] Publish container image to GitHub Container Registry (`ghcr.io/max-favilli/elwood-api`)
+- [ ] GitHub Actions workflow to build and push container on release tags
+- [ ] Usage: `docker run -p 8080:8080 ghcr.io/max-favilli/elwood-api`
+- [ ] Enables integration with any iPaaS (MuleSoft, SnapLogic, Boomi, SAP CPI, Logic Apps, etc.) via HTTP
+
 ### Remaining engine work
 - [ ] Identify and port any remaining common JSON transformation functions not yet covered
 
@@ -337,7 +345,7 @@ Phase 1  ✅  Build the .NET engine
    ↓
 Phase 1b      Lazy evaluation (.NET) → repo restructure → TypeScript port
    ↓
-Phase 1c      Publish everything (GitHub, NuGet, npm, CI, Playground)
+Phase 1c      Publish everything (GitHub, NuGet, npm, CI, Playground, API container)
    ↓
 Phase 2       YAML transformation documents + multi-format I/O
    ↓
@@ -353,10 +361,28 @@ Phase 4 spans both .NET and TypeScript implementations.
 Elwood is designed for **incremental adoption**:
 
 1. **Phase 1** (done): Standalone transformation engine. Use via CLI or .NET library.
-2. **Phase 1b** (next): Cross-platform reach. Use in browsers, Node.js, edge runtimes.
-3. **Phase 1c**: Open-source launch. Available via NuGet, npm, and browser playground.
+2. **Phase 1b** (done): Cross-platform reach. Use in browsers, Node.js, edge runtimes.
+3. **Phase 1c**: Open-source launch. Available via NuGet, npm, browser playground, and self-hosted API container.
 4. **Phase 2**: Declarative YAML maps. Describe transformations as documents, not code.
 5. **Phase 3**: Full pipeline configuration. One YAML file describes sources, transforms, and destinations.
 6. **Phase 4**: Performance and tooling make Elwood production-ready for the most demanding workloads.
 
 Each phase is independently useful. No phase requires adopting a later one.
+
+## How to use Elwood
+
+```
+{elwood}
+
+  As a library       →  NuGet: Elwood.Core / Elwood.Json
+                        npm: @elwood-lang/core
+
+  As a CLI tool      →  Download from GitHub Releases (Windows, macOS, Linux)
+                        Or: dotnet tool install --global Elwood.Cli
+
+  In the browser     →  Playground: https://max-favilli.github.io/elwood/
+
+  As an API          →  docker run -p 8080:8080 ghcr.io/max-favilli/elwood-api
+                        POST /api/evaluate { script, input } → result
+                        (integrates with any iPaaS via HTTP)
+```
