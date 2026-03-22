@@ -1,14 +1,14 @@
 # Elwood
 
-A functional JSON transformation DSL with KQL-style pipes, LINQ-style lambdas, and JSONPath navigation.
+A lightweight JSON transformation language combining JSONPath navigation, pipe operators, lambda expressions, and a rich standard library.
 
 ```
 $.orders[*]
 | where o => o.status == "confirmed" && o.total > 100
 | select o => {
     id: o.id,
-    customer: o.customerName,
-    total: o.total,
+    customer: o.customerName.toUpper(),
+    date: o.createdAt.dateFormat("yyyy-MM-dd"),
     priority: o.priority | match "high" => "URGENT", _ => "normal"
   }
 | orderBy o => o.total desc
