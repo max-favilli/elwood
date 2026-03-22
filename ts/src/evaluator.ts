@@ -658,6 +658,8 @@ function callBuiltin(name: string, target: unknown, args: unknown[], _scope?: Sc
     // Format I/O
     case 'fromCsv': return evalFromCsv(str(), args);
     case 'toCsv': return evalToCsv(target, args);
+    case 'fromXml': return evalFromXml(str(), args);
+    case 'toXml': return evalToXml(target, args);
     case 'fromText': return evalFromText(str(), args);
     case 'toText': return evalToText(target, args);
 
@@ -1029,6 +1031,280 @@ function evalToCsv(target: unknown, args: unknown[]): string {
   }
 
   return rows.join('\n');
+}
+
+// ── XML ──
+
+interface XmlNode {
+  type: 'element';
+  name: string;
+  attributes: Record<string, string>;
+  children: (XmlNode | string)[];
+}
+
+function parseXml(xml: string): XmlNode | null {
+  let pos = 0;
+
+  function skipWhitespace() { while (pos < xml.length && /\s/.test(xml[pos])) pos++; }
+
+  function parseText(): string {
+    let text = '';
+    while (pos < xml.length && xml[pos] !== '<') {
+      if (xml[pos] === '&') {
+        const semi = xml.indexOf(';', pos);
+        if (semi > pos) {
+          const entity = xml.substring(pos + 1, semi);
+          const map: Record<string, string> = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
+          text += entity.startsWith('#x') ? String.fromCharCode(parseInt(entity.slice(2), 16))
+                : entity.startsWith('#') ? String.fromCharCode(parseInt(entity.slice(1)))
+                : map[entity] ?? `&${entity};`;
+          pos = semi + 1;
+        } else { text += xml[pos++]; }
+      } else { text += xml[pos++]; }
+    }
+    return text;
+  }
+
+  function parseName(): string {
+    const start = pos;
+    while (pos < xml.length && /[a-zA-Z0-9_:\-.]/.test(xml[pos])) pos++;
+    return xml.substring(start, pos);
+  }
+
+  function parseAttributes(): Record<string, string> {
+    const attrs: Record<string, string> = {};
+    while (pos < xml.length) {
+      skipWhitespace();
+      if (pos >= xml.length || xml[pos] === '>' || xml[pos] === '/' || xml[pos] === '?') break;
+      const name = parseName();
+      if (!name) break;
+      skipWhitespace();
+      if (xml[pos] !== '=') { attrs[name] = ''; continue; }
+      pos++; // skip =
+      skipWhitespace();
+      const q = xml[pos];
+      if (q !== '"' && q !== "'") { attrs[name] = ''; continue; }
+      pos++; // skip opening quote
+      let val = '';
+      while (pos < xml.length && xml[pos] !== q) {
+        if (xml[pos] === '&') {
+          const semi = xml.indexOf(';', pos);
+          if (semi > pos) {
+            const entity = xml.substring(pos + 1, semi);
+            const map: Record<string, string> = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
+            val += entity.startsWith('#x') ? String.fromCharCode(parseInt(entity.slice(2), 16))
+                 : entity.startsWith('#') ? String.fromCharCode(parseInt(entity.slice(1)))
+                 : map[entity] ?? `&${entity};`;
+            pos = semi + 1;
+          } else { val += xml[pos++]; }
+        } else { val += xml[pos++]; }
+      }
+      pos++; // skip closing quote
+      attrs[name] = val;
+    }
+    return attrs;
+  }
+
+  function parseElement(): XmlNode | string | null {
+    skipWhitespace();
+    if (pos >= xml.length) return null;
+
+    if (xml[pos] !== '<') return parseText();
+
+    // Skip comments, CDATA, processing instructions, DOCTYPE
+    if (xml.startsWith('<!--', pos)) { pos = xml.indexOf('-->', pos); if (pos < 0) return null; pos += 3; return parseElement(); }
+    if (xml.startsWith('<![CDATA[', pos)) { const end = xml.indexOf(']]>', pos); if (end < 0) return null; const text = xml.substring(pos + 9, end); pos = end + 3; return text; }
+    if (xml.startsWith('<?', pos)) { pos = xml.indexOf('?>', pos); if (pos < 0) return null; pos += 2; return parseElement(); }
+    if (xml.startsWith('<!', pos)) { pos = xml.indexOf('>', pos); if (pos < 0) return null; pos += 1; return parseElement(); }
+    if (xml.startsWith('</', pos)) return null; // closing tag — handled by caller
+
+    pos++; // skip <
+    const name = parseName();
+    const attributes = parseAttributes();
+    skipWhitespace();
+
+    if (xml[pos] === '/' && xml[pos + 1] === '>') {
+      pos += 2; // self-closing
+      return { type: 'element', name, attributes, children: [] };
+    }
+
+    if (xml[pos] === '>') {
+      pos++; // skip >
+      const children: (XmlNode | string)[] = [];
+      while (pos < xml.length) {
+        if (xml.startsWith('</', pos)) {
+          pos += 2;
+          parseName(); // skip closing tag name
+          skipWhitespace();
+          if (xml[pos] === '>') pos++;
+          break;
+        }
+        const child = parseElement();
+        if (child === null) break;
+        if (typeof child === 'string') { if (child.trim()) children.push(child); }
+        else children.push(child);
+      }
+      return { type: 'element', name, attributes, children };
+    }
+
+    return null;
+  }
+
+  const result = parseElement();
+  return result && typeof result !== 'string' ? result : null;
+}
+
+function xmlNodeToValue(node: XmlNode, attrPrefix: string, stripNs: boolean): unknown {
+  const localName = stripNs ? node.name.replace(/^.*:/, '') : node.name;
+  const obj: Record<string, unknown> = {};
+
+  // Attributes
+  for (const [key, val] of Object.entries(node.attributes)) {
+    if (stripNs && (key.startsWith('xmlns:') || key === 'xmlns')) continue;
+    const attrName = stripNs ? key.replace(/^.*:/, '') : key;
+    obj[attrPrefix + attrName] = val;
+  }
+
+  // Child elements
+  const elementChildren = node.children.filter(c => typeof c !== 'string') as XmlNode[];
+  if (elementChildren.length > 0) {
+    const groups = new Map<string, XmlNode[]>();
+    for (const child of elementChildren) {
+      const childName = stripNs ? child.name.replace(/^.*:/, '') : child.name;
+      const list = groups.get(childName) ?? [];
+      list.push(child);
+      groups.set(childName, list);
+    }
+    for (const [groupName, items] of groups) {
+      if (items.length === 1) {
+        obj[groupName] = xmlChildToValue(items[0], attrPrefix, stripNs);
+      } else {
+        obj[groupName] = items.map(i => xmlChildToValue(i, attrPrefix, stripNs));
+      }
+    }
+
+    // Mixed content: text alongside elements
+    const textParts = node.children.filter(c => typeof c === 'string').map(c => (c as string).trim()).filter(Boolean);
+    if (textParts.length > 0) obj['#text'] = textParts.join(' ');
+  } else {
+    // Leaf element
+    const text = node.children.filter(c => typeof c === 'string').join('');
+    const hasAttrs = Object.keys(obj).length > 0;
+    if (hasAttrs) {
+      obj['#text'] = text;
+    } else {
+      // Simple text-only element → just the string, wrapped by caller
+      return { [localName]: text };
+    }
+  }
+
+  return { [localName]: obj };
+}
+
+function xmlChildToValue(node: XmlNode, attrPrefix: string, stripNs: boolean): unknown {
+  const hasAttrs = Object.entries(node.attributes).some(([k]) => !(stripNs && (k.startsWith('xmlns:') || k === 'xmlns')));
+  const hasChildren = node.children.some(c => typeof c !== 'string');
+
+  if (!hasAttrs && !hasChildren) {
+    return node.children.filter(c => typeof c === 'string').join('');
+  }
+
+  const obj: Record<string, unknown> = {};
+
+  for (const [key, val] of Object.entries(node.attributes)) {
+    if (stripNs && (key.startsWith('xmlns:') || key === 'xmlns')) continue;
+    const attrName = stripNs ? key.replace(/^.*:/, '') : key;
+    obj[attrPrefix + attrName] = val;
+  }
+
+  const elementChildren = node.children.filter(c => typeof c !== 'string') as XmlNode[];
+  if (elementChildren.length > 0) {
+    const groups = new Map<string, XmlNode[]>();
+    for (const child of elementChildren) {
+      const childName = stripNs ? child.name.replace(/^.*:/, '') : child.name;
+      const list = groups.get(childName) ?? [];
+      list.push(child);
+      groups.set(childName, list);
+    }
+    for (const [groupName, items] of groups) {
+      if (items.length === 1) obj[groupName] = xmlChildToValue(items[0], attrPrefix, stripNs);
+      else obj[groupName] = items.map(i => xmlChildToValue(i, attrPrefix, stripNs));
+    }
+
+    const textParts = node.children.filter(c => typeof c === 'string').map(c => (c as string).trim()).filter(Boolean);
+    if (textParts.length > 0) obj['#text'] = textParts.join(' ');
+  } else {
+    const text = node.children.filter(c => typeof c === 'string').join('');
+    if (text) obj['#text'] = text;
+  }
+
+  return obj;
+}
+
+function evalFromXml(xml: string, args: unknown[]): unknown {
+  const attrPrefix = getOpt(args, 'attributePrefix', '@');
+  const stripNs = getOptBool(args, 'stripNamespaces', true);
+  try {
+    const root = parseXml(xml);
+    if (!root) return null;
+    return xmlNodeToValue(root, attrPrefix, stripNs);
+  } catch { return null; }
+}
+
+function xmlEscape(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function valueToXmlElement(name: string, value: unknown, attrPrefix: string, indent: string): string {
+  if (isObject(value)) {
+    const obj = value as Record<string, unknown>;
+    const attrs: string[] = [];
+    const children: string[] = [];
+    let textContent = '';
+
+    for (const [key, val] of Object.entries(obj)) {
+      if (key.startsWith(attrPrefix)) {
+        const attrName = key.slice(attrPrefix.length);
+        if (attrName) attrs.push(` ${attrName}="${xmlEscape(valueToString(val))}"`);
+      } else if (key === '#text') {
+        textContent = xmlEscape(valueToString(val));
+      } else if (isArray(val)) {
+        for (const item of val as unknown[]) children.push(valueToXmlElement(key, item, attrPrefix, indent + '  '));
+      } else if (isObject(val)) {
+        children.push(valueToXmlElement(key, val, attrPrefix, indent + '  '));
+      } else {
+        children.push(`${indent}  <${key}>${xmlEscape(valueToString(val))}</${key}>`);
+      }
+    }
+
+    const attrStr = attrs.join('');
+    if (children.length === 0 && !textContent) return `${indent}<${name}${attrStr} />`;
+    if (children.length === 0) return `${indent}<${name}${attrStr}>${textContent}</${name}>`;
+    return `${indent}<${name}${attrStr}>\n${children.join('\n')}\n${indent}</${name}>`;
+  }
+
+  return `${indent}<${name}>${xmlEscape(valueToString(value))}</${name}>`;
+}
+
+function evalToXml(target: unknown, args: unknown[]): string {
+  const attrPrefix = getOpt(args, 'attributePrefix', '@');
+  const rootElement = getOpt(args, 'rootElement', '');
+  const declaration = getOptBool(args, 'declaration', true);
+
+  if (!isObject(target)) return '';
+  const obj = target as Record<string, unknown>;
+  const keys = Object.keys(obj);
+
+  let xmlBody: string;
+  if (rootElement) {
+    xmlBody = valueToXmlElement(rootElement, target, attrPrefix, '');
+  } else if (keys.length === 1 && !keys[0].startsWith(attrPrefix)) {
+    xmlBody = valueToXmlElement(keys[0], obj[keys[0]], attrPrefix, '');
+  } else {
+    xmlBody = valueToXmlElement('root', target, attrPrefix, '');
+  }
+
+  return declaration ? `<?xml version="1.0" encoding="utf-8"?>\n${xmlBody}` : xmlBody;
 }
 
 function evalFromText(text: string, args: unknown[]): string[] {

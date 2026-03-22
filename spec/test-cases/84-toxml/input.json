@@ -1,0 +1,8 @@
+{
+  "catalog": {
+    "book": [
+      { "id": "1", "title": "Elwood Guide" },
+      { "id": "2", "title": "XML Patterns" }
+    ]
+  }
+}

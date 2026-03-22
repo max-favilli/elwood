@@ -320,6 +320,8 @@ Methods are called with dot notation on values. Most also work as pipe operators
 |---|---|---|
 | `.fromCsv(options?)` | Parse CSV string → array of objects | `delimiter`, `headers`, `quote`, `skipRows`, `parseJson` |
 | `.toCsv(options?)` | Array of objects → CSV string | `delimiter`, `headers`, `alwaysQuote` |
+| `.fromXml(options?)` | Parse XML string → JSON object | `attributePrefix` (default `@`), `stripNamespaces` (default `true`) |
+| `.toXml(options?)` | JSON object → XML string | `attributePrefix`, `rootElement`, `declaration` (default `true`) |
 | `.fromText(options?)` | Split text into array of lines | `delimiter` (default `\n`) |
 | `.toText(options?)` | Join array into text | `delimiter` (default `\n`) |
 

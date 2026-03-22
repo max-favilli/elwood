@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<orders>
+  <order>
+    <id>ORD-001</id>
+    <customer>Alice</customer>
+    <item>Widget</item>
+    <quantity>3</quantity>
+  </order>
+  <order>
+    <id>ORD-002</id>
+    <customer>Bob</customer>
+    <item>Gadget</item>
+    <quantity>1</quantity>
+  </order>
+</orders>

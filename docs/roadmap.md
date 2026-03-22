@@ -245,14 +245,14 @@ return products | select(p => {
 |---|---|---|---|
 | `fromCsv(options?)` | Parse CSV string → array of objects | `delimiter`, `headers`, `quote`, `skipRows`, `parseJson` | ✅ |
 | `toCsv(options?)` | Array of objects → CSV string | `delimiter`, `headers`, `alwaysQuote` | ✅ |
-| `fromXml(options?)` | Parse XML string → JSON object | `attributePrefix` (default `@`) | |
-| `toXml(options?)` | JSON object → XML string | `rootElement`, `attributePrefix` | |
+| `fromXml(options?)` | Parse XML string → JSON object | `attributePrefix`, `stripNamespaces` | ✅ |
+| `toXml(options?)` | JSON object → XML string | `rootElement`, `attributePrefix`, `declaration` | ✅ |
 | `fromText(options?)` | Split text into lines or structured data | `delimiter` (default `\n`) | ✅ |
 | `toText(options?)` | Join array into text | `delimiter` (default `\n`) | ✅ |
 
 ### Tasks
 - [x] Built-in format functions: `fromCsv`, `toCsv`, `fromText`, `toText`
-- [ ] Built-in format functions: `fromXml`, `toXml`
+- [x] Built-in format functions: `fromXml`, `toXml`
 - [ ] CLI `--input-format` and `--output-format` flags (sugar for wrapping script in fromX/toX)
 - [x] Format converters — CSV:
   - [x] Configurable delimiter, headers, quote character
@@ -261,12 +261,12 @@ return products | select(p => {
   - [x] `parseJson: true` — auto-detect and deserialize JSON values in cells
   - [x] `alwaysQuote` — force-quote all fields in toCsv output
 - [x] Format converters — Text: line splitting/joining with configurable delimiter
-- [ ] Format converters — XML (configurable element/attribute mapping)
+- [x] Format converters — XML (attributes → `@` prefix, repeated elements → arrays, namespace stripping)
 - [ ] Format converters — XLSX (sheet selection, header row) — via separate package to keep Core lightweight
 - [x] Multi-format test inputs: test runners support `input.csv`, `input.txt`, `input.xml`
 - [x] Parser fix: `$.method()` resolves correctly when `$` is a non-object value
 - [x] `.parseJson()` general-purpose method + `fromCsv({ parseJson: true })` convenience option
-- [x] 82 conformance test cases (was 68), 111 .NET tests, 136 TS tests
+- [x] 85 conformance test cases (was 68), 114 .NET tests, 139 TS tests
 
 ---
 

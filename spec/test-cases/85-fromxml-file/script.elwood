@@ -1,0 +1,1 @@
+$.fromXml().orders.order | where o => o.quantity.toNumber() > 1 | select o => { id: o.id, customer: o.customer }

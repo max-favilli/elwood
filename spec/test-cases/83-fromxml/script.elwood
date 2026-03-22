@@ -1,0 +1,2 @@
+let catalog = $.xml.fromXml()
+return catalog.catalog.book | select b => { id: b.id, title: b.title, price: b.price.toNumber() }

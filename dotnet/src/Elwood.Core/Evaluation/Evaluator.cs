@@ -1,3 +1,4 @@
+using System.Xml.Linq;
 using Elwood.Core.Abstractions;
 using Elwood.Core.Diagnostics;
 using Elwood.Core.Syntax;
@@ -856,6 +857,8 @@ public sealed class Evaluator
             // Format I/O
             "fromCsv" => EvaluateFromCsv(target, args),
             "toCsv" => EvaluateToCsv(target, args),
+            "fromXml" => EvaluateFromXml(target, args),
+            "toXml" => EvaluateToXml(target, args),
             "fromText" => EvaluateFromText(target, args),
             "toText" => EvaluateToText(target, args),
 
@@ -1098,6 +1101,234 @@ public sealed class Evaluator
         if (alwaysQuote || value.Contains(delimiter) || value.Contains(quote) || value.Contains('\n') || value.Contains('\r'))
             return $"{quote}{value.Replace(quote.ToString(), $"{quote}{quote}")}{quote}";
         return value;
+    }
+
+    // ── XML ──
+
+    private IElwoodValue EvaluateFromXml(IElwoodValue target, List<IElwoodValue> args)
+    {
+        var xml = target.GetStringValue() ?? "";
+        var attrPrefix = "@";
+        var stripNamespaces = true;
+
+        if (args.Count > 0 && args[0].Kind == ElwoodValueKind.Object)
+        {
+            var ap = args[0].GetProperty("attributePrefix");
+            if (ap is not null) attrPrefix = ap.GetStringValue() ?? "@";
+            var sn = args[0].GetProperty("stripNamespaces");
+            if (sn is not null) stripNamespaces = IsTruthy(sn);
+        }
+
+        try
+        {
+            var doc = XDocument.Parse(xml);
+            if (doc.Root is null) return _factory.CreateNull();
+            return XmlElementToValue(doc.Root, attrPrefix, stripNamespaces);
+        }
+        catch
+        {
+            return _factory.CreateNull();
+        }
+    }
+
+    private IElwoodValue XmlElementToValue(XElement element, string attrPrefix, bool stripNs)
+    {
+        var localName = stripNs ? element.Name.LocalName : element.Name.ToString();
+        var props = new List<KeyValuePair<string, IElwoodValue>>();
+
+        // Attributes
+        foreach (var attr in element.Attributes())
+        {
+            if (attr.IsNamespaceDeclaration && stripNs) continue;
+            var name = stripNs ? attr.Name.LocalName : attr.Name.ToString();
+            props.Add(new KeyValuePair<string, IElwoodValue>(attrPrefix + name, _factory.CreateString(attr.Value)));
+        }
+
+        // Group child elements by name to detect arrays
+        var childElements = element.Elements().ToList();
+        if (childElements.Count > 0)
+        {
+            var groups = childElements.GroupBy(e => stripNs ? e.Name.LocalName : e.Name.ToString()).ToList();
+            foreach (var group in groups)
+            {
+                var items = group.ToList();
+                if (items.Count == 1)
+                {
+                    props.Add(new KeyValuePair<string, IElwoodValue>(group.Key, XmlChildToValue(items[0], attrPrefix, stripNs)));
+                }
+                else
+                {
+                    // Multiple same-named elements → array
+                    var arr = items.Select(e => XmlChildToValue(e, attrPrefix, stripNs));
+                    props.Add(new KeyValuePair<string, IElwoodValue>(group.Key, _factory.CreateArray(arr)));
+                }
+            }
+
+            // Mixed content: if there's also direct text alongside child elements
+            var textParts = element.Nodes().OfType<XText>().Select(t => t.Value.Trim()).Where(t => t.Length > 0).ToList();
+            if (textParts.Count > 0)
+                props.Add(new KeyValuePair<string, IElwoodValue>("#text", _factory.CreateString(string.Join(" ", textParts))));
+        }
+        else
+        {
+            // Leaf element: text content
+            var text = element.Value;
+            if (!string.IsNullOrEmpty(text) || props.Count > 0)
+            {
+                if (props.Count > 0)
+                {
+                    // Has attributes + text
+                    props.Add(new KeyValuePair<string, IElwoodValue>("#text", _factory.CreateString(text)));
+                }
+                else
+                {
+                    // Simple text-only element → just the string, wrapped by caller
+                    return _factory.CreateString(text);
+                }
+            }
+        }
+
+        // Wrap in root element name
+        var inner = _factory.CreateObject(props);
+        return _factory.CreateObject([new KeyValuePair<string, IElwoodValue>(localName, inner)]);
+    }
+
+    private IElwoodValue XmlChildToValue(XElement element, string attrPrefix, bool stripNs)
+    {
+        var hasAttrs = element.Attributes().Any(a => !(a.IsNamespaceDeclaration && stripNs));
+        var hasChildren = element.HasElements;
+
+        if (!hasAttrs && !hasChildren)
+        {
+            // Simple leaf → just the string value
+            return _factory.CreateString(element.Value);
+        }
+
+        // Complex element → object with attributes and children
+        var props = new List<KeyValuePair<string, IElwoodValue>>();
+
+        foreach (var attr in element.Attributes())
+        {
+            if (attr.IsNamespaceDeclaration && stripNs) continue;
+            var name = stripNs ? attr.Name.LocalName : attr.Name.ToString();
+            props.Add(new KeyValuePair<string, IElwoodValue>(attrPrefix + name, _factory.CreateString(attr.Value)));
+        }
+
+        var childElements = element.Elements().ToList();
+        if (childElements.Count > 0)
+        {
+            var groups = childElements.GroupBy(e => stripNs ? e.Name.LocalName : e.Name.ToString()).ToList();
+            foreach (var group in groups)
+            {
+                var items = group.ToList();
+                if (items.Count == 1)
+                    props.Add(new KeyValuePair<string, IElwoodValue>(group.Key, XmlChildToValue(items[0], attrPrefix, stripNs)));
+                else
+                    props.Add(new KeyValuePair<string, IElwoodValue>(group.Key,
+                        _factory.CreateArray(items.Select(e => XmlChildToValue(e, attrPrefix, stripNs)))));
+            }
+
+            var textParts = element.Nodes().OfType<XText>().Select(t => t.Value.Trim()).Where(t => t.Length > 0).ToList();
+            if (textParts.Count > 0)
+                props.Add(new KeyValuePair<string, IElwoodValue>("#text", _factory.CreateString(string.Join(" ", textParts))));
+        }
+        else if (!string.IsNullOrEmpty(element.Value))
+        {
+            props.Add(new KeyValuePair<string, IElwoodValue>("#text", _factory.CreateString(element.Value)));
+        }
+
+        return _factory.CreateObject(props);
+    }
+
+    private IElwoodValue EvaluateToXml(IElwoodValue target, List<IElwoodValue> args)
+    {
+        var attrPrefix = "@";
+        var rootElement = (string?)null;
+        var declaration = true;
+
+        if (args.Count > 0 && args[0].Kind == ElwoodValueKind.Object)
+        {
+            var ap = args[0].GetProperty("attributePrefix");
+            if (ap is not null) attrPrefix = ap.GetStringValue() ?? "@";
+            var re = args[0].GetProperty("rootElement");
+            if (re is not null) rootElement = re.GetStringValue();
+            var decl = args[0].GetProperty("declaration");
+            if (decl is not null) declaration = IsTruthy(decl);
+        }
+
+        if (target.Kind != ElwoodValueKind.Object)
+            return _factory.CreateString("");
+
+        XElement root;
+        var propNames = target.GetPropertyNames().ToList();
+
+        if (rootElement is not null)
+        {
+            root = ValueToXElement(rootElement, target, attrPrefix);
+        }
+        else if (propNames.Count == 1 && !propNames[0].StartsWith(attrPrefix))
+        {
+            // Single top-level key is the root element name
+            var child = target.GetProperty(propNames[0]);
+            root = child is not null ? ValueToXElement(propNames[0], child, attrPrefix) : new XElement(propNames[0]);
+        }
+        else
+        {
+            root = ValueToXElement("root", target, attrPrefix);
+        }
+
+        var sb = new System.Text.StringBuilder();
+        if (declaration)
+            sb.Append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+        sb.Append(root.ToString().Replace("\r\n", "\n"));
+        return _factory.CreateString(sb.ToString());
+    }
+
+    private XElement ValueToXElement(string name, IElwoodValue value, string attrPrefix)
+    {
+        var el = new XElement(name);
+
+        if (value.Kind == ElwoodValueKind.Object)
+        {
+            foreach (var prop in value.GetPropertyNames())
+            {
+                var propVal = value.GetProperty(prop);
+                if (propVal is null) continue;
+
+                if (prop.StartsWith(attrPrefix))
+                {
+                    // Attribute
+                    var attrName = prop[attrPrefix.Length..];
+                    if (attrName.Length > 0)
+                        el.SetAttributeValue(attrName, ValueToString(propVal));
+                }
+                else if (prop == "#text")
+                {
+                    el.Add(new XText(ValueToString(propVal)));
+                }
+                else if (propVal.Kind == ElwoodValueKind.Array)
+                {
+                    // Array → repeated elements
+                    foreach (var item in propVal.EnumerateArray())
+                        el.Add(ValueToXElement(prop, item, attrPrefix));
+                }
+                else if (propVal.Kind == ElwoodValueKind.Object)
+                {
+                    el.Add(ValueToXElement(prop, propVal, attrPrefix));
+                }
+                else
+                {
+                    // Scalar → child element with text
+                    el.Add(new XElement(prop, ValueToString(propVal)));
+                }
+            }
+        }
+        else
+        {
+            el.Value = ValueToString(value);
+        }
+
+        return el;
     }
 
     private IElwoodValue EvaluateFromText(IElwoodValue target, List<IElwoodValue> args)

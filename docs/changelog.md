@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-03-22 — fromXml / toXml (Phase 2)
+
+Added XML format conversion — the last built-in format I/O pair.
+
+### New features
+- `.fromXml(options?)` — parse XML string into navigable JSON structure
+  - Attributes → `@attr` properties, repeated elements → arrays, leaf elements → strings
+  - Options: `attributePrefix` (default `@`), `stripNamespaces` (default `true`)
+- `.toXml(options?)` — serialize JSON object to XML string
+  - Single top-level key becomes root element; arrays become repeated elements
+  - Options: `attributePrefix`, `rootElement`, `declaration` (default `true`)
+
+### Test cases added
+- `83-fromxml` — parse XML with repeated elements, pipe through select
+- `84-toxml` — serialize JSON with arrays to XML
+- `85-fromxml-file` — real XML file as input, filter + transform pipeline
+
+### Files modified
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — EvaluateFromXml, EvaluateToXml, XML helper methods
+- `ts/src/evaluator.ts` — parseXml (zero-dependency XML parser), evalFromXml, evalToXml, XML helpers
+- `docs/syntax-reference.md` — added fromXml/toXml
+
 ## 2026-03-22 — parseJson and CSV enhancements (Phase 2)
 
 Added `.parseJson()` method for deserializing embedded JSON strings, and enhanced `fromCsv`/`toCsv` with additional options.
