@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Elwood.Api/Elwood.Api.csproj" />
     <Project Path="src/Elwood.Cli/Elwood.Cli.csproj" />
     <Project Path="src/Elwood.Core/Elwood.Core.csproj" />
     <Project Path="src/Elwood.Json/Elwood.Json.csproj" />

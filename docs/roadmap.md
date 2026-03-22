@@ -127,12 +127,11 @@ New features follow the workflow: spec test case first → implement in .NET →
 - [x] **Spec:** [`docs/playground-spec.md`](playground-spec.md)
 
 ### API container
-- [ ] `Elwood.Api` project — minimal ASP.NET API (~50 lines): `POST /api/evaluate` with `{ script, input }` → result
-- [ ] Dockerfile (multi-stage, Alpine-based, Native AOT for small image ~20MB)
-- [ ] Publish container image to GitHub Container Registry (`ghcr.io/max-favilli/elwood-api`)
-- [ ] GitHub Actions workflow to build and push container on release tags
-- [ ] Usage: `docker run -p 8080:8080 ghcr.io/max-favilli/elwood-api`
-- [ ] Enables integration with any iPaaS (MuleSoft, SnapLogic, Boomi, SAP CPI, Logic Apps, etc.) via HTTP
+- [x] `Elwood.Api` project — minimal ASP.NET API: `POST /api/evaluate` + `/health`
+- [x] Dockerfile (multi-stage, Alpine-based)
+- [x] GitHub Actions workflow to build and push container on release tags (`.github/workflows/docker.yml`)
+- [x] Usage: `docker run -p 8080:8080 ghcr.io/max-favilli/elwood-api`
+- [x] Enables integration with any iPaaS via HTTP
 
 ### Remaining engine work
 - [ ] Identify and port any remaining common JSON transformation functions not yet covered
@@ -202,36 +201,119 @@ any format ──→ [input conversion] ──→ JSON ──→ Elwood script �
 | **XLSX** | Sheet → array of objects | Array of objects → sheet |
 | **Text** | Content as string or line-split array | Join array / render string |
 
-CLI usage:
+Two ways to use format conversion:
+
+**CLI flags** — for simple cases where the entire input is one format and the entire output is another:
 ```bash
 elwood run transform.elwood --input data.csv --input-format csv
 elwood run transform.elwood --input data.xml --output result.csv --output-format csv
 ```
 
+**In-script functions** — for full control within the script (custom options, mixed formats, converting mid-pipeline):
+```elwood
+// Parse CSV with custom delimiter
+let orders = $.rawCsv | fromCsv({ delimiter: ";", headers: true })
+
+// Transform
+let result = orders | where(.amount > 100) | select({ id: .id, total: .amount })
+
+// Output as CSV
+return result | toCsv()
+```
+
+```elwood
+// Parse XML, transform, output as JSON
+let items = $.xmlPayload | fromXml()
+return items.catalog.products | select({ sku: .@id, name: .title })
+```
+
+```elwood
+// Mix formats in one script
+let products = $.csvData | fromCsv({ headers: true })
+let categories = $.xmlCategories | fromXml()
+return products | select(p => {
+  ...p,
+  categoryName: categories.list[*] | first(c => c.@id == p.catId) | select(.name)
+})
+```
+
+### Format functions
+
+| Function | Description | Options |
+|---|---|---|
+| `fromCsv(options?)` | Parse CSV string → array of objects | `delimiter`, `headers`, `quote` |
+| `toCsv(options?)` | Array of objects → CSV string | `delimiter`, `headers`, `quote` |
+| `fromXml(options?)` | Parse XML string → JSON object | `attributePrefix` (default `@`) |
+| `toXml(options?)` | JSON object → XML string | `rootElement`, `attributePrefix` |
+| `fromText(options?)` | Split text into lines or structured data | `delimiter` (default `\n`) |
+| `toText(options?)` | Join array into text | `delimiter` (default `\n`) |
+
 ### Tasks
-- [ ] CLI `--input-format` and `--output-format` flags
-- [ ] Input format converters:
-  - [ ] CSV → JSON (configurable delimiter, headers, quoting)
-  - [ ] XML → JSON (configurable element/attribute mapping)
-  - [ ] XLSX → JSON (sheet selection, header row)
-  - [ ] Text → JSON (line splitting, raw string)
-- [ ] Output format converters:
-  - [ ] JSON → CSV
-  - [ ] JSON → XML
-  - [ ] JSON → Text
+- [ ] Built-in format functions (`fromCsv`, `toCsv`, `fromXml`, `toXml`, `fromText`, `toText`)
+- [ ] CLI `--input-format` and `--output-format` flags (sugar for wrapping script in fromX/toX)
+- [ ] Format converters:
+  - [ ] CSV (configurable delimiter, headers, quoting)
+  - [ ] XML (configurable element/attribute mapping)
+  - [ ] XLSX (sheet selection, header row) — via separate package to keep Core lightweight
+  - [ ] Text (line splitting, joining)
+
+---
+
+## Phase 2b — Performance (Compiled Mode)
+
+**Goal:** Eliminate tree-walk interpretation overhead for production workloads processing 100MB+ documents.
+
+### .NET — Expression Trees / IL emit
+- [ ] Compile Elwood AST to .NET Expression Trees → JIT-compiled delegates
+- [ ] IL emit for hot paths (frequently evaluated expressions)
+- [ ] Cache compiled expressions for reuse (same transform applied to thousands of records)
+- [ ] Benchmark suite: compare tree-walk vs compiled on 100MB documents
+- [ ] Target: near-native speed
+
+### TypeScript — code generation
+- [ ] Compile Elwood AST to generated JavaScript functions (`new Function()` / code-gen)
+- [ ] V8/SpiderMonkey JIT optimizes the generated code (inlining, hidden classes, loop unrolling)
+- [ ] Cache compiled functions for repeated execution
+- [ ] Benchmark suite: compare tree-walk vs compiled on representative workloads
+
+### Expected performance progression
+```
+Hand-written switch loop (baseline)     ██████████  reference point
+Tree-walk interpreter                   ████        ~2-5x slower
+Tree-walk + lazy evaluation             ██████      ~1.5-2x slower (less memory/GC)
+Compiled mode                           ███████████ potentially faster than baseline
+```
 
 ---
 
 ## Phase 3 — Integration Pipeline Configuration
 
-**Goal:** Use YAML to describe complete data integration pipelines — sources, transformations, and destinations — in a single document. YAML handles the **declarative orchestration** (triggers, connections, destinations); Elwood scripts (`.elwood` files) handle the **transformation logic**.
+**Goal:** Use YAML to describe complete data integration pipelines — sources, transformations, and destinations — in a single document. YAML handles **declarative orchestration** (triggers, connections, destinations); Elwood scripts (`.elwood` files) handle **transformation logic**.
 
-This separation keeps each concern in the right language: YAML for infrastructure config (short values, no deep nesting), Elwood for data transformation (full tooling support).
+### Design: hybrid approach
 
-### Design
-One `.elwood.yaml` file per integration pipeline, referencing `.elwood` scripts for transformation:
+Real-world integration configs embed complex expressions in many YAML values — multi-line filter chains, conditional logic, method chains, etc. This creates the same two-syntax-in-one-file problem we rejected for transformation maps.
+
+**Solution:** YAML for structure, external `.elwood` scripts for any non-trivial expression.
+
+**Inline in YAML (OK):**
+- Static values: `trigger: http`, `concurrency: 100`, `container: output`
+- Simple paths: `$.request.season`, `$.code`
+- Short interpolation: `` `{$.request.season}-images` ``
+
+**External .elwood file (required for):**
+- Anything with pipes (`|`)
+- Conditionals (`if`/`then`/`else`)
+- Method chains (`.toUpper().split()...`)
+- Filters (`where`, `in`)
+- Multi-line logic
+
+**Threshold rule:** simple `$.field` or short `` `{$.field}` `` stays inline. Anything with `|` or `.method()` chains goes in an external `.elwood` file.
+
+### Example
 
 ```yaml
+# pipeline.elwood.yaml
 version: 2
 
 sources:
@@ -239,83 +321,71 @@ sources:
     trigger: http
     endpoint: /api/data/{category}
     contentType: json
-    map: source-request.elwood             # ← Elwood script, not inline YAML
+    map: request-map.elwood                # ← external script
 
   - name: file-source
     trigger: pull
     from:
       fileShare:
         connectionString: ${FILE_SHARE_CONN}
-        path: /{$.request.category}/data
-    map: source-transform.elwood           # ← Elwood script
+        path: /{$.request.category}/data   # ← simple interpolation, OK inline
+    map: source-transform.elwood           # ← external script
 
 join:
   path: $
   keys: []
 
 outputs:
-  - name: publish-results
-    path: $.results[*]
-    outputId: `{$.code}_{$.fileName}`
-    contentType: $.contentType
-    concurrency: 100
-    map:
-      code: $.code
-      fileName: $.fileName
+  - name: publish-to-fileshare
+    path: filter-results.elwood            # ← complex filter → external script
+    outputId: output-id.elwood             # ← method chains → external script
+    contentType: $.contentType             # ← simple path, OK inline
+    concurrency: 100                       # ← static value
+    map: output-map.elwood                 # ← external script (reusable!)
     destinations:
-      blobStorage:
-        - connectionString: ${CDN_CONN}
-          container: output
-          filename: /{$.code}/{$.fileName}
+      fileShare:
+        - connectionString: ${FS_CONN}
+          filename: output-filename.elwood # ← complex interpolation → external
+
+  - name: publish-to-sftp
+    path: filter-results.elwood            # ← same filter, reused!
+    outputId: output-id.elwood             # ← same ID logic, reused!
+    contentType: $.contentType
+    concurrency: 50
+    map: output-map.elwood                 # ← same map, reused!
+    destinations:
+      sftp:
+        - connectionString: ${SFTP_CONN}
+          filename: output-filename.elwood # ← same filename logic, reused!
 ```
+
+External scripts are **reusable** — the same `output-id.elwood` and `filter-results.elwood` are shared across multiple outputs. They're also **independently testable** via the CLI.
+
+### What stays in YAML vs external scripts
+
+| In YAML (inline) | Inline Elwood (simple) | External .elwood (complex) |
+|---|---|---|
+| `trigger: http` | `path: $.results[*]` | `path: filter-active.elwood` |
+| `contentType: json` | `contentType: $.contentType` | `outputId: generate-id.elwood` |
+| `concurrency: 100` | `` endpoint: /api/{$.category} `` | `map: transform.elwood` |
+| `container: output` | `filename: /{$.code}.json` | `filename: build-path.elwood` |
+
+Rule: **static config → plain YAML. Simple data reference → inline `$.field`. Anything with logic → external `.elwood` file.**
 
 ### Tasks
 - [ ] Define integration YAML schema (sources, outputs, destinations, join, notifications)
-- [ ] Elwood expression evaluation for dynamic values (`outputId`, paths, filenames, etc.)
-- [ ] Inline maps (YAML tree) and external map file references
-- [ ] Source format conversion (xml/csv/xlsx → JSON)
+- [ ] YAML parser that resolves `.elwood` file references and evaluates them
+- [ ] Inline Elwood expression evaluation for simple dynamic values
 - [ ] Validation tooling: `elwood validate pipeline.elwood.yaml`
-
-### What stays declarative vs Elwood expressions
-| Declarative (plain YAML) | Elwood expressions (dynamic) |
-|---|---|
-| `trigger: http` | `` outputId: `{$.code}_data` `` |
-| `contentType: json` | `path: $.results[*]` |
-| `concurrency: 100` | `filename: /{$.code}/{$.fileName}` |
-| `container: output` | Any `map:` section |
-
-Rule: **if a value depends on data at runtime, it's an Elwood expression. If it's static infrastructure config, it's plain YAML.**
+- [ ] Pipeline step graph builder (ordering, fan-out, merge)
+- [ ] CLI Executor (sequential, in-process)
+- [ ] IExecutor, ISource, IDestination interfaces for pluggable executors
 
 ---
 
-## Phase 4 — Advanced
+## Phase 4 — Developer Tooling & Ecosystem
 
-**Goal:** Performance optimization, developer tooling, and ecosystem.
-
-### Compiled mode
-
-The tree-walk interpreter with lazy evaluation is production-viable for large documents. Compiled mode eliminates interpretation overhead entirely for maximum performance.
-
-#### .NET — Expression Trees / IL emit
-- [ ] Compile Elwood AST to .NET Expression Trees → JIT-compiled delegates
-- [ ] IL emit for hot paths (frequently evaluated expressions)
-- [ ] Cache compiled expressions for reuse (same transform applied to thousands of records)
-- [ ] Benchmark suite: compare tree-walk vs compiled on 100MB documents
-- [ ] Target: near-native speed
-
-#### TypeScript — code generation
-- [ ] Compile Elwood AST to generated JavaScript functions (`new Function()` / code-gen)
-- [ ] V8/SpiderMonkey JIT optimizes the generated code (inlining, hidden classes, loop unrolling)
-- [ ] Cache compiled functions for repeated execution
-- [ ] Benchmark suite: compare tree-walk vs compiled on representative workloads
-
-#### Expected performance progression
-```
-Hand-written switch loop (baseline)     ██████████  reference point
-Tree-walk interpreter                   ████        ~2-5x slower
-Tree-walk + lazy evaluation             ██████      ~1.5-2x slower (less memory/GC)
-Compiled mode                           ███████████ potentially faster than baseline
-```
+**Goal:** IDE support, developer tools, and community ecosystem.
 
 ### IDE support
 - [ ] VS Code extension: syntax highlighting for `.elwood` and `.elwood.yaml` files
@@ -339,20 +409,22 @@ Compiled mode                           ███████████ potent
 ## Execution Order
 
 ```
-Phase 1  ✅  Build the .NET engine
+Phase 1   ✅  Build the .NET engine
    ↓
-Phase 1b      Lazy evaluation (.NET) → repo restructure → TypeScript port
+Phase 1b  ✅  Lazy evaluation (.NET) → repo restructure → TypeScript port
    ↓
 Phase 1c      Publish everything (GitHub, NuGet, npm, CI, Playground, API container)
    ↓
-Phase 2       YAML transformation documents + multi-format I/O
+Phase 2       Multi-format I/O (fromCsv, toXml, etc.) + script-based maps
    ↓
-Phase 3       Integration pipeline configuration (Elwood Runtime)
+Phase 2b      Performance — compiled mode (Expression Trees / code generation)
    ↓
-Phase 4       Compiled mode, IDE, Playground multi-format expansion
+Phase 3       Integration pipeline configuration (Elwood Runtime + Executors)
+   ↓
+Phase 4       IDE support, developer tools, ecosystem
 ```
 
-Phase 4 spans both .NET and TypeScript implementations.
+Phases 2b and 4 span both .NET and TypeScript implementations.
 
 ## Adoption Strategy
 
@@ -361,9 +433,10 @@ Elwood is designed for **incremental adoption**:
 1. **Phase 1** (done): Standalone transformation engine. Use via CLI or .NET library.
 2. **Phase 1b** (done): Cross-platform reach. Use in browsers, Node.js, edge runtimes.
 3. **Phase 1c**: Open-source launch. Available via NuGet, npm, browser playground, and self-hosted API container.
-4. **Phase 2**: Declarative YAML maps. Describe transformations as documents, not code.
-5. **Phase 3**: Full pipeline configuration. One YAML file describes sources, transforms, and destinations.
-6. **Phase 4**: Performance and tooling make Elwood production-ready for the most demanding workloads.
+4. **Phase 2**: Multi-format I/O. Transform between JSON, CSV, XML, and Text using in-script functions.
+5. **Phase 2b**: Compiled mode. Near-native performance for production workloads.
+6. **Phase 3**: Integration pipelines. YAML defines sources, transforms, and destinations. Pluggable executors run them.
+7. **Phase 4**: IDE support, developer tools, and community ecosystem.
 
 Each phase is independently useful. No phase requires adopting a later one.
 

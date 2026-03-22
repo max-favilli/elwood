@@ -92,6 +92,21 @@ elwood
 echo '{"x": 42}' | elwood eval "$.x * 2"
 ```
 
+### API (Docker)
+
+```bash
+docker run -p 8080:8080 ghcr.io/max-favilli/elwood-api
+```
+
+```bash
+curl -X POST http://localhost:8080/api/evaluate \
+  -H "Content-Type: application/json" \
+  -d '{"script": "$.users[*] | where u => u.active | select u => u.name", "input": {"users": [{"name": "Alice", "active": true}]}}'
+# → {"success":true,"value":["Alice"],"diagnostics":[]}
+```
+
+Integrates with any iPaaS, workflow tool, or language via HTTP.
+
 ---
 
 ## Language Features
