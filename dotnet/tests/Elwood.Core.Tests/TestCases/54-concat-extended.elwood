@@ -1,5 +1,0 @@
-{
-  default: $.names[*] | concat,
-  comma: $.names[*].concat(", "),
-  merged: $.names[*].concat("|", $.extras[*], [1, 2])
-}

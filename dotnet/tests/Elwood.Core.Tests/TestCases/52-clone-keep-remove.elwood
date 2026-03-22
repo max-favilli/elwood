@@ -1,5 +1,0 @@
-{
-  cloned: $[0].clone(),
-  kept: $[*] | skip 1 | take 2 | select o => o.keep("id", "email"),
-  removed: $[*] | skip 1 | take 2 | select o => o.remove("profile", "email")
-}

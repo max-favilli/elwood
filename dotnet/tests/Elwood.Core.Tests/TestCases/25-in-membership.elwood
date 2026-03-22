@@ -1,8 +1,0 @@
-let allowed = $.allowedSkus[*]
-let extras = $.extraCodes[*]
-
-return {
-  fromArray: $.products[*] | where p => p.sku.in(allowed) | select p => p.name,
-  fromLiteral: $.products[*] | where p => p.sku.in(["ZWSP", "PR00", "ZRRP"]) | select p => p.name,
-  fromMixed: $.products[*] | where p => p.sku.in(allowed, ["XTRA"], "NONE") | select p => p.name
-}

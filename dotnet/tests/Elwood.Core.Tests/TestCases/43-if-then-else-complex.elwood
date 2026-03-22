@@ -1,7 +1,0 @@
-let deadline = $.E1EDP37.deadline
-
-if $.E1EDP20.isNullOrEmpty() then 0
-else $.E1EDP20[*]
-  | where e => e.EDATU < deadline
-  | select e => e.WMENG.toNumber()
-  | sum

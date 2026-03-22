@@ -1,8 +1,0 @@
-{
-  upper: $.name.toUpper(),
-  upperFirst: $.name.toUpper(1),
-  lower: $.name.toUpper().toLower(1),
-  trimHash: $.padded.trim("#"),
-  trimLeadingZeros: $.code.trimStart("0"),
-  trimTrailingDots: $.file.trimEnd(".")
-}

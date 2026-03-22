@@ -1,4 +1,0 @@
-[
-  { "id": "A1", "sku": "JW-001", "qty": 2, "price": 199.99, "warehouse": "EU-Central", "currency": "EUR", "total": 399.98, "processed": true },
-  { "id": "A2", "sku": "JW-002", "qty": 1, "price": 89.00, "warehouse": "EU-Central", "currency": "EUR", "total": 89, "processed": true }
-]

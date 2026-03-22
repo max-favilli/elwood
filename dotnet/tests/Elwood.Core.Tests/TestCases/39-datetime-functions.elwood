@@ -1,6 +1,0 @@
-{
-  formatted: $.event.timestamp.dateFormat("yyyy MMMM dd HH:mm:ss"),
-  dateOnly: $.event.timestamp.dateFormat("yyyy-MM-dd"),
-  unix: $.event.timestamp.toUnixTimeSeconds(),
-  plusOneHour: $.event.timestamp.add("01:00:00").dateFormat("HH:mm:ss")
-}

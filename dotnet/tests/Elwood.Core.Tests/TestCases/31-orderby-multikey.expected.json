@@ -1,8 +1,0 @@
-[
-  { "name": "Charlie", "dept": "Engineering", "salary": 110000 },
-  { "name": "Alice", "dept": "Engineering", "salary": 95000 },
-  { "name": "Eve", "dept": "Engineering", "salary": 95000 },
-  { "name": "Diana", "dept": "Marketing", "salary": 85000 },
-  { "name": "Bob", "dept": "Marketing", "salary": 72000 },
-  { "name": "Frank", "dept": "Marketing", "salary": 72000 }
-]

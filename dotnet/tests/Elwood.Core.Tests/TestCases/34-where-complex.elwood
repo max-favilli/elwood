@@ -1,5 +1,0 @@
-let allowed = $.allowedCities[*]
-
-$.people[*]
-| where p => p.name.length() > 5 && p.age == 18 && p.city.in(allowed)
-| select p => { name: p.name, city: p.city }

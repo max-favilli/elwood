@@ -1,5 +1,0 @@
-$[*] | select f => {
-  file: f.FileName,
-  direct: f.LastWriteTimeUtc.toUnixTimeSeconds(),
-  viaArg: f.toUnixTimeSeconds(f.LastWriteTimeUtc)
-}

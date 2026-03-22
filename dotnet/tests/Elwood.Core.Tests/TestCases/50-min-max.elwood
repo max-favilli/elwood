@@ -1,7 +1,0 @@
-{
-  coldest: $.temperatures[*] | min,
-  warmest: $.temperatures[*] | max,
-  cheapest: $.orders[*] | select o => o.total | min,
-  mostExpensive: $.orders[*] | select o => o.total | max,
-  spread: ($.temperatures[*] | max) - ($.temperatures[*] | min)
-}

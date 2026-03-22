@@ -1,8 +1,0 @@
-{
-  prefix: $.sku.left(2),
-  first10: $.sku.left(10),
-  suffix: $.sku.right(2),
-  last5: $.sku.right(5),
-  firstChar: $.code.left(),
-  lastChar: $.code.right()
-}

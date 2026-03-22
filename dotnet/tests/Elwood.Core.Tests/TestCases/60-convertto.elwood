@@ -1,7 +1,0 @@
-{
-  toInt: $.qty.convertTo("Int32"),
-  toDouble: $.qty.convertTo("Double"),
-  toBoolFromFlag: $.flag.convertTo("Boolean"),
-  toBoolFromString: $.active.convertTo("Boolean"),
-  boolArray: $.values[*] | select v => v.convertTo("Boolean")
-}

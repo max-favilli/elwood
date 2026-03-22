@@ -1,1 +1,0 @@
-"query { products(first: " + $.pageSize.toString() + ") { edges { node { id } } } }"

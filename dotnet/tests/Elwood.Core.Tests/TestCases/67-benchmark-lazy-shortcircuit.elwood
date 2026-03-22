@@ -1,1 +1,0 @@
-$.items[*] | where i => i.active | select i => i.name | take 10

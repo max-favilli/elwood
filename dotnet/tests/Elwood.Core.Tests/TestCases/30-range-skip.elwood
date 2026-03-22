@@ -1,1 +1,0 @@
-range(1, $.items_count) | skip 1
