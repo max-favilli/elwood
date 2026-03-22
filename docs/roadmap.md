@@ -95,37 +95,36 @@ New features follow the workflow: spec test case first → implement in .NET →
 
 **Depends on:** Phase 1b complete (repo is in final structure, both implementations pass conformance suite).
 
-### Open source
-- [ ] Publish to GitHub as open-source project
-- [x] Add README.md with quick start, examples, and badges (covering both .NET and TS usage)
-- [x] Choose and add LICENSE file (MIT)
+### Open source ✅
+- [x] Published to GitHub: https://github.com/max-favilli/elwood
+- [x] README.md with quick start, examples, CLI download links, playground screenshot
+- [x] LICENSE file (MIT)
 
-### CI/CD
+### CI/CD ✅
 - [x] GitHub Actions CI: build + test on push (both .NET and TS) — `.github/workflows/ci.yml`
 - [x] Conformance gate: both implementations must pass all `spec/test-cases/`
-- [x] Automated release workflow (`.github/workflows/release.yml`) — triggered on version tags, publishes NuGet + npm + native binaries
+- [x] Automated release workflow (`.github/workflows/release.yml`) — triggered on version tags
+- [x] v0.1.0 released with native binaries for Windows, macOS, Linux
 
-### .NET distribution
+### .NET distribution ✅
 - [x] NuGet package metadata (Elwood.Core, Elwood.Json — multi-target net8.0;net10.0)
 - [x] `global.json` pinning SDK version
-- [x] `dotnet tool` configured (`Elwood.Cli` — `dotnet tool install --global Elwood.Cli` → `elwood` command)
-- [x] Native AOT configured (enabled via `-p:PublishAot=true`, release workflow builds for linux-x64, macos-x64, win-x64)
-- [ ] Publish NuGet packages to nuget.org (needs `NUGET_API_KEY` secret)
-- [ ] Publish native binaries to GitHub Release
+- [x] `dotnet tool` configured (`dotnet tool install --global Elwood.Cli` → `elwood` command)
+- [x] Native AOT binaries on GitHub Release (linux-x64, macos-x64, win-x64)
+- [ ] Publish NuGet packages to nuget.org (needs `NUGET_API_KEY` secret — account unlock pending)
 
-### TypeScript distribution
-- [x] npm package configured (`@elwood-lang/core`, ESM output, TypeScript declarations)
+### TypeScript distribution ✅
+- [x] npm package published: `@elwood-lang/core` on npmjs.com
 - [x] Browser compatibility documented (crypto limitation in known-issues.md)
-- [ ] Publish to npm
 
-### Playground
-- [ ] Browser-based interactive playground (powered by `@elwood-lang/core` TypeScript package)
-- [ ] Monaco Editor with Elwood syntax highlighting, autocomplete, hover docs
-- [ ] Example gallery generated from `spec/test-cases/` (benchmarks shown as CLI-only)
-- [ ] File loading (local file picker + drag-and-drop, stays in browser)
-- [ ] Shareable links (small payloads in URL, large payloads via GitHub Gist)
-- [ ] GitHub Pages deployment via GitHub Actions
-- [ ] **Detailed spec:** See [`docs/playground-spec.md`](playground-spec.md)
+### Playground ✅
+- [x] Browser-based interactive playground: https://max-favilli.github.io/elwood/
+- [x] Monaco Editor with Elwood syntax highlighting, autocomplete, snippet placeholders
+- [x] Example gallery (68 examples from `spec/test-cases/`) with search, categories, rendered markdown explanations
+- [x] File loading (local file picker + drag-and-drop, stays in browser)
+- [x] Shareable links via lz-string URL compression
+- [x] GitHub Pages deployment via GitHub Actions (`.github/workflows/deploy-playground.yml`)
+- [x] **Spec:** [`docs/playground-spec.md`](playground-spec.md)
 
 ### API container
 - [ ] `Elwood.Api` project — minimal ASP.NET API (~50 lines): `POST /api/evaluate` with `{ script, input }` → result
