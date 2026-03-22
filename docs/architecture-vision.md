@@ -6,9 +6,14 @@ Elwood is not a single tool — it's a layered ecosystem where each layer is ind
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  Elwood Runtime                                 │  Phase 3
-│  Executes integration pipelines defined in YAML │
-│  (sources → transform → destinations)           │
+│  Executors (separate packages)                  │  Infrastructure-specific
+│  Azure (ASB + Functions)                        │
+│  AWS (SQS + Lambda) | K8s (Jobs)                │
+├─────────────────────────────────────────────────┤
+│  Elwood Runtime + CLI Executor                  │  Phase 3
+│  Pipeline YAML → execution plan                 │
+│  IExecutor, ISource, IDestination interfaces    │
+│  Split/fan-out/merge orchestration              │
 ├─────────────────────────────────────────────────┤
 │  Elwood YAML                                    │  Phase 2
 │  Declarative transformation documents           │
@@ -201,21 +206,196 @@ The difference is really about **what happens with the output**: does the caller
 
 ---
 
+## Orchestration Model — Sync vs Async
+
+### The fundamental problem
+
+Synchronous pipelines are simple: trigger → fetch → transform → deliver → done. Everything happens in sequence within a single process.
+
+Asynchronous pipelines are hard because of **fan-out**: one input becomes many parallel items, each processed concurrently, then results are aggregated back. This is the **Splitter → Parallel Processing → Aggregator** pattern.
+
+```
+TRIGGER → FETCH SOURCE → SPLIT (array) → FAN-OUT → PROCESS EACH → AGGREGATE → DELIVER
+                              │                                        │
+                         $.orders[*]                            merge results
+                         N items                                back into one
+                              │                                  document
+                              ↓
+                    ┌─── item 0 ──→ process ──→ result 0 ──┐
+                    ├─── item 1 ──→ process ──→ result 1 ──┤
+                    ├─── item 2 ──→ process ──→ result 2 ──┤──→ AGGREGATE
+                    └─── item N ──→ process ──→ result N ──┘
+```
+
+Fan-out can repeat at multiple stages: sources fan out, then outputs fan out again.
+
+### Industry approaches
+
+Research across MuleSoft, Apache Camel, AWS Step Functions, Azure Durable Functions, Temporal, n8n, Prefect, and Dagster reveals two fundamental camps:
+
+| Approach | How it works | Examples |
+|---|---|---|
+| **Pipeline as data** | YAML/JSON/XML describes the pipeline. An engine interprets and executes it. | Step Functions, MuleSoft, n8n |
+| **Pipeline as code** | Code IS the pipeline. A framework adds durability via replay. | Temporal, Durable Functions, Prefect |
+
+Elwood is in the **"pipeline as data"** camp. The YAML describes WHAT should happen. The execution infrastructure is someone else's concern.
+
+### Key design insight from MuleSoft
+
+MuleSoft keeps two languages strictly separate:
+- **DataWeave** — transformation DSL (analogous to Elwood expressions)
+- **XML flows** — orchestration topology (what connects to what, fan-out, routing)
+
+DataWeave doesn't know about queues, parallelism, or retries. It just transforms data. The flow XML handles orchestration.
+
+**Elwood should follow this pattern.** Elwood expressions handle transformation. The pipeline YAML handles orchestration topology. They are separate concerns.
+
+### How Elwood YAML describes orchestration
+
+The YAML defines the **pipeline topology** — steps, splits, merges, and delivery. It does NOT define the infrastructure (queues, functions, containers):
+
+```yaml
+version: 2
+
+pipeline:
+  - name: fetch-orders
+    source:
+      type: http
+      method: GET
+      url: `https://api.example.com/orders?date={$.triggerDate}`
+      headers:
+        Authorization: `Bearer {$.token}`
+    transform: fetch-orders.elwood.yaml
+
+  - name: enrich-each-order
+    input: $.orders[*]                    # SPLIT: fan-out over this array
+    concurrency: 50                       # hint to executor, not infrastructure
+    source:
+      type: http
+      method: GET
+      url: `https://api.example.com/details/{$.orderId}`
+    transform:
+      enrichedOrder: |
+        { ...$.order, details: $.response.body, etag: $.response.headers.ETag }
+    merge: $.orders[{index}]              # AGGREGATE: merge back by index
+
+  - name: upload-results
+    input: $.orders[*]                    # SPLIT again for outputs
+    concurrency: 100
+    destination:
+      type: blob
+      connectionString: ${BLOB_CONN}
+      container: processed
+      path: `/{$.orderId}.json`
+    transform:
+      content: $.enrichedOrder
+```
+
+### What the YAML defines vs what it doesn't
+
+| Concern | In the YAML? | Notes |
+|---|---|---|
+| What sources to call | Yes | URLs, methods, headers |
+| What transformation to apply | Yes | Elwood expressions / YAML maps |
+| Where to split (fan-out) | Yes | `input: $.orders[*]` |
+| How to merge results back | Yes | `merge: $.orders[{index}]` |
+| Where to deliver output | Yes | Destination config |
+| Concurrency hint | Yes | `concurrency: 50` |
+| What queue/bus to use | No | Infrastructure concern |
+| What compute to use | No | Infrastructure concern (Functions, Lambda, K8s) |
+| How to retry on failure | Basic | Simple policy in YAML, advanced in executor config |
+| What monitoring to use | No | Infrastructure concern |
+
+The YAML is a **portable pipeline definition**. It describes the data flow and transformation, not the deployment topology.
+
+### Executors — the execution layer
+
+Different **executors** run the same pipeline YAML on different infrastructure:
+
+```
+Same pipeline.elwood.yaml
+         │
+    ┌────┴─────────────────────────────────────────┐
+    │              │              │                 │
+  CLI Executor   Azure Executor  AWS Executor    K8s Executor
+  (sequential)   (ASB + Func)   (SQS + Lambda)  (Jobs)
+  (ships with    (separate      (separate        (separate
+   Elwood)        package)       package)         package)
+```
+
+**CLI Executor** (ships with Elwood):
+- Runs everything sequentially, in-process
+- Fan-out items processed one at a time in a loop
+- No queues, no parallelism
+- Perfect for development, testing, and small workloads
+
+**Azure Executor** (separate package):
+- Uses Azure Service Bus for fan-out messaging
+- Azure Functions process each item concurrently
+- Blob Storage for intermediate state
+- This is what would replace Eagle's async processing
+
+**AWS Executor** (separate package):
+- Uses SQS for fan-out, Lambda for processing, S3 for state
+- Or: Step Functions Map state for managed orchestration
+
+**K8s Executor** (separate package):
+- Kubernetes Jobs for fan-out processing
+- ConfigMaps or PVCs for state
+
+Elwood ships the Runtime library + CLI Executor. Infrastructure-specific executors are separate packages — built by the Elwood maintainer, or by the community.
+
+### Updated architecture diagram
+
+```
+┌─────────────────────────────────────────────────┐
+│  Executors (separate packages)                  │
+│  Azure (ASB + Functions)                        │
+│  AWS (SQS + Lambda)                             │
+│  K8s (Jobs)                                     │
+├─────────────────────────────────────────────────┤
+│  Elwood Runtime + CLI Executor                  │  Phase 3
+│  Parses pipeline YAML                           │
+│  Builds execution plan (steps, splits, merges)  │
+│  Drives execution via IExecutor interface       │
+├─────────────────────────────────────────────────┤
+│  Elwood YAML                                    │  Phase 2
+│  Declarative transformation documents           │
+│  any format in → Elwood transform → any format  │
+├─────────────────────────────────────────────────┤
+│  Elwood Core + CLI                              │  Phase 1
+│  DSL engine (parse, evaluate expressions)       │
+│  .NET library, TypeScript library, CLI tool     │
+└─────────────────────────────────────────────────┘
+```
+
+### Phase 3 implementation order
+
+1. **Pipeline YAML spec** — define the schema for steps, sources, destinations, transforms
+2. **Runtime library** — parse pipeline YAML, build step graph, define IExecutor/ISource/IDestination interfaces
+3. **CLI Executor** — sequential execution, no fan-out (single source → transform → single destination)
+4. **Fan-out/merge in CLI** — sequential fan-out (process items in a loop), proves the split/merge YAML semantics
+5. **Azure Executor** — async fan-out via ASB + Functions (the Eagle replacement, likely a private package)
+
+Each step is independently useful. Step 3 alone is enough for simple sync pipelines.
+
+---
+
 ## Open Questions
 
 These are design questions that need to be answered before or during Phase 3 implementation. They don't block earlier phases.
 
-### 1. How much orchestration logic belongs in the YAML?
+### 1. How much orchestration logic belongs in the YAML? — PARTIALLY RESOLVED
 
-The YAML defines WHAT to do. But how much of the HOW should it also define?
+The YAML defines the **pipeline topology**: steps, sources, destinations, splits, merges, and transformations. It also includes **hints** like `concurrency: 50` that executors can use but aren't required to honor.
 
-**Minimal approach:** YAML only describes sources, transforms, destinations. Error handling, retries, notifications are host-level configuration.
+The YAML does NOT define infrastructure (queues, functions, containers) or advanced operational concerns (circuit breakers, dead-letter queues, monitoring). Those are executor configuration.
 
-**Maximal approach:** YAML includes retry policies, notification rules, timeout config, error handlers — everything needed to run the pipeline is in one file.
+**What belongs in YAML:** step ordering, split points (`input: $.items[*]`), merge strategy, source/destination config, transformation references, basic retry policy.
 
-**Trade-off:** Maximal is self-contained (one file = one pipeline, fully described) but couples the definition to a specific execution environment. Minimal keeps the YAML portable but requires host-level configuration everywhere it's deployed.
+**What belongs in executor config:** queue names, connection strings, compute targets, advanced error handling, monitoring integration.
 
-**Likely answer:** Start minimal. Add orchestration features to the YAML only when there's a clear pattern that repeats across multiple hosts.
+**Remaining question:** Where exactly is the line for retry config? Basic retry (maxAttempts, backoff) feels portable enough for the YAML. Dead-letter queues and circuit breakers are infrastructure-specific.
 
 ### 2. Multi-source joins — how to handle partial state?
 
@@ -272,18 +452,30 @@ This means the Runtime always receives and produces JSON — it doesn't need to 
 
 See `docs/roadmap.md` Phase 2 for format conversion details.
 
-### 6. What's the MVP for Phase 3?
+### 6. What's the MVP for Phase 3? — RESOLVED
 
-A minimal viable runtime that proves the architecture without solving every problem:
+Phase 3 is implemented incrementally:
 
-- [ ] Single source → transform → single destination
-- [ ] CLI hosting only (`elwood run pipeline.yaml`)
+**Step 1 — Pipeline YAML spec + Runtime + CLI Executor (MVP):**
+- [ ] Pipeline YAML schema (steps, sources, destinations, transforms)
+- [ ] Runtime library: parse YAML, build step graph, define IExecutor/ISource/IDestination
+- [ ] CLI Executor: sequential, in-process, no fan-out
 - [ ] HTTP and file source adapters
 - [ ] File and blob destination adapters
-- [ ] No retries, no joins, no state management
-- [ ] No async execution (sync/CLI only)
+- [ ] `elwood run pipeline.yaml --input data.json`
 
-This is enough to validate the YAML format and adapter architecture. Everything else is iterative enhancement.
+**Step 2 — Fan-out/merge in CLI:**
+- [ ] `input: $.items[*]` split semantics
+- [ ] `merge: $.items[{index}]` aggregation
+- [ ] Sequential fan-out (loop, no parallelism) — proves the YAML semantics
+
+**Step 3 — Azure Executor (private package, Eagle replacement):**
+- [ ] ASB for fan-out messaging
+- [ ] Azure Functions for concurrent processing
+- [ ] Blob Storage for intermediate state
+- [ ] This is infrastructure-specific and likely stays private
+
+Each step is independently useful.
 
 ---
 
@@ -299,12 +491,14 @@ This is enough to validate the YAML format and adapter architecture. Everything 
 
 The Runtime layer is primarily a server-side concern. A TypeScript Runtime for Node.js is possible but not a priority — the .NET implementation serves the server-side use case, and the TS implementation serves the browser/edge use case where full pipeline execution isn't needed.
 
-### The Playground (Phase 4)
+### The Playground (Phase 1c)
 
 The TypeScript Core library enables a browser-based playground where users can:
-- Write Elwood expressions
-- Paste or upload JSON input
+- Write Elwood expressions with syntax highlighting and autocomplete
+- Paste, upload, or drag-and-drop JSON input
 - See transformed output in real-time
-- Share expressions via URL
+- Share playgrounds via URL or GitHub Gist
 
 This only needs Layer 1 (Core) in the browser. Layers 2 and 3 are server-side.
+
+See `docs/playground-spec.md` for the full specification.

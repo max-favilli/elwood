@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{elwood} Playground</title>
+<style>
+  :root {
+    --bg-primary: #1e1e1e;
+    --bg-secondary: #252526;
+    --bg-tertiary: #2d2d30;
+    --bg-hover: #3e3e42;
+    --bg-active: #094771;
+    --border: #3e3e42;
+    --text-primary: #cccccc;
+    --text-secondary: #969696;
+    --text-muted: #5a5a5a;
+    --accent: #007acc;
+    --error-bg: #3a1d1d;
+    --error-text: #f48771;
+    --error-border: #f44747;
+    --success: #89d185;
+    --warning-bg: #3a2f1d;
+    --warning-text: #e0a050;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* ===== TOOLBAR ===== */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    height: 40px;
+    padding: 0 12px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .toolbar-logo {
+    font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: 0.5px;
+    margin-right: 12px;
+  }
+
+  .toolbar-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
+    height: 26px;
+    font-family: inherit;
+    white-space: nowrap;
+  }
+  .toolbar-btn:hover { background: var(--bg-hover); border-color: var(--text-secondary); }
+  .toolbar-btn:active { background: var(--bg-active); }
+  .toolbar-btn.primary { background: #0e639c; border-color: #1177bb; }
+  .toolbar-btn.primary:hover { background: #1177bb; }
+
+  .toolbar-sep { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }
+  .toolbar-spacer { flex: 1; }
+  .toolbar-link {
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-decoration: none;
+    padding: 4px 6px;
+  }
+  .toolbar-link:hover { color: var(--text-primary); }
+
+  /* ===== MAIN LAYOUT ===== */
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ===== EXPRESSION PANEL (top, compact) ===== */
+  .expression-area {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    min-height: 60px;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 12px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+    gap: 8px;
+  }
+  .panel-header-spacer { flex: 1; }
+
+  .panel-action {
+    padding: 2px 6px;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 11px;
+    cursor: pointer;
+    border-radius: 2px;
+    font-family: inherit;
+  }
+  .panel-action:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+  .editor {
+    width: 100%;
+    height: 100%;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: none;
+    padding: 8px 12px 8px 48px;
+    font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    resize: none;
+    outline: none;
+    tab-size: 2;
+    user-select: text;
+  }
+  .editor:focus { background: #1f1f1f; }
+  .editor.readonly { cursor: default; }
+
+  .expression-editor-wrap {
+    overflow: hidden;
+  }
+
+  /* ===== RESIZE HANDLE ===== */
+  .resize-handle {
+    height: 5px;
+    background: var(--border);
+    cursor: ns-resize;
+    flex-shrink: 0;
+    position: relative;
+  }
+  .resize-handle:hover,
+  .resize-handle.active {
+    background: var(--accent);
+  }
+  .resize-handle::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 30px;
+    height: 2px;
+    background: var(--text-muted);
+    border-radius: 1px;
+  }
+  .resize-handle:hover::after { background: #ffffff; }
+
+  /* ===== DATA PANELS (bottom, side by side) ===== */
+  .data-area {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    min-height: 100px;
+  }
+
+  .data-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 200px;
+  }
+  .data-panel + .data-panel {
+    border-left: 1px solid var(--border);
+  }
+
+  .panel-body {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* ===== ERROR PANEL ===== */
+  .error-panel {
+    display: none;
+    padding: 10px 14px;
+    background: var(--error-bg);
+    border-top: 2px solid var(--error-border);
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-size: 13px;
+    color: var(--error-text);
+    line-height: 1.5;
+    flex-shrink: 0;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  .error-panel.visible { display: block; }
+  .error-location { color: #d19a66; }
+  .error-suggestion { display: block; margin-top: 4px; color: #98c379; }
+
+  /* ===== STATUS BAR ===== */
+  .statusbar {
+    display: flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 12px;
+    background: #007acc;
+    color: #ffffff;
+    font-size: 11px;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  .statusbar-item { display: flex; align-items: center; gap: 4px; }
+  .statusbar-spacer { flex: 1; }
+
+  /* ===== DROP ZONE ===== */
+  .drop-active { outline: 2px dashed var(--accent); outline-offset: -3px; }
+
+  /* ===== GALLERY SIDEBAR ===== */
+  .gallery-overlay {
+    display: none; position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.4); z-index: 100;
+  }
+  .gallery-overlay.visible { display: block; }
+
+  .gallery {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: 320px; background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    z-index: 101; display: none; flex-direction: column;
+    box-shadow: 4px 0 16px rgba(0,0,0,0.3);
+  }
+  .gallery.visible { display: flex; }
+
+  .gallery-header {
+    display: flex; align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px; font-weight: 600;
+  }
+  .gallery-header-spacer { flex: 1; }
+  .gallery-close {
+    background: none; border: none;
+    color: var(--text-secondary); font-size: 18px;
+    cursor: pointer; padding: 0 4px;
+  }
+  .gallery-close:hover { color: var(--text-primary); }
+
+  .gallery-search {
+    margin: 8px 10px; padding: 5px 8px;
+    background: var(--bg-primary); border: 1px solid var(--border);
+    border-radius: 3px; color: var(--text-primary);
+    font-size: 13px; font-family: inherit; outline: none;
+  }
+  .gallery-search:focus { border-color: var(--accent); }
+
+  .gallery-list { flex: 1; overflow-y: auto; padding: 2px 0; }
+
+  .gallery-category {
+    padding: 8px 14px 3px;
+    font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.8px; color: var(--text-secondary);
+    font-weight: 600;
+  }
+  .gallery-item {
+    display: flex; align-items: center;
+    padding: 5px 14px 5px 22px;
+    font-size: 13px; cursor: pointer; color: var(--text-primary);
+  }
+  .gallery-item:hover { background: var(--bg-hover); }
+  .gallery-item.active { background: var(--bg-active); }
+  .gallery-item-badge {
+    margin-left: auto; padding: 1px 5px;
+    border-radius: 2px; font-size: 10px;
+  }
+  .gallery-item-badge.cli-only {
+    background: var(--warning-bg); color: var(--warning-text);
+  }
+
+  /* ===== SHARE MODAL ===== */
+  .modal-overlay {
+    display: none; position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5); z-index: 200;
+    justify-content: center; align-items: center;
+  }
+  .modal-overlay.visible { display: flex; }
+
+  .modal {
+    background: var(--bg-secondary); border: 1px solid var(--border);
+    border-radius: 6px; padding: 20px; width: 460px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+  .modal h3 { font-size: 14px; margin-bottom: 10px; }
+  .modal-url { display: flex; gap: 8px; margin-bottom: 10px; }
+  .modal-url input {
+    flex: 1; padding: 5px 8px;
+    background: var(--bg-primary); border: 1px solid var(--border);
+    border-radius: 3px; color: var(--text-primary);
+    font-family: 'JetBrains Mono', Consolas, monospace; font-size: 12px;
+  }
+  .modal-hint { font-size: 12px; color: var(--text-secondary); margin-bottom: 14px; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+  /* ===== DEMO CONTROLS ===== */
+  .demo-controls {
+    position: fixed;
+    bottom: 28px;
+    right: 12px;
+    z-index: 50;
+    display: flex;
+    gap: 4px;
+  }
+  .demo-btn {
+    padding: 3px 8px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-secondary);
+    font-size: 10px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .demo-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+</style>
+</head>
+<body>
+
+<!-- TOOLBAR -->
+<div class="toolbar">
+  <span class="toolbar-logo">{elwood}</span>
+
+  <button class="toolbar-btn" onclick="toggleGallery()">
+    <span style="font-size:14px">&#9776;</span> Examples
+  </button>
+
+  <button class="toolbar-btn primary" onclick="mockRun()">
+    &#9654; Run
+  </button>
+
+  <div class="toolbar-sep"></div>
+
+  <button class="toolbar-btn" onclick="toggleShareModal()">&#128279; Share</button>
+  <button class="toolbar-btn" onclick="copyOutput()">&#128203; Copy</button>
+
+  <div class="toolbar-spacer"></div>
+
+  <a class="toolbar-link" href="#">Docs</a>
+  <a class="toolbar-link" href="#">GitHub</a>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- EXPRESSION (top, compact) -->
+  <div class="expression-area" id="expression-area">
+    <div class="panel-header">
+      <span>Expression</span>
+      <div class="panel-header-spacer"></div>
+      <button class="panel-action" onclick="clearExpr()">Clear</button>
+    </div>
+    <div class="expression-editor-wrap" style="height: 88px;">
+      <textarea class="editor" id="expr-editor" spellcheck="false"
+        placeholder="// Type an Elwood expression..."
+>$.users | where(u => u.age > 25 and u.active) | select(u => { name: u.name, email: u.email.toLower(), tag: `user-{u.name.toLower()}` })</textarea>
+    </div>
+  </div>
+
+  <!-- RESIZE HANDLE -->
+  <div class="resize-handle" id="resize-handle"></div>
+
+  <!-- INPUT + OUTPUT (bottom, side by side) -->
+  <div class="data-area">
+
+    <!-- INPUT -->
+    <div class="data-panel">
+      <div class="panel-header">
+        <span>Input JSON</span>
+        <div class="panel-header-spacer"></div>
+        <button class="panel-action" onclick="document.getElementById('file-pick').click()">Load File</button>
+        <button class="panel-action" onclick="formatJSON()">Format</button>
+        <input type="file" id="file-pick" accept=".json" style="display:none" onchange="loadFile(event)">
+      </div>
+      <div class="panel-body" id="input-drop"
+           ondragover="event.preventDefault();this.classList.add('drop-active')"
+           ondragleave="this.classList.remove('drop-active')"
+           ondrop="event.preventDefault();this.classList.remove('drop-active');handleDrop(event)">
+        <textarea class="editor" id="input-editor" spellcheck="false"
+>{
+  "users": [
+    { "name": "Alice",  "age": 30, "active": true,  "email": "Alice@Example.com" },
+    { "name": "Bob",    "age": 22, "active": false, "email": "Bob@Example.com" },
+    { "name": "Carol",  "age": 35, "active": true,  "email": "Carol@Example.com" },
+    { "name": "Dave",   "age": 28, "active": true,  "email": "Dave@Example.com" },
+    { "name": "Eve",    "age": 19, "active": false, "email": "Eve@Example.com" }
+  ]
+}</textarea>
+      </div>
+    </div>
+
+    <!-- OUTPUT -->
+    <div class="data-panel">
+      <div class="panel-header">
+        <span>Output</span>
+        <div class="panel-header-spacer"></div>
+        <span id="eval-status" style="color: var(--success);">&#10003; 1.8ms</span>
+      </div>
+      <div class="panel-body">
+        <textarea class="editor readonly" id="output-editor" readonly spellcheck="false"
+>[
+  {
+    "name": "Alice",
+    "email": "alice@example.com",
+    "tag": "user-alice"
+  },
+  {
+    "name": "Carol",
+    "email": "carol@example.com",
+    "tag": "user-carol"
+  },
+  {
+    "name": "Dave",
+    "email": "dave@example.com",
+    "tag": "user-dave"
+  }
+]</textarea>
+      </div>
+
+      <div class="error-panel" id="error-panel">
+        <span class="error-location">Line 1, Col 38:</span>
+        Unknown function 'wher'.
+        <span class="error-suggestion">Did you mean 'where'?</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- STATUS BAR -->
+<div class="statusbar">
+  <div class="statusbar-item"><span>&#10003;</span> Ready</div>
+  <div class="statusbar-item">Input: 412 B</div>
+  <div class="statusbar-item">Output: 298 B</div>
+  <div class="statusbar-spacer"></div>
+  <div class="statusbar-item">v0.1.0</div>
+</div>
+
+<!-- DEMO CONTROLS (not part of real UI) -->
+<div class="demo-controls">
+  <button class="demo-btn" onclick="toggleError()">Toggle Error</button>
+  <button class="demo-btn" onclick="loadScript()">Multi-line Script</button>
+  <button class="demo-btn" onclick="loadOneliner()">One-liner</button>
+</div>
+
+<!-- GALLERY -->
+<div class="gallery-overlay" id="gallery-overlay" onclick="toggleGallery()"></div>
+<div class="gallery" id="gallery">
+  <div class="gallery-header">
+    Examples
+    <div class="gallery-header-spacer"></div>
+    <button class="gallery-close" onclick="toggleGallery()">&times;</button>
+  </div>
+  <input type="text" class="gallery-search" placeholder="Search examples..." oninput="filterGallery(this.value)">
+  <div class="gallery-list" id="gallery-list">
+    <div class="gallery-category">Basics</div>
+    <div class="gallery-item" onclick="loadEx('$.name','{ &quot;name&quot;: &quot;Alice&quot; }')">Property Access</div>
+    <div class="gallery-item" onclick="loadEx('$.x + $.y * 2','{ &quot;x&quot;: 10, &quot;y&quot;: 5 }')">Arithmetic</div>
+    <div class="gallery-item" onclick="loadEx('if $.score > 90 then &quot;A&quot; else if $.score > 80 then &quot;B&quot; else &quot;C&quot;','{ &quot;score&quot;: 85 }')">If / Then / Else</div>
+    <div class="gallery-item" onclick="loadEx('`Hello {$.name}, you are {$.age} years old`','{ &quot;name&quot;: &quot;Alice&quot;, &quot;age&quot;: 30 }')">String Interpolation</div>
+
+    <div class="gallery-category">Filtering & Selection</div>
+    <div class="gallery-item active" onclick="loadEx('$.users | where(u => u.age > 25)','{ &quot;users&quot;: [{ &quot;name&quot;: &quot;Alice&quot;, &quot;age&quot;: 30 }, { &quot;name&quot;: &quot;Bob&quot;, &quot;age&quot;: 22 }] }')">Where Filter</div>
+    <div class="gallery-item" onclick="loadEx('$.users | select(u => { name: u.name, upper: u.name.toUpper() })','{ &quot;users&quot;: [{ &quot;name&quot;: &quot;Alice&quot;, &quot;age&quot;: 30 }, { &quot;name&quot;: &quot;Bob&quot;, &quot;age&quot;: 22 }] }')">Select / Projection</div>
+    <div class="gallery-item">SelectMany (Flatten)</div>
+    <div class="gallery-item">Complex Where</div>
+
+    <div class="gallery-category">Aggregation</div>
+    <div class="gallery-item">Count</div>
+    <div class="gallery-item">Sum</div>
+    <div class="gallery-item">Min / Max</div>
+    <div class="gallery-item">GroupBy + Count</div>
+    <div class="gallery-item">Distinct</div>
+
+    <div class="gallery-category">Ordering & Pagination</div>
+    <div class="gallery-item">OrderBy</div>
+    <div class="gallery-item">OrderBy (Multi-Key)</div>
+    <div class="gallery-item">Take / Skip</div>
+    <div class="gallery-item">Batch</div>
+
+    <div class="gallery-category">String Operations</div>
+    <div class="gallery-item">String Methods</div>
+    <div class="gallery-item">Case & Trim</div>
+    <div class="gallery-item">Regex</div>
+    <div class="gallery-item">URL Encode / Decode</div>
+
+    <div class="gallery-category">Data Transformation</div>
+    <div class="gallery-item">Join</div>
+    <div class="gallery-item">Join Modes (Left/Right/Full)</div>
+    <div class="gallery-item">Reduce</div>
+    <div class="gallery-item">Spread Operator</div>
+    <div class="gallery-item">Clone / Keep / Remove</div>
+
+    <div class="gallery-category">Control Flow</div>
+    <div class="gallery-item">Pattern Match</div>
+    <div class="gallery-item">Let Bindings (Scripts)</div>
+    <div class="gallery-item">Memo Functions</div>
+
+    <div class="gallery-category">DateTime & Crypto</div>
+    <div class="gallery-item">Date Format</div>
+    <div class="gallery-item">Date Arithmetic</div>
+    <div class="gallery-item">Hash (MD5/SHA)</div>
+
+    <div class="gallery-category">Benchmarks (CLI Only)</div>
+    <div class="gallery-item" onclick="loadBenchmark()">
+      Large Array Pipeline (100K)
+      <span class="gallery-item-badge cli-only">CLI</span>
+    </div>
+    <div class="gallery-item" onclick="loadBenchmark()">
+      Short-Circuit take(1)
+      <span class="gallery-item-badge cli-only">CLI</span>
+    </div>
+  </div>
+</div>
+
+<!-- SHARE MODAL -->
+<div class="modal-overlay" id="share-modal" onclick="if(event.target===this)toggleShareModal()">
+  <div class="modal">
+    <h3>Share Playground</h3>
+    <div class="modal-url">
+      <input type="text" value="https://youruser.github.io/elwood/#data=eJxLzs8ry0xR..." readonly onclick="this.select()">
+      <button class="toolbar-btn primary" onclick="alert('Copied!')">Copy</button>
+    </div>
+    <div class="modal-hint">
+      This link contains your expression and input data. Anyone with the link can open it in the playground.
+    </div>
+    <div class="modal-actions">
+      <button class="toolbar-btn" onclick="toggleShareModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ===== RESIZE HANDLE =====
+  const handle = document.getElementById('resize-handle');
+  const exprArea = document.getElementById('expression-area');
+  const editorWrap = exprArea.querySelector('.expression-editor-wrap');
+  let startY, startH;
+
+  handle.addEventListener('mousedown', (e) => {
+    startY = e.clientY;
+    startH = editorWrap.offsetHeight;
+    handle.classList.add('active');
+    document.addEventListener('mousemove', onDrag);
+    document.addEventListener('mouseup', onDragEnd);
+    e.preventDefault();
+  });
+
+  function onDrag(e) {
+    const delta = e.clientY - startY;
+    const newH = Math.max(36, Math.min(window.innerHeight * 0.6, startH + delta));
+    editorWrap.style.height = newH + 'px';
+  }
+
+  function onDragEnd() {
+    handle.classList.remove('active');
+    document.removeEventListener('mousemove', onDrag);
+    document.removeEventListener('mouseup', onDragEnd);
+  }
+
+  // ===== GALLERY =====
+  function toggleGallery() {
+    document.getElementById('gallery').classList.toggle('visible');
+    document.getElementById('gallery-overlay').classList.toggle('visible');
+  }
+
+  function filterGallery(q) {
+    const items = document.querySelectorAll('.gallery-item, .gallery-category');
+    q = q.toLowerCase();
+    if (!q) { items.forEach(el => el.style.display = ''); return; }
+    let cat = null, catVis = false;
+    items.forEach(el => {
+      if (el.classList.contains('gallery-category')) {
+        if (cat && !catVis) cat.style.display = 'none';
+        cat = el; catVis = false; el.style.display = '';
+      } else {
+        const m = el.textContent.toLowerCase().includes(q);
+        el.style.display = m ? '' : 'none';
+        if (m) catVis = true;
+      }
+    });
+    if (cat && !catVis) cat.style.display = 'none';
+  }
+
+  function loadEx(expr, input) {
+    document.getElementById('expr-editor').value = expr;
+    document.getElementById('input-editor').value = JSON.stringify(JSON.parse(input), null, 2);
+    editorWrap.style.height = '56px';
+    toggleGallery();
+  }
+
+  function loadBenchmark() {
+    document.getElementById('expr-editor').value =
+      '// This benchmark processes 100K+ items.\n// Too large for the browser.\n//\n// Try it with the Elwood CLI:\n//   elwood run spec/test-cases/66-benchmark-large-array/script.elwood \\\n//     --input spec/test-cases/66-benchmark-large-array/input.json';
+    document.getElementById('input-editor').value = '{}';
+    document.getElementById('output-editor').value = '';
+    document.getElementById('eval-status').innerHTML = '';
+    editorWrap.style.height = '120px';
+    toggleGallery();
+  }
+
+  // ===== DEMO HELPERS =====
+  function toggleError() {
+    document.getElementById('error-panel').classList.toggle('visible');
+  }
+
+  function loadScript() {
+    document.getElementById('expr-editor').value =
+      'let filtered = $.users | where(u => u.age > 25 and u.active)\n' +
+      'let result = filtered | select(u => {\n' +
+      '  name: u.name,\n' +
+      '  email: u.email.toLower(),\n' +
+      '  tag: `user-{u.name.toLower()}`\n' +
+      '})\n' +
+      'return { users: result, count: filtered | count }';
+    editorWrap.style.height = '170px';
+    document.getElementById('output-editor').value =
+      '{\n  "users": [\n    {\n      "name": "Alice",\n      "email": "alice@example.com",\n      "tag": "user-alice"\n    },\n    {\n      "name": "Carol",\n      "email": "carol@example.com",\n      "tag": "user-carol"\n    },\n    {\n      "name": "Dave",\n      "email": "dave@example.com",\n      "tag": "user-dave"\n    }\n  ],\n  "count": 3\n}';
+  }
+
+  function loadOneliner() {
+    document.getElementById('expr-editor').value =
+      '$.users | where(u => u.age > 25 and u.active) | select(.name)';
+    editorWrap.style.height = '56px';
+    document.getElementById('output-editor').value =
+      '[\n  "Alice",\n  "Carol",\n  "Dave"\n]';
+  }
+
+  // ===== SHARE =====
+  function toggleShareModal() {
+    document.getElementById('share-modal').classList.toggle('visible');
+  }
+
+  // ===== MISC =====
+  function mockRun() {
+    alert('Evaluates expression using @elwood-lang/core in the browser.');
+  }
+  function copyOutput() {
+    navigator.clipboard.writeText(document.getElementById('output-editor').value);
+  }
+  function clearExpr() {
+    document.getElementById('expr-editor').value = '';
+    document.getElementById('expr-editor').focus();
+  }
+  function formatJSON() {
+    const ed = document.getElementById('input-editor');
+    try { ed.value = JSON.stringify(JSON.parse(ed.value), null, 2); } catch(e) { alert('Invalid JSON'); }
+  }
+  function loadFile(e) {
+    const f = e.target.files[0]; if (!f) return;
+    if (f.size > 5*1024*1024) alert('Large file (' + (f.size/1024/1024).toFixed(1) + ' MB). Use the Elwood CLI for best performance.');
+    const r = new FileReader();
+    r.onload = () => { document.getElementById('input-editor').value = r.result; };
+    r.readAsText(f);
+  }
+  function handleDrop(e) {
+    const f = e.dataTransfer.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = () => { document.getElementById('input-editor').value = r.result; };
+    r.readAsText(f);
+  }
+</script>
+
+</body>
+</html>

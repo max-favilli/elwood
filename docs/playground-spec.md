@@ -46,91 +46,125 @@ Everything runs in the browser. No data leaves the user's machine (except when e
 
 ## UI Layout
 
-Dark theme, VS Code-inspired developer tool aesthetic. Three-panel layout.
+Dark theme, VS Code-inspired developer tool aesthetic. Expression on top (compact), input and output side by side below.
 
-### Toolbar (top)
+**Visual mockup:** `playground/mockup-v2.html` — open in a browser to see the exact layout with interactive resize handle and demo buttons.
+
+### Overall structure
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│ {elwood}   [Examples]  [▶ Run]  |  [Share]  [Copy Output]   Docs  GitHub │
-└────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│ {elwood}  [Examples]  [▶ Run]  |  [Share]  [Copy]    Docs  GitHub │
+├─────────────────────────────────────────────────────────────────┤
+│ Expression                                          [Clear]  ↕ │
+│ ┌─────────────────────────────────────────────────────────────┐ │
+│ │ $.users | where(u => u.age > 25) | select(.name)            │ │
+│ └─────────────────────────────────────────────────────────────┘ │
+│ ═══════════════════ drag to resize ═══════════════════════════  │
+├──────────────────────────────┬──────────────────────────────────┤
+│ Input JSON                   │ Output                          │
+│ ┌──────────────────────────┐ │ ┌────────────────────────────┐  │
+│ │ {                        │ │ │ [                          │  │
+│ │   "users": [             │ │ │   "Alice",                 │  │
+│ │     { "name": "Alice",   │ │ │   "Carol",                 │  │
+│ │       "age": 30 },       │ │ │   "Dave"                   │  │
+│ │     ...                  │ │ │ ]                          │  │
+│ │   ]                      │ │ │                            │  │
+│ │ }                        │ │ │                            │  │
+│ │                          │ │ │              ✓ 1.8ms       │  │
+│ │ [Load File] [Format]     │ │ │                            │  │
+│ └──────────────────────────┘ │ └────────────────────────────┘  │
+│                              │ ┌────────────────────────────┐  │
+│                              │ │ Error: Line 1, Col 38:     │  │
+│                              │ │ Unknown function 'wher'.   │  │
+│                              │ │ Did you mean 'where'?      │  │
+│                              │ └────────────────────────────┘  │
+├──────────────────────────────┴──────────────────────────────────┤
+│ ✓ Ready   Input: 412 B   Output: 298 B               v0.1.0   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Why this layout
+
+Elwood expressions are typically 1-5 lines. Multi-line scripts with `let`/`return` are 5-20 lines. Input/output JSON can be hundreds of lines. Giving the expression panel half the vertical space (as in a three-column layout) wastes space for 90% of use cases.
+
+This layout:
+- Expression is **compact at top**, defaulting to ~2-3 lines height
+- **Draggable resize handle** lets users expand the expression panel for longer scripts
+- Input and output get **maximum vertical space** for scrolling through large JSON
+- Side-by-side input/output reads naturally: "this JSON → becomes → this JSON"
+- The flow reads top-to-bottom: **transform → data**
+
+### Toolbar
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ {elwood}  [≡ Examples]  [▶ Run]  |  [🔗 Share]  [📋 Copy]   Docs  GitHub │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 - **`{elwood}`** — logo, all black, monospace (JetBrains Mono / Cascadia Code / Fira Code / Consolas)
-- **Examples** — opens the example gallery sidebar
-- **Run** — primary button, evaluates the expression (also auto-evaluates on keystroke with debounce)
-- **Share** — generates a shareable link (modal with URL)
-- **Copy Output** — copies the output JSON to clipboard
-- **Docs** / **GitHub** — links (right-aligned)
+- **Examples** — opens the example gallery sidebar (slides in from left)
+- **Run** — primary button (blue), evaluates the expression. Also auto-evaluates on keystroke with debounce.
+- **Share** — generates a shareable link (opens modal)
+- **Copy** — copies the output JSON to clipboard
+- **Docs** / **GitHub** — links, right-aligned
 
-### Main panels
+### Expression panel (top, full width)
 
-```
-┌────────────────────────────┬───────────────────────────────────────┐
-│  Expression                │  Output                              │
-│  ┌──────────────────────┐  │  ┌─────────────────────────────────┐ │
-│  │ Monaco Editor        │  │  │ Monaco Editor (read-only)       │ │
-│  │ Elwood language mode │  │  │ JSON syntax highlighting        │ │
-│  │ syntax highlighting  │  │  │                                 │ │
-│  │ autocomplete         │  │  │ Result updates live as you type │ │
-│  │ hover docs           │  │  │                                 │ │
-│  └──────────────────────┘  │  └─────────────────────────────────┘ │
-│ ─ ─ ─ resize handle ─ ─ ─ │                                      │
-│  Input JSON                │  ┌─────────────────────────────────┐ │
-│  ┌──────────────────────┐  │  │ Error panel (when applicable)   │ │
-│  │ Monaco Editor        │  │  │ Line 3, Col 12: Unknown         │ │
-│  │ JSON mode            │  │  │ function 'wher'. Did you mean   │ │
-│  │                      │  │  │ 'where'?                        │ │
-│  │ [Load File] [Format] │  │  └─────────────────────────────────┘ │
-│  └──────────────────────┘  │                                      │
-└────────────────────────────┴───────────────────────────────────────┘
-```
-
-### Panel details
-
-**Expression panel (top-left):**
-- Monaco Editor with custom Elwood language definition (see below)
-- Syntax highlighting for keywords, operators, strings, pipes, lambdas
-- Autocomplete for all built-in functions and keywords
-- Hover documentation for functions (signature + description)
+- Monaco Editor with custom Elwood language definition (syntax highlighting, autocomplete, hover docs)
 - Supports both single expressions and multi-line scripts (`let` / `return`)
-- Line numbers, bracket matching, error squiggles
+- **Default height: ~3 lines** (88px) — compact for one-liners
+- **Resizable:** draggable handle below the panel. Users drag down for multi-line scripts.
+- Auto-expand hint: if expression contains `let` or `return`, consider auto-expanding to fit content
 - "Clear" button in panel header
+- Line numbers, bracket matching, error squiggles
 
-**Input panel (bottom-left):**
+### Resize handle
+
+- Horizontal bar between expression and data panels
+- Draggable (cursor: `ns-resize`)
+- Visual indicator: subtle line that highlights blue on hover
+- Minimum expression height: ~36px (1 line)
+- Maximum expression height: ~60% of viewport
+
+### Input panel (bottom-left)
+
 - Monaco Editor in JSON mode
-- "Load File" button — opens native file picker, reads via FileReader API (stays local)
+- "Load File" button — opens native file picker (`.json`), reads via FileReader API (stays local)
 - "Format" button — pretty-prints the JSON
-- Drag-and-drop support — drop a `.json` file onto the panel
+- Drag-and-drop support — drop a `.json` file onto the panel, visual feedback with dashed blue border
 - Default content: `{}` (empty object)
-- Warning banner if loaded file > 5MB: "Large file. For best performance with large data, use the Elwood CLI."
-- Vertical resize handle between expression and input panels
+- Warning banner if loaded file > 5MB: "Large file. Use the Elwood CLI for best performance."
 
-**Output panel (right):**
+### Output panel (bottom-right)
+
 - Monaco Editor in JSON mode, read-only
 - Pretty-printed JSON result
 - Updates live as user types (debounced, ~300ms after last keystroke)
-- "Run" button in toolbar for manual evaluation
+- Evaluation time shown in panel header (e.g., "✓ 1.8ms")
 
-**Error panel (bottom-right, conditional):**
-- Appears below the output when evaluation fails
+### Error panel (below output, conditional)
+
+- Appears below the output panel when evaluation fails
 - Shows Elwood's error messages with line/column
 - "Did you mean?" suggestions displayed prominently
-- Styled with red/orange accent border so errors are immediately visible
-- Disappears when expression is fixed
+- Styled with red/orange accent border (`border-top: 2px solid #f44747`, background `#3a1d1d`)
+- Disappears when expression is fixed and evaluation succeeds
+- Max height ~120px with scroll for long errors
 
 ### Status bar (bottom)
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│ ✓ Evaluated in 1.8ms    Input: 412 B    Output: 298 B     v0.1.0 │
+│ ✓ Ready    Input: 412 B    Output: 298 B                  v0.1.0 │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
-- Evaluation time in milliseconds
-- Input/output size (bytes/KB/MB)
-- Success/error status indicator
-- Elwood version
+- Blue background (#007acc), white text
+- Status indicator (checkmark or error)
+- Input/output sizes
+- Elwood version (right-aligned)
 
 ---
 
@@ -138,27 +172,25 @@ Dark theme, VS Code-inspired developer tool aesthetic. Three-panel layout.
 
 ```
 <App>
-  <Toolbar logo="..." onExamples onRun onShare onCopy />
-  <MainLayout>
-    <LeftPanels>
-      <ExpressionPanel>
-        <PanelHeader title="Expression" actions={[Clear]} />
-        <MonacoEditor language="elwood" />
-      </ExpressionPanel>
-      <ResizeHandle />
+  <Toolbar logo onExamples onRun onShare onCopy />
+  <main>
+    <ExpressionPanel>
+      <PanelHeader title="Expression" actions={[Clear]} />
+      <MonacoEditor language="elwood" />
+    </ExpressionPanel>
+    <ResizeHandle />
+    <DataPanels>                    {/* flex row, side by side */}
       <InputPanel>
         <PanelHeader title="Input JSON" actions={[LoadFile, Format]} />
         <MonacoEditor language="json" />
       </InputPanel>
-    </LeftPanels>
-    <RightPanel>
       <OutputPanel>
         <PanelHeader title="Output" evalTime="1.8ms" />
         <MonacoEditor language="json" readOnly />
+        <ErrorPanel error={error} />   {/* conditional, below output */}
       </OutputPanel>
-      <ErrorPanel error={error} />   {/* conditional */}
-    </RightPanel>
-  </MainLayout>
+    </DataPanels>
+  </main>
   <StatusBar status evalTime inputSize outputSize version />
   <GallerySidebar open={...} examples={...} onSelect />
   <ShareModal open={...} url={...} />
