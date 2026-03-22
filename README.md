@@ -19,6 +19,8 @@ Available as a **.NET library** (NuGet) and a **TypeScript/JavaScript package** 
 
 **[Try it in the Playground →](https://max-favilli.github.io/elwood/)**
 
+[![Elwood Playground](docs/playground-screenshot.png)](https://max-favilli.github.io/elwood/)
+
 ---
 
 ## Quick Start
