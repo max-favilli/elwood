@@ -112,6 +112,7 @@ $.items[*] | where x => x.price > 10 | select x => x.name | distinct | take 5
 | `groupBy` | Group by key → `{ key, items }` |
 | `distinct` | Remove duplicates |
 | `take` / `skip` | Slice the array |
+| `takeWhile` | Take items while predicate is true |
 | `batch` | Chunk into groups of N |
 | `join` | SQL-style join (inner/left/right/full) |
 | `concat` | Join array into string |
@@ -147,6 +148,13 @@ $.status | match
 ```
 let lookup = memo id => $.categories[*] | first c => c.id == id
 $.items[*] | select i => { name: i.name, category: lookup(i.catId).name }
+```
+
+### Iterate (Lazy Sequences)
+```
+iterate(1, x => x * 2) | take 5                    // [1, 2, 4, 8, 16]
+iterate({a:0, b:1}, s => {a:s.b, b:s.a+s.b})       // Fibonacci
+  | take 8 | select s => s.a                        // [0, 1, 1, 2, 3, 5, 8, 13]
 ```
 
 ### Spread Operator & Computed Keys
