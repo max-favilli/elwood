@@ -650,6 +650,12 @@ function callBuiltin(name: string, target: unknown, args: unknown[], _scope?: Sc
     case 'range': return Array.from({ length: Number(args[1]) }, (_, i) => i + Number(args[0]));
     case 'newGuid': case 'newguid': return crypto.randomUUID();
 
+    // Format I/O
+    case 'fromCsv': return evalFromCsv(str(), args);
+    case 'toCsv': return evalToCsv(target, args);
+    case 'fromText': return evalFromText(str(), args);
+    case 'toText': return evalToText(target, args);
+
     // Crypto
     case 'hash': return evalHash(str(), args);
     case 'rsaSign': return evalRsaSign(target, args);
@@ -866,4 +872,126 @@ function evalRsaSign(target: unknown, args: unknown[]): string {
   // Legacy compatibility: reverse the signature bytes
   const reversed = Buffer.from(signature).reverse();
   return reversed.toString('base64');
+}
+
+// ── Format I/O ──
+
+function getOpt(args: unknown[], key: string, defaultVal: string): string {
+  if (args.length > 0 && isObject(args[0])) {
+    const v = (args[0] as any)[key];
+    if (v !== undefined && v !== null) return String(v);
+  }
+  return defaultVal;
+}
+
+function getOptBool(args: unknown[], key: string, defaultVal: boolean): boolean {
+  if (args.length > 0 && isObject(args[0])) {
+    const v = (args[0] as any)[key];
+    if (v !== undefined && v !== null) return isTruthy(v);
+  }
+  return defaultVal;
+}
+
+function evalFromCsv(csv: string, args: unknown[]): unknown {
+  const delimiter = getOpt(args, 'delimiter', ',');
+  const hasHeaders = getOptBool(args, 'headers', true);
+  const quote = getOpt(args, 'quote', '"').charAt(0);
+
+  const lines = parseCsvLines(csv, delimiter.charAt(0), quote);
+  if (lines.length === 0) return [];
+
+  if (hasHeaders && lines.length >= 1) {
+    const headers = lines[0];
+    return lines.slice(1).map(row => {
+      const obj: Record<string, unknown> = {};
+      headers.forEach((h, j) => { obj[h] = j < row.length ? row[j] : ''; });
+      return obj;
+    });
+  }
+  return lines;
+}
+
+function parseCsvLines(csv: string, delimiter: string, quote: string): string[][] {
+  const lines: string[][] = [];
+  let fields: string[] = [];
+  let field = '';
+  let inQuotes = false;
+  let i = 0;
+
+  while (i < csv.length) {
+    const c = csv[i];
+    if (inQuotes) {
+      if (c === quote && i + 1 < csv.length && csv[i + 1] === quote) {
+        field += quote; i += 2;
+      } else if (c === quote) {
+        inQuotes = false; i++;
+      } else {
+        field += c; i++;
+      }
+    } else if (c === quote) {
+      inQuotes = true; i++;
+    } else if (c === delimiter) {
+      fields.push(field); field = ''; i++;
+    } else if (c === '\n' || (c === '\r' && i + 1 < csv.length && csv[i + 1] === '\n')) {
+      fields.push(field); field = '';
+      if (fields.some(f => f.length > 0) || fields.length > 1) lines.push(fields);
+      fields = [];
+      i += c === '\r' ? 2 : 1;
+    } else {
+      field += c; i++;
+    }
+  }
+
+  fields.push(field);
+  if (fields.some(f => f.length > 0) || fields.length > 1) lines.push(fields);
+  return lines;
+}
+
+function csvEscape(value: string, delimiter: string, quote: string): string {
+  if (value.includes(delimiter) || value.includes(quote) || value.includes('\n') || value.includes('\r'))
+    return `${quote}${value.replace(new RegExp(escapeRegex(quote), 'g'), quote + quote)}${quote}`;
+  return value;
+}
+
+function evalToCsv(target: unknown, args: unknown[]): string {
+  const delimiter = getOpt(args, 'delimiter', ',');
+  const includeHeaders = getOptBool(args, 'headers', true);
+  const quote = getOpt(args, 'quote', '"').charAt(0);
+  const items = toArray(target);
+  if (items.length === 0) return '';
+
+  const allKeys: string[] = [];
+  for (const item of items) {
+    if (isObject(item)) {
+      for (const key of Object.keys(item)) {
+        if (!allKeys.includes(key)) allKeys.push(key);
+      }
+    }
+  }
+
+  const rows: string[] = [];
+  if (includeHeaders && allKeys.length > 0) {
+    rows.push(allKeys.map(k => csvEscape(k, delimiter, quote)).join(delimiter));
+  }
+
+  for (const item of items) {
+    if (isObject(item)) {
+      rows.push(allKeys.map(k => csvEscape(valueToString((item as any)[k] ?? ''), delimiter, quote)).join(delimiter));
+    } else if (isArray(item)) {
+      rows.push(item.map(v => csvEscape(valueToString(v), delimiter, quote)).join(delimiter));
+    }
+  }
+
+  return rows.join('\n');
+}
+
+function evalFromText(text: string, args: unknown[]): string[] {
+  const delimiter = getOpt(args, 'delimiter', '\n');
+  return text.split(delimiter).map(l => l.replace(/\r$/, ''));
+}
+
+function evalToText(target: unknown, args: unknown[]): string {
+  const delimiter = getOpt(args, 'delimiter', '\n');
+  if (isArray(target)) return target.map(valueToString).join(delimiter);
+  return valueToString(target);
 }

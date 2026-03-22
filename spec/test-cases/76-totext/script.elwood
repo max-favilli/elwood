@@ -1,0 +1,1 @@
+($.items[*] | select i => `{i.id}: {i.name}`).toText()

@@ -313,6 +313,15 @@ Methods are called with dot notation on values. Most also work as pipe operators
 | `iterate(seed, fn)` | Generate lazy sequence: `[seed, fn(seed), fn(fn(seed)), ...]` — must use with `take`/`takeWhile` |
 | `boolean(value)` | Coerce to boolean |
 
+### Format I/O
+
+| Function | Description | Options |
+|---|---|---|
+| `.fromCsv(options?)` | Parse CSV string → array of objects | `delimiter`, `headers`, `quote` |
+| `.toCsv(options?)` | Array of objects → CSV string | `delimiter`, `headers` |
+| `.fromText(options?)` | Split text into array of lines | `delimiter` (default `\n`) |
+| `.toText(options?)` | Join array into text | `delimiter` (default `\n`) |
+
 ### Hashing & Crypto
 
 | Method | Description |

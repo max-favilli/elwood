@@ -852,6 +852,12 @@ public sealed class Evaluator
                 Enumerable.Range((int)args[0].GetNumberValue(), (int)args[1].GetNumberValue())
                     .Select(i => _factory.CreateNumber(i))),
 
+            // Format I/O
+            "fromCsv" => EvaluateFromCsv(target, args),
+            "toCsv" => EvaluateToCsv(target, args),
+            "fromText" => EvaluateFromText(target, args),
+            "toText" => EvaluateToText(target, args),
+
             // DateTime
             "add" => EvaluateAdd(target, args),
             "dateFormat" => EvaluateDateFormat(target, args),
@@ -866,6 +872,208 @@ public sealed class Evaluator
                 $"Unknown method '{name}'.", span,
                 $"Available methods: toLower, toUpper, trim, length, contains, replace, substring, split, count, toString, toNumber, round, floor, ceiling, abs, now")
         };
+    }
+
+    // ── Format I/O ──
+
+    private IElwoodValue EvaluateFromCsv(IElwoodValue target, List<IElwoodValue> args)
+    {
+        var csv = target.GetStringValue() ?? "";
+        var delimiter = ",";
+        var hasHeaders = true;
+        var quote = '"';
+
+        // Parse options object if provided
+        if (args.Count > 0 && args[0].Kind == ElwoodValueKind.Object)
+        {
+            var opts = args[0];
+            var d = opts.GetProperty("delimiter");
+            if (d is not null) delimiter = d.GetStringValue() ?? ",";
+            var h = opts.GetProperty("headers");
+            if (h is not null) hasHeaders = IsTruthy(h);
+            var q = opts.GetProperty("quote");
+            if (q is not null && (q.GetStringValue()?.Length ?? 0) > 0) quote = q.GetStringValue()![0];
+        }
+
+        var lines = ParseCsvLines(csv, delimiter[0], quote);
+        if (lines.Count == 0) return _factory.CreateArray([]);
+
+        if (hasHeaders && lines.Count >= 1)
+        {
+            var headers = lines[0];
+            var rows = new List<IElwoodValue>();
+            for (var i = 1; i < lines.Count; i++)
+            {
+                var row = lines[i];
+                var props = new List<KeyValuePair<string, IElwoodValue>>();
+                for (var j = 0; j < headers.Count; j++)
+                {
+                    var val = j < row.Count ? row[j] : "";
+                    props.Add(new KeyValuePair<string, IElwoodValue>(headers[j], _factory.CreateString(val)));
+                }
+                rows.Add(_factory.CreateObject(props));
+            }
+            return _factory.CreateArray(rows);
+        }
+        else
+        {
+            return _factory.CreateArray(lines.Select(row =>
+                _factory.CreateArray(row.Select(cell => _factory.CreateString(cell)))));
+        }
+    }
+
+    private static List<List<string>> ParseCsvLines(string csv, char delimiter, char quote)
+    {
+        var lines = new List<List<string>>();
+        var fields = new List<string>();
+        var field = new System.Text.StringBuilder();
+        var inQuotes = false;
+        var i = 0;
+
+        while (i < csv.Length)
+        {
+            var c = csv[i];
+            if (inQuotes)
+            {
+                if (c == quote && i + 1 < csv.Length && csv[i + 1] == quote)
+                {
+                    field.Append(quote); i += 2;
+                }
+                else if (c == quote)
+                {
+                    inQuotes = false; i++;
+                }
+                else
+                {
+                    field.Append(c); i++;
+                }
+            }
+            else if (c == quote)
+            {
+                inQuotes = true; i++;
+            }
+            else if (c == delimiter)
+            {
+                fields.Add(field.ToString()); field.Clear(); i++;
+            }
+            else if (c == '\n' || (c == '\r' && i + 1 < csv.Length && csv[i + 1] == '\n'))
+            {
+                fields.Add(field.ToString()); field.Clear();
+                if (fields.Any(f => f.Length > 0) || fields.Count > 1)
+                    lines.Add(fields);
+                fields = new List<string>();
+                i += c == '\r' ? 2 : 1;
+            }
+            else
+            {
+                field.Append(c); i++;
+            }
+        }
+
+        fields.Add(field.ToString());
+        if (fields.Any(f => f.Length > 0) || fields.Count > 1)
+            lines.Add(fields);
+
+        return lines;
+    }
+
+    private IElwoodValue EvaluateToCsv(IElwoodValue target, List<IElwoodValue> args)
+    {
+        var delimiter = ",";
+        var includeHeaders = true;
+        var quote = '"';
+
+        if (args.Count > 0 && args[0].Kind == ElwoodValueKind.Object)
+        {
+            var opts = args[0];
+            var d = opts.GetProperty("delimiter");
+            if (d is not null) delimiter = d.GetStringValue() ?? ",";
+            var h = opts.GetProperty("headers");
+            if (h is not null) includeHeaders = IsTruthy(h);
+        }
+
+        var items = target.EnumerateArray().ToList();
+        if (items.Count == 0) return _factory.CreateString("");
+
+        var sb = new System.Text.StringBuilder();
+        var delim = delimiter[0];
+
+        // Collect all property names from all rows for consistent columns
+        var allKeys = new List<string>();
+        foreach (var item in items)
+        {
+            if (item.Kind == ElwoodValueKind.Object)
+            {
+                foreach (var key in item.GetPropertyNames())
+                    if (!allKeys.Contains(key)) allKeys.Add(key);
+            }
+        }
+
+        var rows = new List<string>();
+
+        if (includeHeaders && allKeys.Count > 0)
+        {
+            rows.Add(string.Join(delim, allKeys.Select(k => CsvEscape(k, delim, quote))));
+        }
+
+        foreach (var item in items)
+        {
+            if (item.Kind == ElwoodValueKind.Object)
+            {
+                var values = allKeys.Select(k =>
+                {
+                    var v = item.GetProperty(k);
+                    return v is not null ? ValueToString(v) : "";
+                });
+                rows.Add(string.Join(delim, values.Select(v => CsvEscape(v, delim, quote))));
+            }
+            else if (item.Kind == ElwoodValueKind.Array)
+            {
+                var values = item.EnumerateArray().Select(v => CsvEscape(ValueToString(v), delim, quote));
+                rows.Add(string.Join(delim, values));
+            }
+        }
+
+        sb.Append(string.Join('\n', rows));
+
+        return _factory.CreateString(sb.ToString().TrimEnd('\r', '\n'));
+    }
+
+    private static string CsvEscape(string value, char delimiter, char quote)
+    {
+        if (value.Contains(delimiter) || value.Contains(quote) || value.Contains('\n') || value.Contains('\r'))
+            return $"{quote}{value.Replace(quote.ToString(), $"{quote}{quote}")}{quote}";
+        return value;
+    }
+
+    private IElwoodValue EvaluateFromText(IElwoodValue target, List<IElwoodValue> args)
+    {
+        var text = target.GetStringValue() ?? "";
+        var delimiter = "\n";
+
+        if (args.Count > 0 && args[0].Kind == ElwoodValueKind.Object)
+        {
+            var d = args[0].GetProperty("delimiter");
+            if (d is not null) delimiter = d.GetStringValue() ?? "\n";
+        }
+
+        var lines = text.Split(delimiter).Select(l => _factory.CreateString(l.TrimEnd('\r')));
+        return _factory.CreateArray(lines);
+    }
+
+    private IElwoodValue EvaluateToText(IElwoodValue target, List<IElwoodValue> args)
+    {
+        var delimiter = "\n";
+
+        if (args.Count > 0 && args[0].Kind == ElwoodValueKind.Object)
+        {
+            var d = args[0].GetProperty("delimiter");
+            if (d is not null) delimiter = d.GetStringValue() ?? "\n";
+        }
+
+        if (target.Kind == ElwoodValueKind.Array)
+            return _factory.CreateString(string.Join(delimiter, target.EnumerateArray().Select(ValueToString)));
+        return _factory.CreateString(ValueToString(target));
     }
 
     private IElwoodValue EvaluateHash(IElwoodValue target, List<IElwoodValue> args)
