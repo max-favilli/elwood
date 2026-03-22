@@ -15,10 +15,13 @@ Elwood is not a single tool — it's a layered ecosystem where each layer is ind
 │  IExecutor, ISource, IDestination interfaces    │
 │  Split/fan-out/merge orchestration              │
 ├─────────────────────────────────────────────────┤
+│  Compiled Mode (optional)                       │  Phase 2b
+│  AST → Expression Trees / JS code generation    │
+│  Near-native performance for large workloads    │
+├─────────────────────────────────────────────────┤
 │  Elwood Scripts + Format I/O                    │  Phase 2
 │  Pure .elwood scripts as transformation maps    │
-│  any format in → Elwood transform → any format  │
-│  (JSON, CSV, XML, XLSX, Text)                   │
+│  fromCsv, toCsv, fromXml, toXml, fromText...   │
 ├─────────────────────────────────────────────────┤
 │  Elwood Core + CLI                              │  Phase 1
 │  DSL engine (parse, evaluate expressions)       │
@@ -47,22 +50,39 @@ Pure Elwood scripts (`.elwood` files) serve as transformation maps. An earlier d
 
 Scripts with `let` decomposition solve deep nesting, and `memo` handles repeated patterns. One syntax means full editor support (highlighting, autocomplete, error reporting).
 
-Format conversion handles non-JSON inputs/outputs:
-```
-any format ──→ [input conversion] ──→ JSON ──→ Elwood script ──→ JSON ──→ [output conversion] ──→ any format
+Format conversion is built into the language as functions, not external configuration:
+
+```elwood
+// Parse CSV with custom options, transform, output as CSV
+let orders = $.rawCsv | fromCsv({ delimiter: ";", headers: true })
+let result = orders | where(.amount > 100) | select({ id: .id, total: .amount })
+return result | toCsv()
 ```
 
-Supported formats: JSON (native), CSV, XML, XLSX, Text.
+Format functions: `fromCsv`/`toCsv`, `fromXml`/`toXml`, `fromText`/`toText`. Each accepts an optional config object.
+
+The CLI also provides `--input-format` / `--output-format` flags as shorthand for simple cases.
 
 **Available as:**
-- .NET library (format converters in `Elwood.Core`)
-- CLI tool (`elwood run transform.elwood --input data.csv --input-format csv`)
+- Built-in functions in `Elwood.Core` (available in both .NET and TypeScript)
+- CLI flags: `elwood run transform.elwood --input data.csv --input-format csv`
 
 **Use cases at this layer:**
 - Define complex transformations as scripts with full editor tooling
 - Transform between formats: CSV → JSON, XML → JSON, JSON → CSV, etc.
 - Version-control transformation logic separately from application code
 - `let` + `memo` keep large maps readable (e.g., 6500-line SAP IDoc map → 450-line script)
+
+### Performance — Compiled Mode (Phase 2b)
+
+The tree-walk interpreter with lazy evaluation is production-viable. Compiled mode eliminates interpretation overhead entirely:
+
+- **.NET:** Compile AST → Expression Trees → JIT-compiled delegates. Near-native speed.
+- **TypeScript:** Compile AST → generated JavaScript functions. V8 JIT optimizes them.
+
+Compiled expressions are cached for reuse — critical when the same transform runs thousands of times (e.g., processing each item in a large array).
+
+This is Phase 2b, not Phase 4, because performance matters before users adopt Elwood for production integration pipelines (Phase 3).
 
 ### Layer 3 — Elwood Runtime (Phase 3)
 
@@ -254,7 +274,12 @@ DataWeave doesn't know about queues, parallelism, or retries. It just transforms
 
 ### How Elwood YAML describes orchestration
 
-The YAML defines the **pipeline topology** — steps, splits, merges, and delivery. It does NOT define the infrastructure (queues, functions, containers):
+The YAML defines the **pipeline topology** — steps, splits, merges, and delivery. It does NOT define the infrastructure (queues, functions, containers).
+
+**Hybrid approach:** YAML for structure, external `.elwood` scripts for any non-trivial expression. This avoids the two-syntax-in-one-file problem:
+
+- **Inline OK:** static values (`trigger: http`), simple paths (`$.request.season`), short interpolation (`` `{$.code}-data` ``)
+- **External `.elwood` required:** anything with pipes, conditionals, method chains, or multi-line logic
 
 ```yaml
 version: 2
@@ -267,46 +292,49 @@ pipeline:
       url: `https://api.example.com/orders?date={$.triggerDate}`
       headers:
         Authorization: `Bearer {$.token}`
-    transform: fetch-orders.elwood
+    transform: fetch-orders.elwood         # ← complex transform → external script
 
   - name: enrich-each-order
-    input: $.orders[*]                    # SPLIT: fan-out over this array
-    concurrency: 50                       # hint to executor, not infrastructure
+    input: $.orders[*]                     # SPLIT: fan-out over this array
+    concurrency: 50                        # hint to executor
     source:
       type: http
       method: GET
       url: `https://api.example.com/details/{$.orderId}`
-    transform:
-      enrichedOrder: |
-        { ...$.order, details: $.response.body, etag: $.response.headers.ETag }
-    merge: $.orders[{index}]              # AGGREGATE: merge back by index
+    transform: enrich-order.elwood         # ← external script
+    merge: $.orders[{index}]               # AGGREGATE: merge back by index
 
   - name: upload-results
-    input: $.orders[*]                    # SPLIT again for outputs
+    input: $.orders[*]                     # SPLIT again for outputs
     concurrency: 100
+    outputId: generate-output-id.elwood    # ← method chains → external script
     destination:
       type: blob
       connectionString: ${BLOB_CONN}
       container: processed
-      path: `/{$.orderId}.json`
-    transform:
-      content: $.enrichedOrder
+      path: build-path.elwood              # ← complex interpolation → external script
+    transform: prepare-upload.elwood       # ← external script
 ```
+
+External scripts are **reusable** (same script across multiple outputs) and **independently testable** via the CLI.
 
 ### What the YAML defines vs what it doesn't
 
-| Concern | In the YAML? | Notes |
+| Concern | In the YAML? | How |
 |---|---|---|
-| What sources to call | Yes | URLs, methods, headers |
+| What sources to call | Yes | URLs, methods, headers (inline or simple interpolation) |
 | What transformation to apply | Yes | References to `.elwood` scripts |
 | Where to split (fan-out) | Yes | `input: $.orders[*]` |
 | How to merge results back | Yes | `merge: $.orders[{index}]` |
-| Where to deliver output | Yes | Destination config |
+| Where to deliver output | Yes | Destination config (static values) |
+| Complex dynamic values | Yes | References to `.elwood` scripts (outputId, paths, filenames) |
 | Concurrency hint | Yes | `concurrency: 50` |
-| What queue/bus to use | No | Infrastructure concern |
-| What compute to use | No | Infrastructure concern (Functions, Lambda, K8s) |
+| What queue/bus to use | No | Infrastructure concern (executor config) |
+| What compute to use | No | Infrastructure concern (executor config) |
 | How to retry on failure | Basic | Simple policy in YAML, advanced in executor config |
 | What monitoring to use | No | Infrastructure concern |
+
+**Threshold rule:** simple `$.field` or short `` `{$.field}` `` stays inline. Anything with `|` or `.method()` chains → external `.elwood` file.
 
 The YAML is a **portable pipeline definition**. It describes the data flow and transformation, not the deployment topology.
 
@@ -349,27 +377,7 @@ Elwood ships the Runtime library + CLI Executor. Infrastructure-specific executo
 
 ### Updated architecture diagram
 
-```
-┌─────────────────────────────────────────────────┐
-│  Executors (separate packages)                  │
-│  Azure (ASB + Functions)                        │
-│  AWS (SQS + Lambda)                             │
-│  K8s (Jobs)                                     │
-├─────────────────────────────────────────────────┤
-│  Elwood Runtime + CLI Executor                  │  Phase 3
-│  Parses pipeline YAML                           │
-│  Builds execution plan (steps, splits, merges)  │
-│  Drives execution via IExecutor interface       │
-├─────────────────────────────────────────────────┤
-│  Elwood Scripts + Format I/O                    │  Phase 2
-│  Pure .elwood scripts as transformation maps    │
-│  any format in → Elwood transform → any format  │
-├─────────────────────────────────────────────────┤
-│  Elwood Core + CLI                              │  Phase 1
-│  DSL engine (parse, evaluate expressions)       │
-│  .NET library, TypeScript library, CLI tool     │
-└─────────────────────────────────────────────────┘
-```
+See the ecosystem diagram at the top of this document. The full stack from bottom to top: Core (Phase 1) → Format I/O (Phase 2) → Compiled Mode (Phase 2b) → Runtime (Phase 3) → Executors (separate packages).
 
 ### Phase 3 implementation order
 
@@ -448,11 +456,13 @@ Questions:
 
 **Decision:** Format conversion is a Phase 2 concern, not a Phase 3 (Runtime) concern.
 
-The CLI accepts `--input-format` and `--output-format` flags to convert non-JSON data to/from JSON before/after the Elwood script runs. Supported formats: JSON (native), CSV, XML, XLSX, Text.
+Two approaches, both in Phase 2:
+- **In-script functions:** `fromCsv()`, `toCsv()`, `fromXml()`, `toXml()`, `fromText()`, `toText()` — full control with custom options, can mix formats in one script
+- **CLI flags:** `--input-format csv`, `--output-format csv` — shorthand for simple cases
 
-This means the Runtime always receives and produces JSON — it doesn't need to know about format conversion.
+The Runtime always receives and produces JSON — it delegates format conversion to the Elwood script or CLI layer.
 
-See `docs/roadmap.md` Phase 2 for format conversion details.
+See `docs/roadmap.md` Phase 2 for details and examples.
 
 ### 6. What's the MVP for Phase 3? — RESOLVED
 
