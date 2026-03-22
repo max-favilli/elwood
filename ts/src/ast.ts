@@ -184,6 +184,7 @@ export type PipeOperation =
   | DistinctOperation
   | AggregateOperation
   | SliceOperation
+  | TakeWhileOperation
   | BatchOperation
   | JoinOperation
   | ConcatOperation
@@ -199,6 +200,7 @@ export interface GroupByOperation { type: 'GroupBy'; keySelector: ElwoodExpressi
 export interface DistinctOperation { type: 'Distinct'; span: SourceSpan }
 export interface AggregateOperation { type: 'Aggregate'; name: string; predicate?: ElwoodExpression; span: SourceSpan }
 export interface SliceOperation { type: 'Slice'; kind: 'take' | 'skip'; count: ElwoodExpression; span: SourceSpan }
+export interface TakeWhileOperation { type: 'TakeWhile'; predicate: ElwoodExpression; span: SourceSpan }
 export interface BatchOperation { type: 'Batch'; size: ElwoodExpression; span: SourceSpan }
 export interface JoinOperation {
   type: 'Join';

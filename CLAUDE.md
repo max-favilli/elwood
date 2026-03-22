@@ -30,6 +30,7 @@ Elwood/
 
 ## Important constraints
 - **Never use the word "Eagle" in any public file** (source, docs, tests, comments). Use generic terms like "traditional JSONPath" or "legacy approach". See `.private/eagle-migration.md` for context.
+- **Elwood is a functional language — keep it that way.** No imperative features: no `for`/`while` loops, no mutable variables, no variable reassignment, no statements. Everything is an expression. Data transformation is expressed through pipe operators (`where`, `select`, `reduce`, etc.) and lambda expressions, not through imperative control flow. If a user requests a feature that would require imperative constructs, challenge it and propose a functional alternative. See `docs/functional-programming.md` for the design philosophy.
 
 ## Working with Claude
 

@@ -87,6 +87,7 @@ expression | operation1 | operation2 | ...
 | `groupBy` | `\| groupBy key` | Group → objects with `.key` and `.items` |
 | `distinct` | `\| distinct` | Remove duplicates |
 | `take` | `\| take n` | First n items |
+| `takeWhile` | `\| takeWhile predicate` | Take items while predicate is true, then stop |
 | `skip` | `\| skip n` | Skip n items |
 | `batch` | `\| batch n` | Chunk into groups of n |
 | `join` | `\| join source on lKey equals rKey [into alias]` | Join two collections |
@@ -309,6 +310,7 @@ Methods are called with dot notation on values. Most also work as pipe operators
 | `utcNow(format?)` | Current UTC time (explicit) |
 | `newGuid()` | Generate unique GUID |
 | `range(start, count)` | Generate numeric sequence |
+| `iterate(seed, fn)` | Generate lazy sequence: `[seed, fn(seed), fn(fn(seed)), ...]` — must use with `take`/`takeWhile` |
 | `boolean(value)` | Coerce to boolean |
 
 ### Hashing & Crypto

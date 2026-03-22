@@ -112,6 +112,7 @@ public sealed class Parser
                 new AggregateOperation(name, Span(start)),
             "take" or "skip" =>
                 new SliceOperation(name, ParsePipeArgExpression(), Span(start)),
+            "takeWhile" => new TakeWhileOperation(ParsePipeArgExpression(), Span(start)),
             "batch" => new BatchOperation(ParsePipeArgExpression(), Span(start)),
             "join" => ParseJoin(start),
             "concat" => ParseConcat(start),

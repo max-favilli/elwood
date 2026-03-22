@@ -189,6 +189,9 @@ public sealed record AggregateOperation(string Name, SourceSpan Span, ElwoodExpr
 /// <summary>| take n, | skip n</summary>
 public sealed record SliceOperation(string Kind, ElwoodExpression Count, SourceSpan Span) : PipeOperation(Span);
 
+/// <summary>| takeWhile predicate</summary>
+public sealed record TakeWhileOperation(ElwoodExpression Predicate, SourceSpan Span) : PipeOperation(Span);
+
 /// <summary>| batch n</summary>
 public sealed record BatchOperation(ElwoodExpression Size, SourceSpan Span) : PipeOperation(Span);
 

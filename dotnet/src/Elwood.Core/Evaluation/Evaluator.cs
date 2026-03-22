@@ -274,6 +274,7 @@ public sealed class Evaluator
             DistinctOperation => EvaluateDistinct(input),
             AggregateOperation agg => EvaluateAggregate(agg, input, env),
             SliceOperation slice => EvaluateSlice(slice, input, env),
+            TakeWhileOperation tw => EvaluateTakeWhile(tw, input, env),
             OrderByOperation order => EvaluateOrderBy(order, input, env),
             GroupByOperation group => EvaluateGroupBy(group, input, env),
             BatchOperation batch => EvaluateBatch(batch, input, env),
@@ -369,6 +370,13 @@ public sealed class Evaluator
         var items = slice.Kind == "take"
             ? input.EnumerateArray().Take(n)   // Take short-circuits — stops pulling after n
             : input.EnumerateArray().Skip(n);
+        return new LazyArrayValue(items, _factory);
+    }
+
+    private IElwoodValue EvaluateTakeWhile(TakeWhileOperation tw, IElwoodValue input, ElwoodEnvironment env)
+    {
+        var items = input.EnumerateArray().TakeWhile(item =>
+            IsTruthy(EvaluateWithLambdaOrImplicit(tw.Predicate, item, env)));
         return new LazyArrayValue(items, _factory);
     }
 
@@ -631,8 +639,42 @@ public sealed class Evaluator
             return memoFunc.Invoke(memoArgs, current);
         }
 
+        // iterate(seed, lambda) — needs raw lambda AST, not evaluated args
+        if (func.FunctionName == "iterate" && func.Arguments.Count >= 2)
+        {
+            return EvaluateIterate(func, current, env);
+        }
+
         var args = func.Arguments.Select(a => Evaluate(a, current, env)).ToList();
         return EvaluateBuiltinMethod(func.FunctionName, current, args, func.Span);
+    }
+
+    private IElwoodValue EvaluateIterate(FunctionCallExpression func, IElwoodValue current, ElwoodEnvironment env)
+    {
+        var seed = Evaluate(func.Arguments[0], current, env);
+        var lambdaExpr = func.Arguments[1];
+
+        if (lambdaExpr is not LambdaExpression lambda)
+            throw new ElwoodEvaluationException("iterate requires a lambda as second argument: iterate(seed, x => expr)", func.Span);
+
+        const int maxIterations = 1_000_000;
+
+        IEnumerable<IElwoodValue> Generate()
+        {
+            var val = seed;
+            for (var i = 0; i < maxIterations; i++)
+            {
+                yield return val;
+                var childEnv = env.CreateChild();
+                childEnv.Set(lambda.Parameters[0], val);
+                val = Evaluate(lambda.Body, val, childEnv);
+            }
+            throw new ElwoodEvaluationException(
+                $"iterate exceeded maximum iteration limit ({maxIterations}). Use take(), takeWhile(), or first() to limit the sequence.",
+                func.Span);
+        }
+
+        return new LazyArrayValue(Generate(), _factory);
     }
 
     private IElwoodValue EvaluateIndex(IndexExpression idx, IElwoodValue current, ElwoodEnvironment env)
