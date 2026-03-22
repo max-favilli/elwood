@@ -134,6 +134,8 @@ New features follow the workflow: spec test case first → implement in .NET →
 - [x] Enables integration with any iPaaS via HTTP
 
 ### Remaining engine work
+- [x] `iterate(seed, fn)` and `takeWhile` — lazy sequence generation
+- [x] `.parseJson()` — deserialize embedded JSON strings
 - [ ] Identify and port any remaining common JSON transformation functions not yet covered
 
 ---
@@ -239,23 +241,32 @@ return products | select(p => {
 
 ### Format functions
 
-| Function | Description | Options |
-|---|---|---|
-| `fromCsv(options?)` | Parse CSV string → array of objects | `delimiter`, `headers`, `quote` |
-| `toCsv(options?)` | Array of objects → CSV string | `delimiter`, `headers`, `quote` |
-| `fromXml(options?)` | Parse XML string → JSON object | `attributePrefix` (default `@`) |
-| `toXml(options?)` | JSON object → XML string | `rootElement`, `attributePrefix` |
-| `fromText(options?)` | Split text into lines or structured data | `delimiter` (default `\n`) |
-| `toText(options?)` | Join array into text | `delimiter` (default `\n`) |
+| Function | Description | Options | Status |
+|---|---|---|---|
+| `fromCsv(options?)` | Parse CSV string → array of objects | `delimiter`, `headers`, `quote`, `skipRows`, `parseJson` | ✅ |
+| `toCsv(options?)` | Array of objects → CSV string | `delimiter`, `headers`, `alwaysQuote` | ✅ |
+| `fromXml(options?)` | Parse XML string → JSON object | `attributePrefix` (default `@`) | |
+| `toXml(options?)` | JSON object → XML string | `rootElement`, `attributePrefix` | |
+| `fromText(options?)` | Split text into lines or structured data | `delimiter` (default `\n`) | ✅ |
+| `toText(options?)` | Join array into text | `delimiter` (default `\n`) | ✅ |
 
 ### Tasks
-- [ ] Built-in format functions (`fromCsv`, `toCsv`, `fromXml`, `toXml`, `fromText`, `toText`)
+- [x] Built-in format functions: `fromCsv`, `toCsv`, `fromText`, `toText`
+- [ ] Built-in format functions: `fromXml`, `toXml`
 - [ ] CLI `--input-format` and `--output-format` flags (sugar for wrapping script in fromX/toX)
-- [ ] Format converters:
-  - [ ] CSV (configurable delimiter, headers, quoting)
-  - [ ] XML (configurable element/attribute mapping)
-  - [ ] XLSX (sheet selection, header row) — via separate package to keep Core lightweight
-  - [ ] Text (line splitting, joining)
+- [x] Format converters — CSV:
+  - [x] Configurable delimiter, headers, quote character
+  - [x] `skipRows` — skip metadata/title rows before data
+  - [x] `headers: false` — auto-generated alphabetic column names (A, B, C, ..., AA, AB)
+  - [x] `parseJson: true` — auto-detect and deserialize JSON values in cells
+  - [x] `alwaysQuote` — force-quote all fields in toCsv output
+- [x] Format converters — Text: line splitting/joining with configurable delimiter
+- [ ] Format converters — XML (configurable element/attribute mapping)
+- [ ] Format converters — XLSX (sheet selection, header row) — via separate package to keep Core lightweight
+- [x] Multi-format test inputs: test runners support `input.csv`, `input.txt`, `input.xml`
+- [x] Parser fix: `$.method()` resolves correctly when `$` is a non-object value
+- [x] `.parseJson()` general-purpose method + `fromCsv({ parseJson: true })` convenience option
+- [x] 82 conformance test cases (was 68), 111 .NET tests, 136 TS tests
 
 ---
 
@@ -413,9 +424,9 @@ Phase 1   ✅  Build the .NET engine
    ↓
 Phase 1b  ✅  Lazy evaluation (.NET) → repo restructure → TypeScript port
    ↓
-Phase 1c      Publish everything (GitHub, NuGet, npm, CI, Playground, API container)
+Phase 1c  ✅  Publish everything (GitHub, NuGet, npm, CI, Playground, API container)
    ↓
-Phase 2       Multi-format I/O (fromCsv, toXml, etc.) + script-based maps
+Phase 2   🔧  Multi-format I/O (fromCsv, toXml, etc.) + script-based maps
    ↓
 Phase 2b      Performance — compiled mode (Expression Trees / code generation)
    ↓
@@ -432,8 +443,8 @@ Elwood is designed for **incremental adoption**:
 
 1. **Phase 1** (done): Standalone transformation engine. Use via CLI or .NET library.
 2. **Phase 1b** (done): Cross-platform reach. Use in browsers, Node.js, edge runtimes.
-3. **Phase 1c**: Open-source launch. Available via NuGet, npm, browser playground, and self-hosted API container.
-4. **Phase 2**: Multi-format I/O. Transform between JSON, CSV, XML, and Text using in-script functions.
+3. **Phase 1c** (done): Open-source launch. Available via NuGet, npm, browser playground, and self-hosted API container.
+4. **Phase 2** (in progress): Multi-format I/O. CSV and Text complete. XML next.
 5. **Phase 2b**: Compiled mode. Near-native performance for production workloads.
 6. **Phase 3**: Integration pipelines. YAML defines sources, transforms, and destinations. Pluggable executors run them.
 7. **Phase 4**: IDE support, developer tools, and community ecosystem.
