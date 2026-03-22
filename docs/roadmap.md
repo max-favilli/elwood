@@ -139,76 +139,77 @@ New features follow the workflow: spec test case first → implement in .NET →
 
 ---
 
-## Phase 2 — YAML Transformation Documents
+## Phase 2 — Elwood Scripts as Maps + Multi-Format I/O
 
-**Goal:** Define a YAML-based document format for declarative data transformations powered by Elwood expressions, supporting multiple input and output formats.
+**Goal:** Use pure Elwood scripts (`.elwood` files) as the transformation format, with format conversion for non-JSON inputs/outputs. No YAML maps.
 
-### Design
-The YAML document structure mirrors the desired output shape. Each leaf value is an Elwood expression. Elwood handles format conversion automatically — the transformation always works with JSON internally.
+### Design decision: Scripts, not YAML maps
 
-```
-any format ──→ [input conversion] ──→ JSON ──→ Elwood transform ──→ JSON ──→ [output conversion] ──→ any format
-```
+An earlier design proposed YAML documents where the tree structure mirrors the output shape and leaf values are Elwood expressions. This was abandoned for two reasons:
 
-```yaml
-version: 2
-input: json                          # json (default), csv, xml, xlsx, text
-output: json                         # json (default), csv, xml, text
+1. **Deep indentation** — A 20-level deep output (common in SAP IDocs, complex XML) means 40+ spaces of indent before the content. YAML's indentation-as-structure makes depth visible and painful.
+2. **Two syntaxes in one file** — YAML for structure + Elwood for values means no editor can fully syntax-highlight, autocomplete, or error-check both. Every YAML-embedded-DSL (GitHub Actions + bash, Helm + Go templates) suffers from this — the embedded language gets zero tooling.
 
-let:
-  allSystems: $.Systems.results[*] | where s => s.Status.Value != "Retired"
+**Pure Elwood scripts solve both problems:**
+- One syntax → full editor support (highlighting, autocomplete, error reporting)
+- `let` decomposition flattens deep nesting into named, testable pieces
+- `memo` handles repeated patterns (e.g., 82 SAP segments → 30 one-liner function calls)
+- Already works today with `elwood run script.elwood --input data.json`
 
-map:
-  systems: |
-    allSystems | select s => {
-      id: s.Title.toLower(),
-      label: s.Title,
-      domain: s.Domain.Value
+### Script-based maps
+
+```elwood
+// artmas09.elwood — replaces a 6500-line JSON map
+
+let ausprt = memo (src, charName) => {
+  "@SEGMENT": "1", FUNCTION: "009", CHAR_NAME: charName,
+  MATERIAL_LONG: $.SAP_STUFF.MATERIAL_LONG,
+  CHAR_VALUE_LONG: src.CHAR_VALUE_LONG
+}
+
+let ediDc40 = { "@SEGMENT": "1", TABNAM: "EDI_DC_40", MANDT: "400", ... }
+let matHead = { "@SEGMENT": "1", MATL_TYPE: $.SAP_STUFF.MATL_TYPE, ... }
+
+return {
+  ARTMAS09: {
+    IDOC: {
+      "@BEGIN": "1",
+      EDI_DC40: ediDc40,
+      E1BPE1MATHEAD: matHead,
+      E1BPE1AUSPRT: [
+        ausprt($.C8_PRODUCTSUBTYPE, "C8_PRODUCTSUBTYPE"),
+        ausprt($.JW_PRODUCTGROUP, "JW_PRODUCTGROUP"),
+        // ... 30 more one-liners instead of 82 copy-pasted map nodes
+      ]
     }
-  metadata:
-    generatedAt: now("yyyy-MM-ddTHH:mm:ss")
-    systemCount: map.systems | count
+  }
+}
 ```
 
 ### Format conversion
 
-Elwood operates on JSON internally. Input conversion transforms source data to JSON; output conversion transforms JSON results to the target format.
+Elwood operates on JSON internally. Format converters handle non-JSON inputs/outputs:
 
-| Format | Input (→ JSON) | Output (JSON →) | Notes |
-|---|---|---|---|
-| **JSON** | Native (no conversion) | Native (no conversion) | Default |
-| **CSV** | Rows → array of objects, headers → property names | Array of objects → rows, property names → headers | Configurable delimiter, quoting |
-| **XML** | Elements → objects, attributes → properties | Objects → elements | Configurable conventions |
-| **XLSX** | Sheet → array of objects (like CSV) | Array of objects → sheet | Sheet name configurable |
-| **Text** | Entire content as string, or line-split to array | Join array/render string | Line delimiter configurable |
+```
+any format ──→ [input conversion] ──→ JSON ──→ Elwood script ──→ JSON ──→ [output conversion] ──→ any format
+```
 
-Input conversion options in YAML:
-```yaml
-# CSV with custom settings
-input:
-  format: csv
-  delimiter: ";"
-  hasHeaders: true
+| Format | Input (→ JSON) | Output (JSON →) |
+|---|---|---|
+| **JSON** | Native (no conversion) | Native (no conversion) |
+| **CSV** | Rows → array of objects | Array of objects → rows |
+| **XML** | Elements → objects, attributes → `@` properties | Objects → elements |
+| **XLSX** | Sheet → array of objects | Array of objects → sheet |
+| **Text** | Content as string or line-split array | Join array / render string |
 
-# XML with options
-input:
-  format: xml
-  rootElement: data
-
-# XLSX with sheet selection
-input:
-  format: xlsx
-  sheet: "Sheet1"          # or sheet index
+CLI usage:
+```bash
+elwood run transform.elwood --input data.csv --input-format csv
+elwood run transform.elwood --input data.xml --output result.csv --output-format csv
 ```
 
 ### Tasks
-- [ ] Add `Elwood.Yaml` project (depends on YamlDotNet)
-- [ ] YAML document parser: `version`, `input:`, `output:`, `let:`, `map:` sections
-- [ ] `map:` tree = output JSON shape; leaf values = Elwood expressions
-- [ ] Inline expressions (single-line values) and block expressions (`expr: |`)
-- [ ] Self-referencing: `map.systems` references already-computed siblings (topological sort)
-- [ ] External map references: `map: some-file.elwood.yaml` (load from file)
-- [ ] CLI support: `elwood run transform.elwood.yaml --input data.csv`
+- [ ] CLI `--input-format` and `--output-format` flags
 - [ ] Input format converters:
   - [ ] CSV → JSON (configurable delimiter, headers, quoting)
   - [ ] XML → JSON (configurable element/attribute mapping)
@@ -223,12 +224,12 @@ input:
 
 ## Phase 3 — Integration Pipeline Configuration
 
-**Goal:** Extend the YAML format to describe complete data integration pipelines — sources, transformations, and destinations — in a single document.
+**Goal:** Use YAML to describe complete data integration pipelines — sources, transformations, and destinations — in a single document. YAML handles the **declarative orchestration** (triggers, connections, destinations); Elwood scripts (`.elwood` files) handle the **transformation logic**.
 
-This enables Elwood to serve as a configuration language for data pipeline orchestration tools, not just a standalone transformation engine.
+This separation keeps each concern in the right language: YAML for infrastructure config (short values, no deep nesting), Elwood for data transformation (full tooling support).
 
 ### Design
-One `.elwood.yaml` file per integration pipeline:
+One `.elwood.yaml` file per integration pipeline, referencing `.elwood` scripts for transformation:
 
 ```yaml
 version: 2
@@ -238,9 +239,7 @@ sources:
     trigger: http
     endpoint: /api/data/{category}
     contentType: json
-    map:
-      request:
-        category: $.category
+    map: source-request.elwood             # ← Elwood script, not inline YAML
 
   - name: file-source
     trigger: pull
@@ -248,7 +247,7 @@ sources:
       fileShare:
         connectionString: ${FILE_SHARE_CONN}
         path: /{$.request.category}/data
-    map: source-transform.elwood.yaml
+    map: source-transform.elwood           # ← Elwood script
 
 join:
   path: $
