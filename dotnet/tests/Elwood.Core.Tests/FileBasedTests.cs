@@ -22,6 +22,14 @@ public class FileBasedTests
 {
     private static readonly ElwoodEngine Engine = new(JsonNodeValueFactory.Instance);
     private static readonly JsonNodeValueFactory Factory = JsonNodeValueFactory.Instance;
+
+    // JIT warmup — run a representative expression before any test so timing is accurate
+    static FileBasedTests()
+    {
+        var input = Factory.Parse("""{"users":[{"name":"a","age":1,"active":true}]}""");
+        Engine.Evaluate("$.users[*] | where u => u.active | select u => u.name.toLower() | first", input);
+        Engine.Execute("let x = $.users[*] | count\nreturn x", input);
+    }
     private static readonly string TimingLogDir = FindTimingLogDir();
     private static readonly string TimingLogPath = Path.Combine(TimingLogDir, "timing.log");
     private static readonly object LogLock = new();
