@@ -15,8 +15,8 @@ Elwood is not a single tool — it's a layered ecosystem where each layer is ind
 │  IExecutor, ISource, IDestination interfaces    │
 │  Split/fan-out/merge orchestration              │
 ├─────────────────────────────────────────────────┤
-│  Elwood YAML                                    │  Phase 2
-│  Declarative transformation documents           │
+│  Elwood Scripts + Format I/O                    │  Phase 2
+│  Pure .elwood scripts as transformation maps    │
 │  any format in → Elwood transform → any format  │
 │  (JSON, CSV, XML, XLSX, Text)                   │
 ├─────────────────────────────────────────────────┤
@@ -41,30 +41,32 @@ The DSL engine. Parses and evaluates Elwood expressions against JSON input.
 - Interactive data exploration via REPL
 - Shell pipelines: `cat data.json | elwood eval '$.users | where(.age > 30) | select(.name)'`
 
-### Layer 2 — Elwood YAML (Phase 2)
+### Layer 2 — Elwood Scripts + Format I/O (Phase 2)
 
-A declarative document format for describing data transformations. The YAML structure mirrors the desired output shape; leaf values are Elwood expressions. Supports multiple input and output formats — format conversion is built in.
+Pure Elwood scripts (`.elwood` files) serve as transformation maps. An earlier design proposed YAML documents where the tree structure mirrors the output shape, but this was abandoned due to deep-indentation problems and the impossibility of providing full editor tooling for two syntaxes (YAML + Elwood) in one file.
 
+Scripts with `let` decomposition solve deep nesting, and `memo` handles repeated patterns. One syntax means full editor support (highlighting, autocomplete, error reporting).
+
+Format conversion handles non-JSON inputs/outputs:
 ```
-any format ──→ [input conversion] ──→ JSON ──→ Elwood transform ──→ JSON ──→ [output conversion] ──→ any format
+any format ──→ [input conversion] ──→ JSON ──→ Elwood script ──→ JSON ──→ [output conversion] ──→ any format
 ```
 
 Supported formats: JSON (native), CSV, XML, XLSX, Text.
 
 **Available as:**
-- .NET library (`Elwood.Yaml`)
-- CLI tool (`elwood run transform.elwood.yaml --input data.csv`)
+- .NET library (format converters in `Elwood.Core`)
+- CLI tool (`elwood run transform.elwood --input data.csv --input-format csv`)
 
 **Use cases at this layer:**
-- Define complex, multi-step transformations as documents rather than code
+- Define complex transformations as scripts with full editor tooling
 - Transform between formats: CSV → JSON, XML → JSON, JSON → CSV, etc.
 - Version-control transformation logic separately from application code
-- Share transformation definitions between teams/services
-- Non-developers can read and understand the transformation shape
+- `let` + `memo` keep large maps readable (e.g., 6500-line SAP IDoc map → 450-line script)
 
 ### Layer 3 — Elwood Runtime (Phase 3)
 
-A pipeline execution engine that runs integration definitions written in Elwood YAML. It handles the full lifecycle: fetch data from sources, apply transformations, deliver results to destinations.
+A pipeline execution engine that runs integration definitions written in pipeline YAML. YAML handles declarative orchestration (sources, destinations, triggers, connections); Elwood scripts handle transformation logic. It manages the full lifecycle: fetch data from sources, apply transformations, deliver results to destinations.
 
 **Available as:**
 - .NET library (`Elwood.Runtime`) — embed in any .NET application
@@ -90,7 +92,7 @@ A pipeline execution engine that runs integration definitions written in Elwood 
 │  ┌─────────┐    ┌──────────────┐    ┌───────────────┐   │
 │  │ Sources  │───→│  Transform   │───→│ Destinations  │   │
 │  │ (fetch)  │    │  (Elwood     │    │ (deliver)     │   │
-│  │          │    │   YAML map)  │    │               │   │
+│  │          │    │   script)  │    │               │   │
 │  └─────────┘    └──────────────┘    └───────────────┘   │
 │       ↑                                     ↑           │
 │  ┌─────────┐                        ┌───────────────┐   │
@@ -265,7 +267,7 @@ pipeline:
       url: `https://api.example.com/orders?date={$.triggerDate}`
       headers:
         Authorization: `Bearer {$.token}`
-    transform: fetch-orders.elwood.yaml
+    transform: fetch-orders.elwood
 
   - name: enrich-each-order
     input: $.orders[*]                    # SPLIT: fan-out over this array
@@ -296,7 +298,7 @@ pipeline:
 | Concern | In the YAML? | Notes |
 |---|---|---|
 | What sources to call | Yes | URLs, methods, headers |
-| What transformation to apply | Yes | Elwood expressions / YAML maps |
+| What transformation to apply | Yes | References to `.elwood` scripts |
 | Where to split (fan-out) | Yes | `input: $.orders[*]` |
 | How to merge results back | Yes | `merge: $.orders[{index}]` |
 | Where to deliver output | Yes | Destination config |
@@ -359,8 +361,8 @@ Elwood ships the Runtime library + CLI Executor. Infrastructure-specific executo
 │  Builds execution plan (steps, splits, merges)  │
 │  Drives execution via IExecutor interface       │
 ├─────────────────────────────────────────────────┤
-│  Elwood YAML                                    │  Phase 2
-│  Declarative transformation documents           │
+│  Elwood Scripts + Format I/O                    │  Phase 2
+│  Pure .elwood scripts as transformation maps    │
 │  any format in → Elwood transform → any format  │
 ├─────────────────────────────────────────────────┤
 │  Elwood Core + CLI                              │  Phase 1
@@ -444,11 +446,11 @@ Questions:
 
 ### 5. Format conversion (non-JSON inputs) — RESOLVED
 
-**Decision:** Format conversion is a Phase 2 (YAML layer) concern, not a Phase 3 (Runtime) concern.
+**Decision:** Format conversion is a Phase 2 concern, not a Phase 3 (Runtime) concern.
 
-Elwood YAML documents declare their input and output formats. The YAML layer handles conversion to/from JSON transparently. Supported formats: JSON (native), CSV, XML, XLSX, Text.
+The CLI accepts `--input-format` and `--output-format` flags to convert non-JSON data to/from JSON before/after the Elwood script runs. Supported formats: JSON (native), CSV, XML, XLSX, Text.
 
-This means the Runtime always receives and produces JSON — it doesn't need to know about format conversion. It delegates that entirely to the YAML transformation layer.
+This means the Runtime always receives and produces JSON — it doesn't need to know about format conversion.
 
 See `docs/roadmap.md` Phase 2 for format conversion details.
 
@@ -486,7 +488,7 @@ Each step is independently useful.
 | Layer | .NET | TypeScript | Notes |
 |---|---|---|---|
 | Core (expressions) | Yes | Yes | Shared conformance suite |
-| YAML (transforms) | Yes | Possible future | Needs YAML parser (js-yaml) |
+| Scripts + Format I/O | Yes | Possible future | Format converters (CSV, XML) needed |
 | Runtime (pipelines) | Yes | Limited | Source/dest adapters are I/O-heavy, more natural in .NET/Node.js than browser |
 
 The Runtime layer is primarily a server-side concern. A TypeScript Runtime for Node.js is possible but not a priority — the .NET implementation serves the server-side use case, and the TS implementation serves the browser/edge use case where full pipeline execution isn't needed.
