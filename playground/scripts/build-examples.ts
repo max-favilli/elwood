@@ -96,6 +96,24 @@ const CATEGORIES: Record<string, string> = {
   '66-computed-keys': 'Objects',
   '67-benchmark-lazy-shortcircuit': 'Performance',
   '68-benchmark-50mb-complex': 'Performance',
+  '69-iterate-basic': 'Collection',
+  '70-iterate-state': 'Collection',
+  '71-takewhile': 'Collection',
+  '72-iterate-fibonacci': 'Collection',
+  '73-fromcsv': 'Format I/O',
+  '74-tocsv': 'Format I/O',
+  '75-fromtext': 'Format I/O',
+  '76-totext': 'Format I/O',
+  '77-fromcsv-no-headers': 'Format I/O',
+  '78-tocsv-always-quote': 'Format I/O',
+  '79-parsejson': 'Type Conversion',
+  '80-fromcsv-parsejson': 'Format I/O',
+  '81-fromcsv-file': 'Format I/O',
+  '82-fromtext-file': 'Format I/O',
+  '83-fromxml': 'Format I/O',
+  '84-toxml': 'Format I/O',
+  '85-fromxml-file': 'Format I/O',
+  '86-bracket-property-access': 'Basics',
 };
 
 function titleFromId(id: string): string {
@@ -133,17 +151,25 @@ const examples: Example[] = [];
 
 for (const dir of dirs) {
   const scriptPath = join(specDir, dir, 'script.elwood');
-  const inputPath = join(specDir, dir, 'input.json');
   const expectedPath = join(specDir, dir, 'expected.json');
   const explanationPath = join(specDir, dir, 'explanation.md');
 
   if (!existsSync(scriptPath)) continue;
 
+  // Find input file — support json, csv, txt, xml
+  const inputExtensions = ['.json', '.csv', '.txt', '.xml'];
+  const inputExt = inputExtensions.find(ext => existsSync(join(specDir, dir, `input${ext}`)));
+  const inputPath = inputExt ? join(specDir, dir, `input${inputExt}`) : null;
+
   const script = readFileSync(scriptPath, 'utf-8');
-  const input = existsSync(inputPath) ? readFileSync(inputPath, 'utf-8') : null;
+  const inputContent = inputPath ? readFileSync(inputPath, 'utf-8') : null;
+  // For non-JSON inputs, wrap the raw string as a JSON string value so the playground can use it
+  const input = inputContent !== null
+    ? (inputExt === '.json' ? inputContent : JSON.stringify(inputContent))
+    : null;
   const expected = existsSync(expectedPath) ? readFileSync(expectedPath, 'utf-8') : null;
   const explanation = existsSync(explanationPath) ? readFileSync(explanationPath, 'utf-8') : '';
-  const isBenchmark = !existsSync(inputPath) || !existsSync(expectedPath);
+  const isBenchmark = inputPath === null || !existsSync(expectedPath);
 
   examples.push({
     id: dir,
