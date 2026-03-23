@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-03-22 — Bracket property access
+
+Added `obj["propertyName"]` syntax for accessing properties with special characters (e.g., `@`-prefixed XML attributes).
+
+- `b["@id"]` — access XML attribute properties from `fromXml()` output
+- `obj[variable]` — dynamic property access with computed keys
+- Works in both .NET and TypeScript evaluators
+
+### Test cases added
+- `86-bracket-property-access` — XML attributes accessed via bracket notation
+
+### Files modified
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — EvaluateIndex: string index on objects
+- `ts/src/evaluator.ts` — evalIndex: string index on objects
+- `docs/syntax-reference.md` — bracket property access syntax
+
 ## 2026-03-22 — fromXml / toXml (Phase 2)
 
 Added XML format conversion — the last built-in format I/O pair.

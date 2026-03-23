@@ -686,6 +686,11 @@ public sealed class Evaluator
             return _factory.CreateArray(target.EnumerateArray());
 
         var index = Evaluate(idx.Index, current, env);
+
+        // String index on object → property access (e.g., obj["@id"])
+        if (index.Kind == ElwoodValueKind.String && target.Kind == ElwoodValueKind.Object)
+            return target.GetProperty(index.GetStringValue()!) ?? _factory.CreateNull();
+
         var i = (int)index.GetNumberValue();
         return target.EnumerateArray().ElementAtOrDefault(i) ?? _factory.CreateNull();
     }

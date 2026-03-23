@@ -11,6 +11,7 @@ Elwood is a functional JSON transformation DSL combining JSONPath navigation, KQ
 ```
 $                         Root of the input document
 $.field                   Property access
+$.obj["@attr"]            Bracket property access (special characters)
 $.nested.field            Nested property access
 $[0]                      Array index
 $[*]                      All array elements (wildcard)

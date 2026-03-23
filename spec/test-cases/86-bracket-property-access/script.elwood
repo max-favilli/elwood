@@ -1,0 +1,2 @@
+let catalog = $.xml.fromXml()
+return catalog.catalog.book | select b => { id: b["@id"], lang: b["@lang"], title: b.title }

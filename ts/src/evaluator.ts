@@ -511,8 +511,12 @@ function evalIterate(expr: import('./ast.js').FunctionCallExpression, current: u
 function evalIndex(expr: import('./ast.js').IndexExpression, current: unknown, scope: Scope): unknown {
   const target = evaluate(expr.target, current, scope);
   if (expr.index === null) return toArray(target);
-  const idx = evaluate(expr.index, current, scope) as number;
-  return toArray(target)[idx] ?? null;
+  const idx = evaluate(expr.index, current, scope);
+
+  // String index on object → property access (e.g., obj["@id"])
+  if (typeof idx === 'string' && isObject(target)) return (target as any)[idx] ?? null;
+
+  return toArray(target)[idx as number] ?? null;
 }
 
 function evalInterpolation(expr: import('./ast.js').InterpolatedStringExpression, current: unknown, scope: Scope): unknown {
