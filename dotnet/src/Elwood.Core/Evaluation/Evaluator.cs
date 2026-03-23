@@ -815,10 +815,14 @@ public sealed class Evaluator
                 target.Kind == ElwoodValueKind.Array ? target.GetArrayLength() : 1),
             "first" => target.Kind == ElwoodValueKind.Array
                 ? target.EnumerateArray().FirstOrDefault() ?? _factory.CreateNull()
-                : target,
+                : target.Kind == ElwoodValueKind.String && (target.GetStringValue()?.Length ?? 0) > 0
+                    ? _factory.CreateString(target.GetStringValue()![..1])
+                    : target,
             "last" => target.Kind == ElwoodValueKind.Array
                 ? target.EnumerateArray().LastOrDefault() ?? _factory.CreateNull()
-                : target,
+                : target.Kind == ElwoodValueKind.String && (target.GetStringValue()?.Length ?? 0) > 0
+                    ? _factory.CreateString(target.GetStringValue()![^1..])
+                    : target,
 
             "sum" => _factory.CreateNumber(target.EnumerateArray().Sum(i => i.GetNumberValue())),
             "min" => _factory.CreateNumber(target.EnumerateArray().Min(i => i.GetNumberValue())),

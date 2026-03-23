@@ -601,8 +601,8 @@ function callBuiltin(name: string, target: unknown, args: unknown[], _scope?: Sc
 
     // Collection
     case 'count': return isArray(target) ? target.length : 1;
-    case 'first': return isArray(target) ? target[0] ?? null : target;
-    case 'last': return isArray(target) ? target[target.length - 1] ?? null : target;
+    case 'first': return isArray(target) ? target[0] ?? null : typeof target === 'string' && target.length > 0 ? target[0] : target;
+    case 'last': return isArray(target) ? target[target.length - 1] ?? null : typeof target === 'string' && target.length > 0 ? target[target.length - 1] : target;
     case 'sum': return arr().reduce((a, b) => (a as number) + Number(b), 0);
     case 'min': return Math.min(...arr().map(Number));
     case 'max': return Math.max(...arr().map(Number));
