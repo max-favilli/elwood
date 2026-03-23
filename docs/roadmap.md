@@ -254,6 +254,7 @@ return products | select(p => {
 - [x] Built-in format functions: `fromCsv`, `toCsv`, `fromText`, `toText`
 - [x] Built-in format functions: `fromXml`, `toXml`
 - [x] CLI `--input-format` and `--output-format` flags (auto-detect from file extension, or explicit override)
+- [x] CLI integration tests (13 tests: eval, run, format detection, output conversion, stdin, error handling)
 - [x] Format converters — CSV:
   - [x] Configurable delimiter, headers, quote character
   - [x] `skipRows` — skip metadata/title rows before data
