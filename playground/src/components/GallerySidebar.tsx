@@ -8,15 +8,18 @@ interface Example {
   category: string;
   script: string;
   input: string | null;
+  inputFormat: 'json' | 'csv' | 'txt' | 'xml';
   description: string;
   explanation: string;
   isBenchmark: boolean;
 }
 
+export type InputFormat = 'json' | 'csv' | 'txt' | 'xml';
+
 interface GallerySidebarProps {
   open: boolean;
   onClose: () => void;
-  onSelect: (script: string, input: string) => void;
+  onSelect: (script: string, input: string, format: InputFormat) => void;
 }
 
 function getScriptPreview(script: string): string {
@@ -53,13 +56,13 @@ export function GallerySidebar({ open, onClose, onSelect }: GallerySidebarProps)
 
   const handleSelect = (ex: Example) => {
     if (ex.isBenchmark) return;
-    onSelect(ex.script, ex.input ?? '{}');
+    onSelect(ex.script, ex.input ?? '{}', ex.inputFormat ?? 'json');
     onClose();
   };
 
   const handleInfoLoad = () => {
     if (infoExample && !infoExample.isBenchmark) {
-      onSelect(infoExample.script, infoExample.input ?? '{}');
+      onSelect(infoExample.script, infoExample.input ?? '{}', infoExample.inputFormat ?? 'json');
       onClose();
     }
   };

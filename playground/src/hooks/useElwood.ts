@@ -27,18 +27,23 @@ export function useElwood(debounceMs = 300) {
   const [isRunning, setIsRunning] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout>>();
 
-  const run = useCallback(async (expression: string, inputJson: string) => {
+  const run = useCallback(async (expression: string, inputRaw: string, format: string = 'json') => {
     if (!expression.trim()) {
       setResult({ output: '', error: null, timeMs: 0, success: true });
       return;
     }
 
     let input: unknown;
-    try {
-      input = JSON.parse(inputJson);
-    } catch (e: any) {
-      setResult({ output: '', error: `Invalid input JSON: ${e.message}`, timeMs: 0, success: false });
-      return;
+    if (format === 'json') {
+      try {
+        input = JSON.parse(inputRaw);
+      } catch (e: any) {
+        setResult({ output: '', error: `Invalid input JSON: ${e.message}`, timeMs: 0, success: false });
+        return;
+      }
+    } else {
+      // CSV, TXT, XML — pass as raw string
+      input = inputRaw;
     }
 
     setIsRunning(true);
@@ -77,9 +82,9 @@ export function useElwood(debounceMs = 300) {
     }
   }, []);
 
-  const debouncedRun = useCallback((expression: string, inputJson: string) => {
+  const debouncedRun = useCallback((expression: string, inputRaw: string, format: string = 'json') => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => run(expression, inputJson), debounceMs);
+    timerRef.current = setTimeout(() => run(expression, inputRaw, format), debounceMs);
   }, [run, debounceMs]);
 
   // Cleanup

@@ -20,6 +20,7 @@ interface Example {
   category: string;
   script: string;
   input: string | null;
+  inputFormat: 'json' | 'csv' | 'txt' | 'xml';
   expected: string | null;
   description: string;
   explanation: string;
@@ -162,11 +163,8 @@ for (const dir of dirs) {
   const inputPath = inputExt ? join(specDir, dir, `input${inputExt}`) : null;
 
   const script = readFileSync(scriptPath, 'utf-8');
-  const inputContent = inputPath ? readFileSync(inputPath, 'utf-8') : null;
-  // For non-JSON inputs, wrap the raw string as a JSON string value so the playground can use it
-  const input = inputContent !== null
-    ? (inputExt === '.json' ? inputContent : JSON.stringify(inputContent))
-    : null;
+  const input = inputPath ? readFileSync(inputPath, 'utf-8') : null;
+  const inputFormat = (inputExt?.slice(1) ?? 'json') as 'json' | 'csv' | 'txt' | 'xml';
   const expected = existsSync(expectedPath) ? readFileSync(expectedPath, 'utf-8') : null;
   const explanation = existsSync(explanationPath) ? readFileSync(explanationPath, 'utf-8') : '';
   const isBenchmark = inputPath === null || !existsSync(expectedPath);
@@ -177,6 +175,7 @@ for (const dir of dirs) {
     category: CATEGORIES[dir] || 'Other',
     script,
     input,
+    inputFormat,
     expected,
     description: extractFirstParagraph(explanation),
     explanation,

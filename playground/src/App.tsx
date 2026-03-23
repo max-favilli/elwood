@@ -5,7 +5,7 @@ import { PanelHeader, PanelButton } from './components/PanelHeader';
 import { StatusBar } from './components/StatusBar';
 import { ErrorPanel } from './components/ErrorPanel';
 import { useElwood } from './hooks/useElwood';
-import { GallerySidebar } from './components/GallerySidebar';
+import { GallerySidebar, type InputFormat } from './components/GallerySidebar';
 import { ShareModal } from './components/ShareModal';
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string';
 import { registerElwoodLanguage, ELWOOD_LANGUAGE_ID } from './editor/elwood-language';
@@ -26,9 +26,39 @@ const DEFAULT_INPUT = JSON.stringify({
   ]
 }, null, 2);
 
+function formatXml(xml: string): string {
+  let formatted = '';
+  let indent = 0;
+  const lines = xml.replace(/>\s*</g, '>\n<').split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith('</')) indent = Math.max(0, indent - 1);
+    formatted += '  '.repeat(indent) + trimmed + '\n';
+    if (trimmed.startsWith('<') && !trimmed.startsWith('</') && !trimmed.startsWith('<?') &&
+        !trimmed.endsWith('/>') && !/<\/[^>]+>$/.test(trimmed)) indent++;
+  }
+  return formatted.trimEnd();
+}
+
+const FORMAT_LABELS: Record<string, string> = {
+  json: 'Input JSON',
+  csv: 'Input CSV',
+  txt: 'Input Text',
+  xml: 'Input XML',
+};
+
+const MONACO_LANGUAGES: Record<string, string> = {
+  json: 'json',
+  csv: 'plaintext',
+  txt: 'plaintext',
+  xml: 'xml',
+};
+
 function App() {
   const [expression, setExpression] = useState(DEFAULT_EXPRESSION);
   const [input, setInput] = useState(DEFAULT_INPUT);
+  const [inputFormat, setInputFormat] = useState<InputFormat>('json');
   const [exprHeight, setExprHeight] = useState(88);
   const { result, isRunning, run, debouncedRun } = useElwood();
   const [galleryOpen, setGalleryOpen] = useState(false);
@@ -40,24 +70,31 @@ function App() {
   const handleExprChange = useCallback((value: string | undefined) => {
     const v = value ?? '';
     setExpression(v);
-    debouncedRun(v, input);
-  }, [input, debouncedRun]);
+    debouncedRun(v, input, inputFormat);
+  }, [input, inputFormat, debouncedRun]);
 
   const handleInputChange = useCallback((value: string | undefined) => {
     const v = value ?? '';
     setInput(v);
-    debouncedRun(expression, v);
-  }, [expression, debouncedRun]);
+    debouncedRun(expression, v, inputFormat);
+  }, [expression, inputFormat, debouncedRun]);
 
-  const handleRun = useCallback(() => run(expression, input), [expression, input, run]);
+  const handleRun = useCallback(() => run(expression, input, inputFormat), [expression, input, inputFormat, run]);
 
-  const handleExampleSelect = useCallback((script: string, inputJson: string) => {
+  const handleExampleSelect = useCallback((script: string, rawInput: string, format: InputFormat) => {
     setExpression(script);
-    setInput(inputJson);
-    // Expand expression panel if script is multi-line
+    setInputFormat(format);
+    // For JSON, pretty-print; for XML, indent; for others, show raw
+    let displayInput = rawInput;
+    if (format === 'json') {
+      try { displayInput = JSON.stringify(JSON.parse(rawInput), null, 2); } catch { /* keep as-is */ }
+    } else if (format === 'xml') {
+      displayInput = formatXml(rawInput);
+    }
+    setInput(displayInput);
     const lineCount = script.split('\n').length;
     if (lineCount > 3) setExprHeight(Math.min(lineCount * 20 + 16, window.innerHeight * 0.4));
-    setTimeout(() => run(script, inputJson), 50);
+    setTimeout(() => run(script, displayInput, format), 50);
   }, [run]);
 
   // Keyboard shortcut: Ctrl+Enter / Cmd+Enter
@@ -94,11 +131,14 @@ function App() {
     if (file.size > 5 * 1024 * 1024) {
       alert('File is larger than 5MB. Large files may slow down the browser.');
     }
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+    const fmt = (['csv', 'txt', 'xml'].includes(ext) ? ext : 'json') as InputFormat;
+    setInputFormat(fmt);
     const reader = new FileReader();
     reader.onload = () => {
       const text = reader.result as string;
-      setInput(text);
-      debouncedRun(expression, text);
+      setInput(fmt === 'xml' ? formatXml(text) : text);
+      debouncedRun(expression, text, fmt);
     };
     reader.readAsText(file);
     e.target.value = '';
@@ -111,20 +151,25 @@ function App() {
     setDragging(false);
     const file = e.dataTransfer.files[0];
     if (!file) return;
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+    const fmt = (['csv', 'txt', 'xml'].includes(ext) ? ext : 'json') as InputFormat;
+    setInputFormat(fmt);
     const reader = new FileReader();
     reader.onload = () => {
       const text = reader.result as string;
-      setInput(text);
-      debouncedRun(expression, text);
+      setInput(fmt === 'xml' ? formatXml(text) : text);
+      debouncedRun(expression, text, fmt);
     };
     reader.readAsText(file);
   }, [expression, debouncedRun]);
 
   const handleFormat = useCallback(() => {
-    try {
-      setInput(JSON.stringify(JSON.parse(input), null, 2));
-    } catch { /* ignore */ }
-  }, [input]);
+    if (inputFormat === 'json') {
+      try { setInput(JSON.stringify(JSON.parse(input), null, 2)); } catch { /* ignore */ }
+    } else if (inputFormat === 'xml') {
+      setInput(formatXml(input));
+    }
+  }, [input, inputFormat]);
 
   const handleClear = useCallback(() => setExpression(''), []);
 
@@ -133,11 +178,11 @@ function App() {
   }, [result.output]);
 
   const handleShare = useCallback(() => {
-    const payload = JSON.stringify({ e: expression, i: input });
+    const payload = JSON.stringify({ e: expression, i: input, f: inputFormat });
     const compressed = compressToEncodedURIComponent(payload);
     const url = `${window.location.origin}${window.location.pathname}#data=${compressed}`;
     setShareUrl(url);
-  }, [expression, input]);
+  }, [expression, input, inputFormat]);
 
   // Load from URL on mount
   useState(() => {
@@ -146,10 +191,11 @@ function App() {
       const data = decompressFromEncodedURIComponent(hash.slice(6));
       if (data) {
         try {
-          const { e, i } = JSON.parse(data);
+          const { e, i, f } = JSON.parse(data);
           if (e) setExpression(e);
           if (i) setInput(i);
-          setTimeout(() => run(e, i), 100);
+          if (f) setInputFormat(f);
+          setTimeout(() => run(e, i, f || 'json'), 100);
         } catch { /* ignore */ }
       }
     }
@@ -211,24 +257,26 @@ function App() {
           onDrop={handleDrop}
         >
           <PanelHeader
-            title="Input JSON"
+            title={FORMAT_LABELS[inputFormat] || 'Input'}
             right={
               <>
                 <PanelButton onClick={handleLoadFile}>Load File</PanelButton>
-                <PanelButton onClick={handleFormat}>Format</PanelButton>
+                {(inputFormat === 'json' || inputFormat === 'xml') && (
+                  <PanelButton onClick={handleFormat}>Format</PanelButton>
+                )}
               </>
             }
           />
           <div className="flex-1 min-h-0">
             <Editor
-              defaultLanguage="json"
+              language={MONACO_LANGUAGES[inputFormat] || 'json'}
               theme="vs-dark"
               value={input}
               onChange={handleInputChange}
               options={monacoOptions}
             />
           </div>
-          <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleFileChange} />
+          <input ref={fileInputRef} type="file" accept=".json,.csv,.txt,.xml" className="hidden" onChange={handleFileChange} />
         </div>
 
         {/* Output panel */}
