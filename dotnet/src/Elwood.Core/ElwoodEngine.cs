@@ -1,6 +1,7 @@
 using Elwood.Core.Abstractions;
 using Elwood.Core.Diagnostics;
 using Elwood.Core.Evaluation;
+using Elwood.Core.Extensions;
 using Elwood.Core.Parsing;
 using Elwood.Core.Syntax;
 
@@ -12,11 +13,19 @@ namespace Elwood.Core;
 public sealed class ElwoodEngine
 {
     private readonly IElwoodValueFactory _factory;
+    private readonly ElwoodExtensionRegistry _extensions = new();
 
     public ElwoodEngine(IElwoodValueFactory factory)
     {
         _factory = factory;
     }
+
+    /// <summary>
+    /// Register a custom method provided by an extension package.
+    /// Extensions cannot override built-in methods.
+    /// </summary>
+    public void RegisterMethod(string name, ElwoodMethodHandler handler)
+        => _extensions.RegisterMethod(name, handler);
 
     /// <summary>
     /// Evaluate a single Elwood expression against input data.
@@ -41,7 +50,7 @@ public sealed class ElwoodEngine
             if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
                 return new ElwoodResult(null, diagnostics);
 
-            var evaluator = new Evaluator(_factory);
+            var evaluator = new Evaluator(_factory, _extensions);
             var env = new ElwoodEnvironment();
             env.Set("$root", input);
             var result = evaluator.Evaluate(ast, input, env);
@@ -89,7 +98,7 @@ public sealed class ElwoodEngine
             if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
                 return new ElwoodResult(null, diagnostics);
 
-            var evaluator = new Evaluator(_factory);
+            var evaluator = new Evaluator(_factory, _extensions);
             var result = evaluator.EvaluateScript(ast, input);
 
             return new ElwoodResult(result, diagnostics);

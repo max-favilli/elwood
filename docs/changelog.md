@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-03-23 — Extension API + XLSX support
+
+Added a plugin/extension system that allows optional packages to register custom methods, and used it to implement XLSX (Excel) support as the first extension.
+
+### Extension API
+- **.NET**: `ElwoodEngine.RegisterMethod(name, handler)` — extensions provide `ElwoodMethodHandler` delegates
+- **TypeScript**: `registerMethod(name, handler)` — global registry, extensions auto-register on import
+- Extensions cannot override built-in methods — the built-in switch runs first
+
+### XLSX Extension
+- **`Elwood.Xlsx`** (.NET) — NuGet package using `DocumentFormat.OpenXml`
+- **`@elwood-lang/xlsx`** (npm) — package using SheetJS (`xlsx`)
+- `fromXlsx(options?)` — parse base64-encoded XLSX → array of objects
+- `toXlsx(options?)` — array of objects → base64-encoded XLSX
+- Options: `headers` (bool), `sheet` (name or index)
+- Usage: `XlsxExtension.Register(engine)` (.NET) or `import '@elwood-lang/xlsx'` (TS)
+
+### Files created
+- `dotnet/src/Elwood.Core/Extensions/ElwoodExtensionRegistry.cs` — registry + delegate type
+- `dotnet/src/Elwood.Xlsx/` — .NET XLSX extension package
+- `ts/src/extensions.ts` — TS method registry
+- `ts-xlsx/` — npm XLSX extension package
+
+### Files modified
+- `dotnet/src/Elwood.Core/ElwoodEngine.cs` — holds registry, exposes RegisterMethod
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — extension fallback in method dispatch
+- `ts/src/evaluator.ts` — extension fallback in callBuiltin
+- `ts/src/index.ts` — re-exports registerMethod
+- `docs/syntax-reference.md` — fromXlsx/toXlsx docs
+
 ## 2026-03-22 — Bracket property access
 
 Added `obj["propertyName"]` syntax for accessing properties with special characters (e.g., `@`-prefixed XML attributes).

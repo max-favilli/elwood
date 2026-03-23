@@ -11,13 +11,15 @@ namespace Elwood.Core.Evaluation;
 public sealed class Evaluator
 {
     private readonly IElwoodValueFactory _factory;
+    private readonly Extensions.ElwoodExtensionRegistry? _extensions;
     private readonly List<ElwoodDiagnostic> _diagnostics = [];
 
     public IReadOnlyList<ElwoodDiagnostic> Diagnostics => _diagnostics;
 
-    public Evaluator(IElwoodValueFactory factory)
+    public Evaluator(IElwoodValueFactory factory, Extensions.ElwoodExtensionRegistry? extensions = null)
     {
         _factory = factory;
+        _extensions = extensions;
     }
 
     public IElwoodValue EvaluateScript(ScriptNode script, IElwoodValue root)
@@ -881,10 +883,18 @@ public sealed class Evaluator
                 System.Globalization.CultureInfo.InvariantCulture)),
             "toUnixTimeSeconds" => EvaluateToUnixTimeSeconds(target, args),
 
-            _ => throw new ElwoodEvaluationException(
-                $"Unknown method '{name}'.", span,
-                $"Available methods: toLower, toUpper, trim, length, contains, replace, substring, split, count, toString, toNumber, round, floor, ceiling, abs, now")
+            _ => CallExtensionOrThrow(name, target, args, span)
         };
+    }
+
+    private IElwoodValue CallExtensionOrThrow(string name, IElwoodValue target, List<IElwoodValue> args, SourceSpan span)
+    {
+        if (_extensions is not null && _extensions.TryGetMethod(name, out var handler))
+            return handler!(target, args, _factory);
+
+        throw new ElwoodEvaluationException(
+            $"Unknown method '{name}'.", span,
+            $"Available methods: toLower, toUpper, trim, length, contains, replace, substring, split, count, toString, toNumber, round, floor, ceiling, abs, now");
     }
 
     // ── Format I/O ──

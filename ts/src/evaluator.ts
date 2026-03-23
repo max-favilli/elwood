@@ -3,6 +3,7 @@ import type {
   MatchArm, InterpolationPart, JoinMode, LambdaExpression,
 } from './ast.js';
 import { parseExpression } from './parser.js';
+import { getExtensionMethod } from './extensions.js';
 import { Scope } from './scope.js';
 
 // ── Helpers ──
@@ -671,7 +672,11 @@ function callBuiltin(name: string, target: unknown, args: unknown[], _scope?: Sc
     case 'hash': return evalHash(str(), args);
     case 'rsaSign': return evalRsaSign(target, args);
 
-    default: throw new Error(`Unknown method '${name}'.`);
+    default: {
+      const ext = getExtensionMethod(name);
+      if (ext) return ext(target, args);
+      throw new Error(`Unknown method '${name}'.`);
+    }
   }
 }
 

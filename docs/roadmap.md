@@ -262,7 +262,8 @@ return products | select(p => {
   - [x] `alwaysQuote` — force-quote all fields in toCsv output
 - [x] Format converters — Text: line splitting/joining with configurable delimiter
 - [x] Format converters — XML (attributes → `@` prefix, repeated elements → arrays, namespace stripping)
-- [ ] Format converters — XLSX (sheet selection, header row) — via separate package to keep Core lightweight
+- [x] Format converters — XLSX (sheet selection, header row) — via separate extension packages (`Elwood.Xlsx`, `@elwood-lang/xlsx`)
+- [x] Extension/plugin API: `RegisterMethod` (.NET), `registerMethod` (TS) for optional packages
 - [x] Multi-format test inputs: test runners support `input.csv`, `input.txt`, `input.xml`
 - [x] Parser fix: `$.method()` resolves correctly when `$` is a non-object value
 - [x] `.parseJson()` general-purpose method + `fromCsv({ parseJson: true })` convenience option
@@ -417,6 +418,38 @@ Rule: **static config → plain YAML. Simple data reference → inline `$.field`
 
 ---
 
+## Phase 5 — Elwood DB
+
+**Goal:** A JSON database where you store documents and query them with Elwood. No predefined schema, no document size limits. PostgreSQL as the storage backend.
+
+**Detailed design:** See [`docs/architecture-vision.md`](architecture-vision.md) Phase 5 Vision section.
+
+### What makes it unique
+- **Elwood as the native query language** — the same language for querying and transforming, no context switch
+- **No document size limits** — automatic splitting handles 100MB+ documents
+- **Schema-on-write** — define structure when storing, not upfront
+- **PostgreSQL backend** — we build a query translation layer, not a database engine
+
+### Storage
+- Fixed schema: 2 tables (`collections` + `chunks`), no dynamic table creation
+- Large documents are split along a configured path (e.g., `$.orders[*]` → one row per order)
+- PostgreSQL JSONB indexing (GIN + expression indexes) handles query performance
+- Elwood queries translate to SQL, with non-SQL operations (`.toUpper()`, complex `select`) executed in Elwood on the result set
+
+### Tasks
+- [ ] `Elwood.Db` project (separate repo: `elwood-db`)
+- [ ] PostgreSQL schema (collections + chunks tables)
+- [ ] Collection management (`elwood db create`, `elwood db drop`)
+- [ ] Document storage with automatic splitting
+- [ ] Index management (translate user-defined paths to PostgreSQL expression indexes)
+- [ ] Query translation: Elwood `where` → SQL `WHERE`, `take`/`skip` → `LIMIT`/`OFFSET`, `orderBy` → `ORDER BY`
+- [ ] Aggregation push-down (`count`, `sum`, `min`, `max` → SQL)
+- [ ] CLI integration: `elwood db query`, `elwood db store`
+- [ ] REPL integration: `:db connect`, `:db use`
+- [ ] Optional SQLite backend for embedded/dev use
+
+---
+
 ## Execution Order
 
 ```
@@ -433,9 +466,12 @@ Phase 2b      Performance — compiled mode (Expression Trees / code generation)
 Phase 3       Integration pipeline configuration (Elwood Runtime + Executors)
    ↓
 Phase 4       IDE support, developer tools, ecosystem
+   ↓
+Phase 5       Elwood DB — JSON database with Elwood queries (separate repo)
 ```
 
 Phases 2b and 4 span both .NET and TypeScript implementations.
+Phase 5 is a separate project building on Elwood Core.
 
 ## Adoption Strategy
 
@@ -448,6 +484,7 @@ Elwood is designed for **incremental adoption**:
 5. **Phase 2b**: Compiled mode. Near-native performance for production workloads.
 6. **Phase 3**: Integration pipelines. YAML defines sources, transforms, and destinations. Pluggable executors run them.
 7. **Phase 4**: IDE support, developer tools, and community ecosystem.
+8. **Phase 5**: Elwood DB. Store JSON, query with Elwood. PostgreSQL backend, no size limits.
 
 Each phase is independently useful. No phase requires adopting a later one.
 

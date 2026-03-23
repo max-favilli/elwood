@@ -5,6 +5,7 @@
     <Project Path="src/Elwood.Core/Elwood.Core.csproj" />
     <Project Path="src/Elwood.Json/Elwood.Json.csproj" />
     <Project Path="src/Elwood.Newtonsoft/Elwood.Newtonsoft.csproj" />
+    <Project Path="src/Elwood.Xlsx/Elwood.Xlsx.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Elwood.Core.Tests/Elwood.Core.Tests.csproj" />

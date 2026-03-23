@@ -13,6 +13,8 @@ export { TokenKind } from './token.js';
 export type { Token, SourceSpan } from './token.js';
 export type { ElwoodExpression, ScriptNode } from './ast.js';
 export type { Diagnostic } from './lexer.js';
+export { registerMethod } from './extensions.js';
+export type { ElwoodMethodHandler } from './extensions.js';
 
 export interface ElwoodResult {
   value: unknown;

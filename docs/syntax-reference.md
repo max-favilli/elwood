@@ -323,6 +323,8 @@ Methods are called with dot notation on values. Most also work as pipe operators
 | `.toCsv(options?)` | Array of objects → CSV string | `delimiter`, `headers`, `alwaysQuote` |
 | `.fromXml(options?)` | Parse XML string → JSON object | `attributePrefix` (default `@`), `stripNamespaces` (default `true`) |
 | `.toXml(options?)` | JSON object → XML string | `attributePrefix`, `rootElement`, `declaration` (default `true`) |
+| `.fromXlsx(options?)` | Parse XLSX (base64) → array of objects | `headers`, `sheet` (name or index). *Extension: `Elwood.Xlsx` / `@elwood-lang/xlsx`* |
+| `.toXlsx(options?)` | Array of objects → XLSX (base64) | `headers`, `sheet` (name). *Extension: `Elwood.Xlsx` / `@elwood-lang/xlsx`* |
 | `.fromText(options?)` | Split text into array of lines | `delimiter` (default `\n`) |
 | `.toText(options?)` | Join array into text | `delimiter` (default `\n`) |
 
