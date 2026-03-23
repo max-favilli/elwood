@@ -1,34 +1,29 @@
-# 23 — First Character with toCharArray
+# 23 — First/Last Character of Strings
 
-## Expression
+## Script
 ```
-$.result[*] | select r => r.name.first.toCharArray().first()
-```
-
-## Traditional JSONPath equivalent
-```
-$.result[*].name['first'].tochararray().select($[*].first())
+let names = $.result[*] | select r => r.name.first
+return {
+  viaCharArray: names | select n => n.toCharArray().first(),
+  firstDirect: names | select n => n.first(),
+  lastDirect: names | select n => n.last()
+}
 ```
 
 ## Explanation
-- `$.result[*]` — all items in the result array
-- `| select r =>` — transform each item
-- `r.name.first` — navigate to the `first` **property** of the `name` object (e.g. `"Christa"`)
-- `.toCharArray()` — convert the string to an array of single characters: `["C", "h", "r", "i", "s", "t", "a"]`
-- `.first()` — get the first element of the array: `"C"`
+Three ways to extract characters from strings:
 
-Result: `["C", "S", "K", "B", "D"]`
+1. **`n.toCharArray().first()`** — explicit: convert to character array, then take first element
+2. **`n.first()`** — direct: `.first()` on a string returns its first character
+3. **`n.last()`** — direct: `.last()` on a string returns its last character
+
+All three produce the same type of result (single-character strings).
+
+The names from the input are: `Christa`, `Serenity`, `Kim`, `Bulah`, `Dannie`.
+- First characters: `C`, `S`, `K`, `B`, `D`
+- Last characters: `a`, `y`, `m`, `h`, `e`
 
 ### `.first` (property) vs `.first()` (method)
-This expression demonstrates an important Elwood distinction:
+This test also demonstrates an important Elwood distinction:
 - `r.name.first` — **no parentheses** → property access (reads the `first` key from the `name` object)
-- `.first()` — **with parentheses** → method call (gets the first element of an array)
-
-The parentheses `()` always disambiguate. If it looks like a function call, it's a function call.
-
-### Alternative approach
-You could also use `.substring(0, 1)` for this specific case:
-```
-$.result[*] | select r => r.name.first.substring(0, 1)
-```
-But `toCharArray()` is useful whenever you need to work with individual characters — splitting, filtering, or transforming them.
+- `n.first()` — **with parentheses** → method call (gets the first character of a string, or first element of an array)

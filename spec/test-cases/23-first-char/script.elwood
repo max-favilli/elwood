@@ -1,1 +1,6 @@
-$.result[*] | select r => r.name.first.toCharArray().first()
+let names = $.result[*] | select r => r.name.first
+return {
+  viaCharArray: names | select n => n.toCharArray().first(),
+  firstDirect: names | select n => n.first(),
+  lastDirect: names | select n => n.last()
+}

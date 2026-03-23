@@ -1,1 +1,5 @@
-["C", "S", "K", "B", "D"]
+{
+  "viaCharArray": ["C", "S", "K", "B", "D"],
+  "firstDirect": ["C", "S", "K", "B", "D"],
+  "lastDirect": ["a", "y", "m", "h", "e"]
+}
