@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Elwood.Core;
+using Elwood.Core.Abstractions;
 using Elwood.Json;
 
 var factory = JsonNodeValueFactory.Instance;
@@ -32,22 +33,24 @@ static int RunEval(string[] args, ElwoodEngine engine, JsonNodeValueFactory fact
 {
     if (args.Length < 2)
     {
-        Console.Error.WriteLine("Usage: elwood eval <expression> [--input <file>] [--json <inline-json>]");
+        Console.Error.WriteLine("Usage: elwood eval <expression> [--input <file>] [--input-format csv|txt|xml] [--output-format csv|txt|xml]");
         return 1;
     }
 
     var expression = args[1];
-    var input = GetInputJson(args, factory);
+    var inputFormat = GetFlag(args, "--input-format") ?? GetFlag(args, "-if") ?? DetectInputFormat(args);
+    var outputFormat = GetFlag(args, "--output-format") ?? GetFlag(args, "-of");
+    var input = GetInput(args, factory, inputFormat);
     var result = engine.Evaluate(expression, input);
 
-    return PrintResult(result);
+    return PrintResult(result, factory, outputFormat);
 }
 
 static int RunScript(string[] args, ElwoodEngine engine, JsonNodeValueFactory factory)
 {
     if (args.Length < 2)
     {
-        Console.Error.WriteLine("Usage: elwood run <script-file> [--input <file>] [--json <inline-json>]");
+        Console.Error.WriteLine("Usage: elwood run <script-file> [--input <file>] [--input-format csv|txt|xml] [--output-format csv|txt|xml]");
         return 1;
     }
 
@@ -59,17 +62,19 @@ static int RunScript(string[] args, ElwoodEngine engine, JsonNodeValueFactory fa
     }
 
     var script = File.ReadAllText(scriptPath);
-    var input = GetInputJson(args, factory);
+    var inputFormat = GetFlag(args, "--input-format") ?? GetFlag(args, "-if") ?? DetectInputFormat(args);
+    var outputFormat = GetFlag(args, "--output-format") ?? GetFlag(args, "-of");
+    var input = GetInput(args, factory, inputFormat);
     var result = engine.Execute(script, input);
 
-    return PrintResult(result);
+    return PrintResult(result, factory, outputFormat);
 }
 
 static void RunRepl(ElwoodEngine engine, JsonNodeValueFactory factory)
 {
     Console.WriteLine("Elwood REPL — interactive mode");
     Console.WriteLine("Commands:");
-    Console.WriteLine("  :load <file>    Load JSON input from file");
+    Console.WriteLine("  :load <file>    Load input from file (auto-detects format from extension)");
     Console.WriteLine("  :json <json>    Set inline JSON as input");
     Console.WriteLine("  :input          Show current input");
     Console.WriteLine("  :script         Toggle multi-line script mode (let bindings + return)");
@@ -105,9 +110,14 @@ static void RunRepl(ElwoodEngine engine, JsonNodeValueFactory factory)
                     if (parts.Length < 2) { Console.WriteLine("Usage: :load <file>"); break; }
                     try
                     {
-                        var json = File.ReadAllText(parts[1].Trim());
-                        input = factory.Parse(json);
-                        Console.WriteLine($"Loaded {parts[1].Trim()} ({json.Length} chars)");
+                        var path = parts[1].Trim();
+                        var ext = Path.GetExtension(path).ToLowerInvariant();
+                        var content = File.ReadAllText(path);
+                        input = ext is ".csv" or ".txt" or ".xml"
+                            ? factory.CreateString(content)
+                            : factory.Parse(content);
+                        var formatLabel = ext switch { ".csv" => "CSV", ".txt" => "Text", ".xml" => "XML", _ => "JSON" };
+                        Console.WriteLine($"Loaded {path} as {formatLabel} ({content.Length} chars)");
                     }
                     catch (Exception ex)
                     {
@@ -204,7 +214,7 @@ static void PrintResultRepl(ElwoodResult result)
     }
 }
 
-static int PrintResult(ElwoodResult result)
+static int PrintResult(ElwoodResult result, JsonNodeValueFactory factory, string? outputFormat)
 {
     if (!result.Success)
     {
@@ -213,20 +223,73 @@ static int PrintResult(ElwoodResult result)
         return 1;
     }
 
-    if (result.Value is JsonNodeValue jnv)
+    var value = result.Value;
+
+    // If output format is specified, convert the result
+    if (outputFormat is not null && value is not null)
+    {
+        var engine = new ElwoodEngine(factory);
+        var conversionExpr = outputFormat.ToLower() switch
+        {
+            "csv" => "$.toCsv()",
+            "xml" => "$.toXml()",
+            "text" or "txt" => "$.toText()",
+            _ => null
+        };
+
+        if (conversionExpr is not null)
+        {
+            var converted = engine.Evaluate(conversionExpr, value);
+            if (converted.Success && converted.Value is not null)
+            {
+                Console.WriteLine(converted.Value.GetStringValue() ?? "");
+                return 0;
+            }
+        }
+    }
+
+    // Default: output as JSON
+    if (value is JsonNodeValue jnv)
     {
         var node = jnv.Node;
         Console.WriteLine(node?.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) ?? "null");
     }
     else
     {
-        Console.WriteLine(result.Value?.GetStringValue() ?? "null");
+        Console.WriteLine(value?.GetStringValue() ?? "null");
     }
     return 0;
 }
 
-static Elwood.Core.Abstractions.IElwoodValue GetInputJson(string[] args, JsonNodeValueFactory factory)
+static string? GetFlag(string[] args, string flagName)
 {
+    for (var i = 0; i < args.Length - 1; i++)
+    {
+        if (args[i].Equals(flagName, StringComparison.OrdinalIgnoreCase))
+            return args[i + 1];
+    }
+    return null;
+}
+
+/// <summary>
+/// Auto-detect input format from --input file extension.
+/// </summary>
+static string DetectInputFormat(string[] args)
+{
+    var inputPath = GetFlag(args, "--input") ?? GetFlag(args, "-i");
+    if (inputPath is null) return "json";
+    return Path.GetExtension(inputPath).ToLowerInvariant() switch
+    {
+        ".csv" => "csv",
+        ".txt" => "txt",
+        ".xml" => "xml",
+        _ => "json"
+    };
+}
+
+static IElwoodValue GetInput(string[] args, JsonNodeValueFactory factory, string format)
+{
+    // Check for --input / -i flag
     for (int i = 0; i < args.Length - 1; i++)
     {
         if (args[i] == "--input" || args[i] == "-i")
@@ -237,7 +300,10 @@ static Elwood.Core.Abstractions.IElwoodValue GetInputJson(string[] args, JsonNod
                 Console.Error.WriteLine($"Input file not found: {path}");
                 Environment.Exit(1);
             }
-            return factory.Parse(File.ReadAllText(path));
+            var content = File.ReadAllText(path);
+            return format is "csv" or "txt" or "xml"
+                ? factory.CreateString(content)
+                : factory.Parse(content);
         }
         if (args[i] == "--json" || args[i] == "-j")
         {
@@ -250,7 +316,11 @@ static Elwood.Core.Abstractions.IElwoodValue GetInputJson(string[] args, JsonNod
     {
         var stdin = Console.In.ReadToEnd();
         if (!string.IsNullOrWhiteSpace(stdin))
-            return factory.Parse(stdin);
+        {
+            return format is "csv" or "txt" or "xml"
+                ? factory.CreateString(stdin)
+                : factory.Parse(stdin);
+        }
     }
 
     return factory.Parse("{}");
@@ -262,11 +332,19 @@ static void PrintUsage()
     Console.WriteLine();
     Console.WriteLine("Usage:");
     Console.WriteLine("  elwood                                    Start REPL");
-    Console.WriteLine("  elwood eval <expr> [--input file.json]    Evaluate expression");
-    Console.WriteLine("  elwood run <script.elwood> [--input file] Execute script");
+    Console.WriteLine("  elwood eval <expr> [options]              Evaluate expression");
+    Console.WriteLine("  elwood run <script.elwood> [options]      Execute script");
+    Console.WriteLine();
+    Console.WriteLine("Options:");
+    Console.WriteLine("  --input <file>, -i        Input file (format auto-detected from extension)");
+    Console.WriteLine("  --json <json>, -j         Inline JSON input");
+    Console.WriteLine("  --input-format <fmt>, -if Override input format: json, csv, txt, xml");
+    Console.WriteLine("  --output-format <fmt>, -of Convert output: csv, txt, xml");
     Console.WriteLine();
     Console.WriteLine("Examples:");
     Console.WriteLine("  elwood eval \"$.users[*] | where u => u.active\" --input data.json");
+    Console.WriteLine("  elwood run transform.elwood --input data.csv");
+    Console.WriteLine("  elwood run transform.elwood --input data.json --output-format csv");
+    Console.WriteLine("  cat data.csv | elwood eval \"$.fromCsv()\" --input-format csv");
     Console.WriteLine("  echo '{\"x\":1}' | elwood eval \"$.x + 1\"");
-    Console.WriteLine("  elwood run transform.elwood --input payload.json");
 }

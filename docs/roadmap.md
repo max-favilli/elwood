@@ -253,7 +253,7 @@ return products | select(p => {
 ### Tasks
 - [x] Built-in format functions: `fromCsv`, `toCsv`, `fromText`, `toText`
 - [x] Built-in format functions: `fromXml`, `toXml`
-- [ ] CLI `--input-format` and `--output-format` flags (sugar for wrapping script in fromX/toX)
+- [x] CLI `--input-format` and `--output-format` flags (auto-detect from file extension, or explicit override)
 - [x] Format converters — CSV:
   - [x] Configurable delimiter, headers, quote character
   - [x] `skipRows` — skip metadata/title rows before data
@@ -320,7 +320,7 @@ Real-world integration configs embed complex expressions in many YAML values —
 - Filters (`where`, `in`)
 - Multi-line logic
 
-**Threshold rule:** simple `$.field` or short `` `{$.field}` `` stays inline. Anything with `|` or `.method()` chains goes in an external `.elwood` file.
+**Guideline (not enforced):** simple `$.field`, short interpolation, or brief expressions stay inline. Complex logic with multiple pipes, conditionals, or long method chains goes in an external `.elwood` file. This is a recommendation — short pipes like `$.items[*] | take(5)` are fine inline. A future `elwood validate` command could warn (not error) when inline expressions exceed a complexity threshold.
 
 ### Example
 
@@ -382,7 +382,7 @@ External scripts are **reusable** — the same `output-id.elwood` and `filter-re
 | `concurrency: 100` | `` endpoint: /api/{$.category} `` | `map: transform.elwood` |
 | `container: output` | `filename: /{$.code}.json` | `filename: build-path.elwood` |
 
-Rule: **static config → plain YAML. Simple data reference → inline `$.field`. Anything with logic → external `.elwood` file.**
+Guideline: **static config → plain YAML. Simple expressions → inline. Complex logic → external `.elwood` file.** This is a best practice, not enforced. Short inline pipes are fine when readable.
 
 ### Tasks
 - [ ] Define integration YAML schema (sources, outputs, destinations, join, notifications)
@@ -459,7 +459,7 @@ Phase 1b  ✅  Lazy evaluation (.NET) → repo restructure → TypeScript port
    ↓
 Phase 1c  ✅  Publish everything (GitHub, NuGet, npm, CI, Playground, API container)
    ↓
-Phase 2   🔧  Multi-format I/O (fromCsv, toXml, etc.) + script-based maps
+Phase 2   ✅  Multi-format I/O (fromCsv, toXml, etc.) + script-based maps
    ↓
 Phase 2b      Performance — compiled mode (Expression Trees / code generation)
    ↓
@@ -480,7 +480,7 @@ Elwood is designed for **incremental adoption**:
 1. **Phase 1** (done): Standalone transformation engine. Use via CLI or .NET library.
 2. **Phase 1b** (done): Cross-platform reach. Use in browsers, Node.js, edge runtimes.
 3. **Phase 1c** (done): Open-source launch. Available via NuGet, npm, browser playground, and self-hosted API container.
-4. **Phase 2** (in progress): Multi-format I/O. CSV and Text complete. XML next.
+4. **Phase 2** (done): Multi-format I/O. All formats complete. Extension API for XLSX. CLI format flags.
 5. **Phase 2b**: Compiled mode. Near-native performance for production workloads.
 6. **Phase 3**: Integration pipelines. YAML defines sources, transforms, and destinations. Pluggable executors run them.
 7. **Phase 4**: IDE support, developer tools, and community ecosystem.

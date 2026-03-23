@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-03-23 — CLI format flags (Phase 2 complete)
+
+Added `--input-format` and `--output-format` flags to the CLI, completing Phase 2.
+
+- `--input-format csv|txt|xml` — override input format (auto-detected from file extension by default)
+- `--output-format csv|txt|xml` — convert output to the specified format
+- `-if` / `-of` short forms
+- REPL `:load` auto-detects format from file extension
+- Stdin piping respects `--input-format`
+
+### Examples
+```bash
+elwood run transform.elwood --input data.csv
+elwood eval "$.fromCsv() | select r => r.name" --input data.csv --output-format csv
+cat data.xml | elwood eval "$.fromXml().orders" --input-format xml
+```
+
+### Files modified
+- `dotnet/src/Elwood.Cli/Program.cs` — full rewrite of input/output handling
+
 ## 2026-03-23 — Extension API + XLSX support
 
 Added a plugin/extension system that allows optional packages to register custom methods, and used it to implement XLSX (Excel) support as the first extension.
