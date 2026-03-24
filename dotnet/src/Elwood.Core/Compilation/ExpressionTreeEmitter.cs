@@ -86,6 +86,63 @@ public sealed class ExpressionTreeEmitter
         };
     }
 
+    /// <summary>
+    /// Emit an expression that evaluates to bool directly — avoids the CreateBool/IsTruthy round-trip.
+    /// Used for where predicates and if conditions.
+    /// </summary>
+    public Expr? TryEmitAsBool(ElwoodExpression node, Expr current)
+    {
+        return node switch
+        {
+            Syntax.BinaryExpression bin => EmitBinaryAsBool(bin, current),
+            Syntax.UnaryExpression { Operator: UnaryOperator.Not } un =>
+                Negate(TryEmitAsBool(un.Operand, current)),
+            LiteralExpression { Value: bool b } => Expr.Constant(b),
+            // For anything else, fall back: emit as IElwoodValue then IsTruthy
+            _ => WrapWithIsTruthy(TryEmit(node, current))
+        };
+    }
+
+    private static Expr? Negate(Expr? inner)
+        => inner is null ? null : Expr.Not(inner);
+
+    private static Expr? WrapWithIsTruthy(Expr? inner)
+        => inner is null ? null : Expr.Call(_isTruthy, inner);
+
+    private Expr? EmitBinaryAsBool(Syntax.BinaryExpression bin, Expr current)
+    {
+        // For logical operators, stay in bool domain
+        if (bin.Operator == BinaryOperator.And)
+        {
+            var left = TryEmitAsBool(bin.Left, current);
+            var right = TryEmitAsBool(bin.Right, current);
+            return left is null || right is null ? null : Expr.AndAlso(left, right);
+        }
+        if (bin.Operator == BinaryOperator.Or)
+        {
+            var left = TryEmitAsBool(bin.Left, current);
+            var right = TryEmitAsBool(bin.Right, current);
+            return left is null || right is null ? null : Expr.OrElse(left, right);
+        }
+
+        // For comparisons, emit IElwoodValue operands but return bool directly
+        var leftVal = TryEmit(bin.Left, current);
+        var rightVal = TryEmit(bin.Right, current);
+        if (leftVal is null || rightVal is null) return null;
+
+        return bin.Operator switch
+        {
+            BinaryOperator.Equal => Expr.Call(_valuesEqual, leftVal, rightVal),
+            BinaryOperator.NotEqual => Expr.Not(Expr.Call(_valuesEqual, leftVal, rightVal)),
+            BinaryOperator.GreaterThan => Expr.GreaterThan(Expr.Call(_compareValues, leftVal, rightVal), Expr.Constant(0)),
+            BinaryOperator.GreaterThanOrEqual => Expr.GreaterThanOrEqual(Expr.Call(_compareValues, leftVal, rightVal), Expr.Constant(0)),
+            BinaryOperator.LessThan => Expr.LessThan(Expr.Call(_compareValues, leftVal, rightVal), Expr.Constant(0)),
+            BinaryOperator.LessThanOrEqual => Expr.LessThanOrEqual(Expr.Call(_compareValues, leftVal, rightVal), Expr.Constant(0)),
+            // Arithmetic comparisons don't return bool — fall back
+            _ => WrapWithIsTruthy(TryEmit(bin, current))
+        };
+    }
+
     private Expr EmitLiteral(LiteralExpression lit)
     {
         return lit.Value switch
@@ -254,6 +311,11 @@ public sealed class ExpressionTreeEmitter
         var source = TryEmit(pipe.Source, current);
         if (source is null) return null;
 
+        // TODO: fused loop optimization deferred — scope handling in where+select needs work
+        // var fused = TryEmitFusedLoop(pipe.Operations, source, current);
+        // if (fused is not null) return fused;
+
+        // Fallback: chain operators
         Expr result = source;
         foreach (var op in pipe.Operations)
         {
@@ -262,6 +324,165 @@ public sealed class ExpressionTreeEmitter
             result = next;
         }
         return result;
+    }
+
+    /// <summary>
+    /// Fuse consecutive where/select/take into a single for loop.
+    /// Eliminates LINQ overhead, delegate invocations, and intermediate collections.
+    /// </summary>
+    private Expr? TryEmitFusedLoop(IReadOnlyList<PipeOperation> ops, Expr source, Expr outerCurrent)
+    {
+        // Only fuse simple patterns: where + select (optionally with take)
+        // Don't fuse aggregates with predicates, or complex patterns
+        if (ops.Count == 0 || ops.Count > 3) return null;
+        if (!ops.All(o => o is WhereOperation or SelectOperation or SliceOperation { Kind: "take" }))
+            return null;
+        // Must have at least one where or select
+        if (!ops.Any(o => o is WhereOperation or SelectOperation))
+            return null;
+
+        // Extract where predicates, select projection, take limit
+        var wheres = new List<(string param, ElwoodExpression body)>();
+        (string param, ElwoodExpression body)? selectProj = null;
+        ElwoodExpression? takeLimit = null;
+
+        foreach (var op in ops)
+        {
+            switch (op)
+            {
+                case WhereOperation w:
+                    var (wp, wb) = ExtractLambda(w.Predicate);
+                    if (wp is null) return null;
+                    wheres.Add((wp, wb!));
+                    break;
+                case SelectOperation s:
+                    if (selectProj is not null) return null; // Multiple selects — don't fuse
+                    var (sp, sb) = ExtractLambda(s.Projection);
+                    if (sp is null) return null;
+                    selectProj = (sp, sb!);
+                    break;
+                case SliceOperation { Kind: "take" } t:
+                    takeLimit = t.Count;
+                    break;
+                default:
+                    return null;
+            }
+        }
+
+        // Build the fused loop
+        var resultList = Expr.Variable(typeof(List<IElwoodValue>), "result");
+        var enumerator = Expr.Variable(typeof(IEnumerator<IElwoodValue>), "enumerator");
+        var itemVar = Expr.Variable(typeof(IElwoodValue), "item");
+        var countVar = Expr.Variable(typeof(int), "count");
+        var breakLabel = Expr.Label("break");
+        var continueLabel = Expr.Label("continue");
+
+        // The lambda parameter name — use the first where's param, or select's, or "item"
+        var paramName = wheres.Count > 0 ? wheres[0].param :
+                       selectProj?.param ?? "item";
+
+        var childEmitter = new ExpressionTreeEmitter(this, paramName, itemVar);
+
+        // Build predicate: all where clauses ANDed together, as direct bool
+        Expr predicate = Expr.Constant(true);
+        foreach (var (_, body) in wheres)
+        {
+            var boolExpr = childEmitter.TryEmitAsBool(body, itemVar);
+            if (boolExpr is null) return null;
+            predicate = predicate.Type == typeof(bool) && predicate is ConstantExpression { Value: true }
+                ? boolExpr
+                : Expr.AndAlso(predicate, boolExpr);
+        }
+
+        // Build projection
+        Expr? projection = null;
+        if (selectProj is not null)
+        {
+            // Re-create child emitter with correct param name
+            var selectEmitter = new ExpressionTreeEmitter(this, selectProj.Value.param, itemVar);
+            projection = selectEmitter.TryEmit(selectProj.Value.body, itemVar);
+            if (projection is null) return null;
+        }
+
+        // Take limit expression
+        Expr? limitExpr = null;
+        if (takeLimit is not null)
+        {
+            var limitVal = TryEmit(takeLimit, outerCurrent);
+            if (limitVal is null) return null;
+            limitExpr = Expr.Convert(Expr.Call(limitVal, _getNumberValue), typeof(int));
+        }
+
+        // Build the loop body
+        var loopBody = new List<Expr>();
+
+        // item = enumerator.Current
+        loopBody.Add(Expr.Assign(itemVar,
+            Expr.Property(enumerator, nameof(IEnumerator<IElwoodValue>.Current))));
+
+        // if (!predicate) continue
+        if (predicate is not ConstantExpression { Value: true })
+        {
+            loopBody.Add(Expr.IfThen(Expr.Not(predicate),
+                Expr.Goto(continueLabel)));
+        }
+
+        // result.Add(projection ?? item)
+        loopBody.Add(Expr.Call(resultList, typeof(List<IElwoodValue>).GetMethod("Add")!,
+            projection ?? itemVar));
+
+        // count++
+        loopBody.Add(Expr.PostIncrementAssign(countVar));
+
+        // if (count >= limit) break
+        if (limitExpr is not null)
+        {
+            loopBody.Add(Expr.IfThen(
+                Expr.GreaterThanOrEqual(countVar, limitExpr),
+                Expr.Break(breakLabel)));
+        }
+
+        // The full loop
+        var moveNext = typeof(System.Collections.IEnumerator).GetMethod("MoveNext")!;
+        var disposeMethod = typeof(IDisposable).GetMethod("Dispose")!;
+
+        var loop = Expr.Block(
+            // while (enumerator.MoveNext()) { ...body... continue: }
+            Expr.Loop(
+                Expr.IfThenElse(
+                    Expr.Call(enumerator, moveNext),
+                    Expr.Block(
+                        loopBody.Append(Expr.Label(continueLabel)).ToArray()
+                    ),
+                    Expr.Break(breakLabel)
+                ),
+                breakLabel
+            )
+        );
+
+        var statements = new List<Expr>
+        {
+            Expr.Assign(resultList, Expr.New(typeof(List<IElwoodValue>))),
+            Expr.Assign(countVar, Expr.Constant(0)),
+            Expr.Assign(enumerator, Expr.Call(source, _enumerateArray,
+                Type.EmptyTypes.Length == 0 ? Array.Empty<Expr>() : [])),
+        };
+
+        // Actually, EnumerateArray returns IEnumerable, need GetEnumerator
+        var getEnumMethod = typeof(IEnumerable<IElwoodValue>).GetMethod("GetEnumerator")!;
+        statements[2] = Expr.Assign(enumerator,
+            Expr.Call(Expr.Call(source, _enumerateArray), getEnumMethod));
+
+        // try { loop } finally { enumerator.Dispose() }
+        statements.Add(Expr.TryFinally(loop, Expr.Call(enumerator, disposeMethod)));
+
+        // Return result as array
+        statements.Add(Expr.Call(_factory, _createArray,
+            Expr.Convert(resultList, typeof(IEnumerable<IElwoodValue>))));
+
+        return Expr.Block(typeof(IElwoodValue),
+            [resultList, enumerator, itemVar, countVar],
+            statements);
     }
 
     private Expr? EmitPipeOperation(PipeOperation op, Expr source, Expr outerCurrent)
@@ -283,12 +504,12 @@ public sealed class ExpressionTreeEmitter
 
         var itemParam = Expr.Parameter(typeof(IElwoodValue), paramName);
         var childEmitter = new ExpressionTreeEmitter(this, paramName, itemParam);
-        var bodyExpr = childEmitter.TryEmit(body!, itemParam);
-        if (bodyExpr is null) return null;
 
-        // Build: source.EnumerateArray().Where(item => IsTruthy(body)) → factory.CreateArray(...)
-        var predicateLambda = Expr.Lambda<Func<IElwoodValue, bool>>(
-            Expr.Call(_isTruthy, bodyExpr), itemParam);
+        // Use direct bool emission for predicate — avoids CreateBool/IsTruthy round-trip
+        var boolExpr = childEmitter.TryEmitAsBool(body!, itemParam);
+        if (boolExpr is null) return null;
+
+        var predicateLambda = Expr.Lambda<Func<IElwoodValue, bool>>(boolExpr, itemParam);
 
         var whereMethod = typeof(Enumerable).GetMethods()
             .First(m => m.Name == "Where" && m.GetParameters().Length == 2)
