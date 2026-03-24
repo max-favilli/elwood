@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Elwood.Core;
+using Elwood.Core.Abstractions;
 using Elwood.Json;
 
 namespace Elwood.Core.Tests;
@@ -41,7 +42,17 @@ public class CompiledModeTests
         Assert.True(result.Success,
             $"Compiled test '{name}' failed with errors:\n{string.Join("\n", result.Diagnostics)}");
 
-        var actualNode = ((JsonNodeValue)result.Value!).Node;
+        // Materialize lazy arrays for comparison — compiled mode may return LazyArrayValue
+        var actualValue = result.Value!;
+        if (actualValue is not JsonNodeValue)
+        {
+            // Convert through factory to get a JsonNodeValue
+            actualValue = actualValue.Kind == ElwoodValueKind.Array
+                ? Factory.CreateArray(actualValue.EnumerateArray())
+                : actualValue;
+        }
+
+        var actualNode = actualValue is JsonNodeValue jnv ? jnv.Node : null;
         var expectedNode = JsonNode.Parse(expectedJson);
 
         var actualNormalized = Normalize(actualNode);
@@ -56,8 +67,8 @@ public class CompiledModeTests
     [Fact]
     public void Benchmark_CompiledVsInterpreted()
     {
-        // Generate test data: 10K items
-        var items = Enumerable.Range(0, 10_000).Select(i => new
+        // Generate test data: 100K items
+        var items = Enumerable.Range(0, 100_000).Select(i => new
         {
             name = $"User{i}",
             age = 20 + (i % 50),
@@ -75,36 +86,53 @@ public class CompiledModeTests
         interpreted.Evaluate(expression, input);
         compiled.Evaluate(expression, input);
 
-        // Benchmark interpreted
+        // Benchmark interpreted (3 iterations, 100K items each)
         var sw = Stopwatch.StartNew();
-        for (var i = 0; i < 5; i++)
+        for (var i = 0; i < 3; i++)
             interpreted.Evaluate(expression, input);
         sw.Stop();
-        var interpretedMs = sw.ElapsedMilliseconds / 5.0;
+        var interpretedMs = sw.ElapsedMilliseconds / 3.0;
 
         // Benchmark compiled
         sw.Restart();
-        for (var i = 0; i < 5; i++)
+        for (var i = 0; i < 3; i++)
             compiled.Evaluate(expression, input);
         sw.Stop();
-        var compiledMs = sw.ElapsedMilliseconds / 5.0;
+        var compiledMs = sw.ElapsedMilliseconds / 3.0;
 
         var speedup = interpretedMs / Math.Max(compiledMs, 0.1);
+
+        // Check if the expression was actually compiled or fell back to interpreter
+        var compiler = new Elwood.Core.Compilation.ElwoodCompiler();
+        var lexer = new Elwood.Core.Parsing.Lexer(expression);
+        var tokens = lexer.Tokenize();
+        var parser = new Elwood.Core.Parsing.Parser(tokens);
+        var ast = parser.ParseExpression();
+        var compiledDelegate = compiler.TryCompile(ast);
+        var wasCompiled = compiledDelegate is not null;
 
         // Log the results
         var logDir = FindBenchmarkDir();
         Directory.CreateDirectory(logDir);
         var logPath = Path.Combine(logDir, "compiled-benchmark.log");
-        var entry = $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] 10K items where+select: interpreted={interpretedMs:F1}ms compiled={compiledMs:F1}ms speedup={speedup:F1}x\n";
+        var entry = $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] 100K items where+select: interpreted={interpretedMs:F1}ms compiled={compiledMs:F1}ms speedup={speedup:F1}x (compiled={wasCompiled})\n";
         File.AppendAllText(logPath, entry);
 
         // The compiled version should produce correct results
         var compiledResult = compiled.Evaluate(expression, input);
         var interpretedResult = interpreted.Evaluate(expression, input);
         Assert.True(compiledResult.Success);
+
+        static JsonNode? ToNode(IElwoodValue val)
+        {
+            if (val is JsonNodeValue jnv) return jnv.Node;
+            if (val.Kind == ElwoodValueKind.Array) return ((JsonNodeValue)Factory.CreateArray(val.EnumerateArray())).Node;
+            return null;
+        }
+
         Assert.Equal(
-            Normalize(((JsonNodeValue)interpretedResult.Value!).Node),
-            Normalize(((JsonNodeValue)compiledResult.Value!).Node));
+            Normalize(ToNode(interpretedResult.Value!)),
+            Normalize(ToNode(compiledResult.Value!)));
     }
 
     private static string Normalize(JsonNode? node)

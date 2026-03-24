@@ -62,6 +62,24 @@ public static class CompilerHelpers
     };
 
     /// <summary>
+    /// Create a lazy array from an IEnumerable — avoids materializing/deep-cloning all items.
+    /// This is the key to compiled performance: pipeline results stream through without allocation.
+    /// </summary>
+    public static IElwoodValue CreateLazyArray(IEnumerable<IElwoodValue> source, IElwoodValueFactory factory)
+        => new Evaluation.LazyArrayValue(source, factory);
+
+    /// <summary>
+    /// Materialize a lazy array so it can be iterated multiple times (for let bindings).
+    /// If already concrete, returns as-is.
+    /// </summary>
+    public static IElwoodValue MaterializeIfLazy(IElwoodValue value, IElwoodValueFactory factory)
+    {
+        if (value is Evaluation.LazyArrayValue lazy)
+            return factory.CreateArray(lazy.EnumerateArray().ToList());
+        return value;
+    }
+
+    /// <summary>
     /// Safe property access — returns factory.CreateNull() for missing properties.
     /// </summary>
     public static IElwoodValue GetPropertySafe(IElwoodValue target, string name, IElwoodValueFactory factory)

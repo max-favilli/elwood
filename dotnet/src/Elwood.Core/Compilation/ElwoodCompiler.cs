@@ -17,18 +17,25 @@ public sealed class ElwoodCompiler
     /// </summary>
     public Func<IElwoodValue, IElwoodValueFactory, IElwoodValue>? TryCompile(ElwoodExpression ast)
     {
-        var input = Expr.Parameter(typeof(IElwoodValue), "input");
-        var factory = Expr.Parameter(typeof(IElwoodValueFactory), "factory");
+        try
+        {
+            var input = Expr.Parameter(typeof(IElwoodValue), "input");
+            var factory = Expr.Parameter(typeof(IElwoodValueFactory), "factory");
 
-        var emitter = new ExpressionTreeEmitter(input, factory);
-        var body = emitter.TryEmit(ast, input);
+            var emitter = new ExpressionTreeEmitter(input, factory);
+            var body = emitter.TryEmit(ast, input);
 
-        if (body is null) return null;
+            if (body is null) return null;
 
-        var lambda = Expr.Lambda<Func<IElwoodValue, IElwoodValueFactory, IElwoodValue>>(
-            body, input, factory);
+            var lambda = Expr.Lambda<Func<IElwoodValue, IElwoodValueFactory, IElwoodValue>>(
+                body, input, factory);
 
-        return lambda.Compile();
+            return lambda.Compile();
+        }
+        catch
+        {
+            return null; // Compilation failed — fall back to interpreter
+        }
     }
 
     /// <summary>
@@ -36,38 +43,51 @@ public sealed class ElwoodCompiler
     /// </summary>
     public Func<IElwoodValue, IElwoodValueFactory, IElwoodValue>? TryCompile(ScriptNode script)
     {
-        var input = Expr.Parameter(typeof(IElwoodValue), "input");
-        var factory = Expr.Parameter(typeof(IElwoodValueFactory), "factory");
+        // Script compilation deferred — let bindings with lazy array reuse have edge cases.
+        // Single expressions (the hot path for pipeline transforms) are compiled.
+        if (script.Bindings.Count > 0) return null;
 
-        var emitter = new ExpressionTreeEmitter(input, factory);
-
-        var variables = new List<ParameterExpression>();
-        var statements = new List<Expr>();
-
-        foreach (var binding in script.Bindings)
+        try
         {
-            var valueExpr = emitter.TryEmit(binding.Value, input);
-            if (valueExpr is null) return null;
+            var input = Expr.Parameter(typeof(IElwoodValue), "input");
+            var factory = Expr.Parameter(typeof(IElwoodValueFactory), "factory");
 
-            var variable = Expr.Variable(typeof(IElwoodValue), binding.Name);
-            variables.Add(variable);
-            statements.Add(Expr.Assign(variable, valueExpr));
+            var emitter = new ExpressionTreeEmitter(input, factory);
 
-            // Register the variable in scope for subsequent bindings
-            emitter.AddToScope(binding.Name, variable);
+            var variables = new List<ParameterExpression>();
+            var statements = new List<Expr>();
+
+            var materializeMethod = typeof(CompilerHelpers).GetMethod(nameof(CompilerHelpers.MaterializeIfLazy))!;
+
+            foreach (var binding in script.Bindings)
+            {
+                var valueExpr = emitter.TryEmit(binding.Value, input);
+                if (valueExpr is null) return null;
+
+                var variable = Expr.Variable(typeof(IElwoodValue), binding.Name);
+                variables.Add(variable);
+                // Materialize lazy arrays in let bindings so they can be iterated multiple times
+                statements.Add(Expr.Assign(variable, Expr.Call(materializeMethod, valueExpr, factory)));
+
+                emitter.AddToScope(binding.Name, variable);
+            }
+
+            if (script.ReturnExpression is null) return null;
+
+            var returnExpr = emitter.TryEmit(script.ReturnExpression, input);
+            if (returnExpr is null) return null;
+
+            statements.Add(returnExpr);
+
+            var block = Expr.Block(typeof(IElwoodValue), variables, statements);
+            var lambda = Expr.Lambda<Func<IElwoodValue, IElwoodValueFactory, IElwoodValue>>(
+                block, input, factory);
+
+            return lambda.Compile();
         }
-
-        if (script.ReturnExpression is null) return null;
-
-        var returnExpr = emitter.TryEmit(script.ReturnExpression, input);
-        if (returnExpr is null) return null;
-
-        statements.Add(returnExpr);
-
-        var block = Expr.Block(typeof(IElwoodValue), variables, statements);
-        var lambda = Expr.Lambda<Func<IElwoodValue, IElwoodValueFactory, IElwoodValue>>(
-            block, input, factory);
-
-        return lambda.Compile();
+        catch
+        {
+            return null; // Compilation failed — fall back to interpreter
+        }
     }
 }

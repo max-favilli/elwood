@@ -37,6 +37,7 @@ public sealed class ExpressionTreeEmitter
     private static readonly MethodInfo _valuesEqual = typeof(CompilerHelpers).GetMethod(nameof(CompilerHelpers.ValuesEqual))!;
     private static readonly MethodInfo _compareValues = typeof(CompilerHelpers).GetMethod(nameof(CompilerHelpers.CompareValues))!;
     private static readonly MethodInfo _valueToString = typeof(CompilerHelpers).GetMethod(nameof(CompilerHelpers.ValueToString))!;
+    private static readonly MethodInfo _createLazyArray = typeof(CompilerHelpers).GetMethod(nameof(CompilerHelpers.CreateLazyArray))!;
 
     // Variable scope for let bindings and lambda parameters
     private readonly Dictionary<string, Expr> _scope = new();
@@ -98,6 +99,9 @@ public sealed class ExpressionTreeEmitter
             Syntax.UnaryExpression { Operator: UnaryOperator.Not } un =>
                 Negate(TryEmitAsBool(un.Operand, current)),
             LiteralExpression { Value: bool b } => Expr.Constant(b),
+            // Fast path: u.prop → PropertyIsTruthy(u, "prop") — avoids GetProperty+CreateBool+IsTruthy
+            MemberAccessExpression member when TryEmit(member.Target, current) is Expr target =>
+                Expr.Call(_propIsTruthy, target, Expr.Constant(member.MemberName)),
             // For anything else, fall back: emit as IElwoodValue then IsTruthy
             _ => WrapWithIsTruthy(TryEmit(node, current))
         };
@@ -108,6 +112,13 @@ public sealed class ExpressionTreeEmitter
 
     private static Expr? WrapWithIsTruthy(Expr? inner)
         => inner is null ? null : Expr.Call(_isTruthy, inner);
+
+    // Fast-path reflection cache
+    private static readonly MethodInfo _propEqualsString = typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.PropertyEqualsString))!;
+    private static readonly MethodInfo _propGreaterThan = typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.PropertyGreaterThan))!;
+    private static readonly MethodInfo _propGreaterThanOrEqual = typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.PropertyGreaterThanOrEqual))!;
+    private static readonly MethodInfo _propLessThan = typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.PropertyLessThan))!;
+    private static readonly MethodInfo _propIsTruthy = typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.PropertyIsTruthy))!;
 
     private Expr? EmitBinaryAsBool(Syntax.BinaryExpression bin, Expr current)
     {
@@ -125,7 +136,11 @@ public sealed class ExpressionTreeEmitter
             return left is null || right is null ? null : Expr.OrElse(left, right);
         }
 
-        // For comparisons, emit IElwoodValue operands but return bool directly
+        // Fast path: u.prop == "string" or u.prop > number
+        var fastPath = TryEmitFastComparison(bin, current);
+        if (fastPath is not null) return fastPath;
+
+        // Generic path: emit IElwoodValue operands, return bool directly
         var leftVal = TryEmit(bin.Left, current);
         var rightVal = TryEmit(bin.Right, current);
         if (leftVal is null || rightVal is null) return null;
@@ -138,9 +153,40 @@ public sealed class ExpressionTreeEmitter
             BinaryOperator.GreaterThanOrEqual => Expr.GreaterThanOrEqual(Expr.Call(_compareValues, leftVal, rightVal), Expr.Constant(0)),
             BinaryOperator.LessThan => Expr.LessThan(Expr.Call(_compareValues, leftVal, rightVal), Expr.Constant(0)),
             BinaryOperator.LessThanOrEqual => Expr.LessThanOrEqual(Expr.Call(_compareValues, leftVal, rightVal), Expr.Constant(0)),
-            // Arithmetic comparisons don't return bool — fall back
             _ => WrapWithIsTruthy(TryEmit(bin, current))
         };
+    }
+
+    /// <summary>
+    /// Detect patterns like u.prop == "string" or u.prop > 18 and emit specialized fast-path calls.
+    /// </summary>
+    private Expr? TryEmitFastComparison(Syntax.BinaryExpression bin, Expr current)
+    {
+        // Pattern: identifier.property <op> literal
+        // Extract: the object expression, property name, and literal value
+        if (bin.Left is not MemberAccessExpression member) return null;
+        var objExpr = TryEmit(member.Target, current);
+        if (objExpr is null) return null;
+        var propName = member.MemberName;
+
+        if (bin.Right is LiteralExpression { Value: string strVal } && bin.Operator == BinaryOperator.Equal)
+            return Expr.Call(_propEqualsString, objExpr, Expr.Constant(propName), Expr.Constant(strVal));
+
+        if (bin.Right is LiteralExpression { Value: string strVal2 } && bin.Operator == BinaryOperator.NotEqual)
+            return Expr.Not(Expr.Call(_propEqualsString, objExpr, Expr.Constant(propName), Expr.Constant(strVal2)));
+
+        if (bin.Right is LiteralExpression { Value: double numVal })
+        {
+            return bin.Operator switch
+            {
+                BinaryOperator.GreaterThan => Expr.Call(_propGreaterThan, objExpr, Expr.Constant(propName), Expr.Constant(numVal)),
+                BinaryOperator.GreaterThanOrEqual => Expr.Call(_propGreaterThanOrEqual, objExpr, Expr.Constant(propName), Expr.Constant(numVal)),
+                BinaryOperator.LessThan => Expr.Call(_propLessThan, objExpr, Expr.Constant(propName), Expr.Constant(numVal)),
+                _ => null
+            };
+        }
+
+        return null;
     }
 
     private Expr EmitLiteral(LiteralExpression lit)
@@ -311,9 +357,8 @@ public sealed class ExpressionTreeEmitter
         var source = TryEmit(pipe.Source, current);
         if (source is null) return null;
 
-        // TODO: fused loop optimization deferred — scope handling in where+select needs work
-        // var fused = TryEmitFusedLoop(pipe.Operations, source, current);
-        // if (fused is not null) return fused;
+        var fused = TryEmitFusedLoop(pipe.Operations, source, current);
+        if (fused is not null) return fused;
 
         // Fallback: chain operators
         Expr result = source;
@@ -377,30 +422,34 @@ public sealed class ExpressionTreeEmitter
         var breakLabel = Expr.Label("break");
         var continueLabel = Expr.Label("continue");
 
-        // The lambda parameter name — use the first where's param, or select's, or "item"
-        var paramName = wheres.Count > 0 ? wheres[0].param :
-                       selectProj?.param ?? "item";
+        // Collect ALL lambda param names and bind them all to the same itemVar.
+        // This handles where u => ... | select u => ... (same name)
+        // and where x => ... | select y => ... (different names)
+        var allParamNames = wheres.Select(w => w.param)
+            .Concat(selectProj is not null ? [selectProj.Value.param] : [])
+            .Distinct().ToList();
 
-        var childEmitter = new ExpressionTreeEmitter(this, paramName, itemVar);
+        // Create one emitter with all param names bound to itemVar
+        var loopEmitter = new ExpressionTreeEmitter(this, allParamNames.First(), itemVar);
+        foreach (var pn in allParamNames.Skip(1))
+            loopEmitter.AddToScope(pn, itemVar);
 
         // Build predicate: all where clauses ANDed together, as direct bool
         Expr predicate = Expr.Constant(true);
         foreach (var (_, body) in wheres)
         {
-            var boolExpr = childEmitter.TryEmitAsBool(body, itemVar);
+            var boolExpr = loopEmitter.TryEmitAsBool(body, itemVar);
             if (boolExpr is null) return null;
             predicate = predicate.Type == typeof(bool) && predicate is ConstantExpression { Value: true }
                 ? boolExpr
                 : Expr.AndAlso(predicate, boolExpr);
         }
 
-        // Build projection
+        // Build projection using the same emitter (all params already in scope)
         Expr? projection = null;
         if (selectProj is not null)
         {
-            // Re-create child emitter with correct param name
-            var selectEmitter = new ExpressionTreeEmitter(this, selectProj.Value.param, itemVar);
-            projection = selectEmitter.TryEmit(selectProj.Value.body, itemVar);
+            projection = loopEmitter.TryEmit(selectProj.Value.body, itemVar);
             if (projection is null) return null;
         }
 
@@ -460,25 +509,22 @@ public sealed class ExpressionTreeEmitter
             )
         );
 
+        var getEnumMethod = typeof(IEnumerable<IElwoodValue>).GetMethod("GetEnumerator")!;
+        var enumerable = Expr.Call(source, _enumerateArray);
+
         var statements = new List<Expr>
         {
             Expr.Assign(resultList, Expr.New(typeof(List<IElwoodValue>))),
             Expr.Assign(countVar, Expr.Constant(0)),
-            Expr.Assign(enumerator, Expr.Call(source, _enumerateArray,
-                Type.EmptyTypes.Length == 0 ? Array.Empty<Expr>() : [])),
+            Expr.Assign(enumerator, Expr.Call(enumerable, getEnumMethod)),
         };
-
-        // Actually, EnumerateArray returns IEnumerable, need GetEnumerator
-        var getEnumMethod = typeof(IEnumerable<IElwoodValue>).GetMethod("GetEnumerator")!;
-        statements[2] = Expr.Assign(enumerator,
-            Expr.Call(Expr.Call(source, _enumerateArray), getEnumMethod));
 
         // try { loop } finally { enumerator.Dispose() }
         statements.Add(Expr.TryFinally(loop, Expr.Call(enumerator, disposeMethod)));
 
-        // Return result as array
-        statements.Add(Expr.Call(_factory, _createArray,
-            Expr.Convert(resultList, typeof(IEnumerable<IElwoodValue>))));
+        // Return result as lazy array (avoids deep-clone overhead)
+        statements.Add(Expr.Call(_createLazyArray,
+            Expr.Convert(resultList, typeof(IEnumerable<IElwoodValue>)), _factory));
 
         return Expr.Block(typeof(IElwoodValue),
             [resultList, enumerator, itemVar, countVar],
@@ -515,8 +561,8 @@ public sealed class ExpressionTreeEmitter
             .First(m => m.Name == "Where" && m.GetParameters().Length == 2)
             .MakeGenericMethod(typeof(IElwoodValue));
 
-        return Expr.Call(_factory, _createArray,
-            Expr.Call(whereMethod, Expr.Call(source, _enumerateArray), predicateLambda));
+        return Expr.Call(_createLazyArray,
+            Expr.Call(whereMethod, Expr.Call(source, _enumerateArray), predicateLambda), _factory);
     }
 
     private Expr? EmitSelect(SelectOperation select, Expr source, Expr outerCurrent)
@@ -536,8 +582,8 @@ public sealed class ExpressionTreeEmitter
                         m.GetParameters()[1].ParameterType.GetGenericArguments().Length == 2)
             .MakeGenericMethod(typeof(IElwoodValue), typeof(IElwoodValue));
 
-        return Expr.Call(_factory, _createArray,
-            Expr.Call(selectMethod, Expr.Call(source, _enumerateArray), selectorLambda));
+        return Expr.Call(_createLazyArray,
+            Expr.Call(selectMethod, Expr.Call(source, _enumerateArray), selectorLambda), _factory);
     }
 
     private Expr? EmitAggregate(AggregateOperation agg, Expr source)
