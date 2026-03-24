@@ -302,9 +302,18 @@ Benchmarked in-process on 100K rows (fair comparison, same machine, no HTTP over
 ### Compiled mode (explored, removed)
 Expression Tree compilation was implemented and tested but provided no speedup over the interpreter. The interpreter's lazy streaming is more efficient than compiled fused loops that materialize arrays. The compiled mode was removed to reduce complexity.
 
+### TypeScript performance
+Benchmarked on 100K rows — the TS interpreter is already **~5x faster than .NET**:
+
+| Test | .NET | TypeScript |
+|---|---|---|
+| where+select name | 121ms | 24ms |
+| toString + charArray concat | 836ms | 173ms |
+
+V8's JIT aggressively optimizes native array methods (`filter`, `map`). Generator-based lazy evaluation is unnecessary — the eager approach with V8-optimized array ops is faster.
+
 ### Future optimization (if needed)
-- [ ] TypeScript code generation (`new Function()`) for V8 JIT optimization — deferred, not blocking
-- [ ] Bypass `IElwoodValue` abstraction for direct `JsonNode` access in hot paths — only if 100MB+ workloads need it
+- [ ] Bypass `IElwoodValue` abstraction for direct `JsonNode` access in .NET hot paths — only if 100MB+ workloads need it
 
 ---
 
