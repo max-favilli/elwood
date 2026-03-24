@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-03-24 — Performance benchmarks (Phase 2b complete)
+
+Benchmarked Elwood against a legacy JSONPath-based transformation engine on 100K rows (fair in-process comparison):
+
+| Test | Elwood .NET | Legacy baseline | Elwood TS |
+|---|---|---|---|
+| where+select name | 121ms | 240ms | 24ms |
+| toString + charArray concat | 836ms | 1,819ms | 173ms |
+
+- .NET interpreter is **2x faster** than legacy baseline thanks to lazy evaluation via `LazyArrayValue`
+- TypeScript interpreter is **~5x faster than .NET** — V8's JIT aggressively optimizes native array methods
+- Expression Tree compilation was explored but removed — the interpreter's lazy streaming outperforms compiled fused loops
+- CLI integration tests added (15 tests)
+
 ## 2026-03-24 — Parquet extension + binary pass-through (full format parity)
 
 All common data integration content types are now supported in Elwood.
