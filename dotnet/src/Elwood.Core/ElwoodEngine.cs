@@ -1,5 +1,4 @@
 using Elwood.Core.Abstractions;
-using Elwood.Core.Compilation;
 using Elwood.Core.Diagnostics;
 using Elwood.Core.Evaluation;
 using Elwood.Core.Extensions;
@@ -15,14 +14,6 @@ public sealed class ElwoodEngine
 {
     private readonly IElwoodValueFactory _factory;
     private readonly ElwoodExtensionRegistry _extensions = new();
-    private readonly CompilationCache _compilationCache = new();
-    private readonly ElwoodCompiler _compiler = new();
-
-    /// <summary>
-    /// When true, the engine attempts to compile expressions to delegates
-    /// for faster execution. Falls back to the interpreter for unsupported constructs.
-    /// </summary>
-    public bool CompiledMode { get; set; }
 
     public ElwoodEngine(IElwoodValueFactory factory)
     {
@@ -59,16 +50,6 @@ public sealed class ElwoodEngine
             if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
                 return new ElwoodResult(null, diagnostics);
 
-            // Try compiled mode first
-            if (CompiledMode)
-            {
-                var compiled = _compilationCache.GetOrAdd(expression, () =>
-                    new CompiledExpression(_compiler.TryCompile(ast)));
-                if (compiled.IsCompiled)
-                    return new ElwoodResult(compiled.Delegate!(input, _factory), diagnostics);
-            }
-
-            // Fallback to interpreter
             var evaluator = new Evaluator(_factory, _extensions);
             var env = new ElwoodEnvironment();
             env.Set("$root", input);
@@ -117,16 +98,6 @@ public sealed class ElwoodEngine
             if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
                 return new ElwoodResult(null, diagnostics);
 
-            // Try compiled mode first
-            if (CompiledMode)
-            {
-                var compiled = _compilationCache.GetOrAdd("script:" + script, () =>
-                    new CompiledExpression(_compiler.TryCompile(ast)));
-                if (compiled.IsCompiled)
-                    return new ElwoodResult(compiled.Delegate!(input, _factory), diagnostics);
-            }
-
-            // Fallback to interpreter
             var evaluator = new Evaluator(_factory, _extensions);
             var result = evaluator.EvaluateScript(ast, input);
 
