@@ -247,6 +247,8 @@ return products | select(p => {
 | `toCsv(options?)` | Array of objects → CSV string | `delimiter`, `headers`, `alwaysQuote` | ✅ |
 | `fromXml(options?)` | Parse XML string → JSON object | `attributePrefix`, `stripNamespaces` | ✅ |
 | `toXml(options?)` | JSON object → XML string | `rootElement`, `attributePrefix`, `declaration` | ✅ |
+| `fromXlsx(options?)` | Parse XLSX (base64) → array of objects | `headers`, `sheet` *Extension* | ✅ |
+| `toXlsx(options?)` | Array of objects → XLSX (base64) | `headers`, `sheet` *Extension* | ✅ |
 | `fromParquet(options?)` | Parse Parquet (base64) → array of objects | *Extension* | ✅ |
 | `toParquet(options?)` | Array of objects → Parquet (base64) | `schema`, `compression` *Extension, .NET only* | ✅ |
 | `fromText(options?)` | Split text into lines or structured data | `delimiter` (default `\n`) | ✅ |
@@ -272,7 +274,10 @@ return products | select(p => {
 - [x] Multi-format test inputs: test runners support `input.csv`, `input.txt`, `input.xml`
 - [x] Parser fix: `$.method()` resolves correctly when `$` is a non-object value
 - [x] `.parseJson()` general-purpose method + `fromCsv({ parseJson: true })` convenience option
-- [x] 85 conformance test cases (was 68), 114 .NET tests, 139 TS tests
+- [x] Bracket property access: `obj["@attr"]` for XML attributes and special-character keys
+- [x] `.first()` / `.last()` on strings return first/last character
+- [x] Extension exceptions wrapped as diagnostics (not raw crashes)
+- [x] 86 conformance test cases, 137 .NET tests (115 core + 15 CLI + 7 Parquet), 144 TS tests (140 core + 4 XLSX)
 
 ---
 
