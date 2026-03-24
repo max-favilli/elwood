@@ -189,26 +189,33 @@ public class CliFixture : IDisposable
             Arguments = $"\"{_cliDll}\" {quotedArgs}",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            RedirectStandardInput = stdin is not null,
+            RedirectStandardInput = true, // Always redirect so we can close it
             UseShellExecute = false,
             CreateNoWindow = true,
         };
 
         using var process = Process.Start(psi)!;
 
+        // Write stdin if provided, then always close to prevent CLI from waiting
         if (stdin is not null)
-        {
             await process.StandardInput.WriteAsync(stdin);
-            process.StandardInput.Close();
+        process.StandardInput.Close();
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        try
+        {
+            await process.WaitForExitAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            process.Kill(true);
+            return new CliResult(-1, "", "Test timed out after 15s");
         }
 
-        var stdout = await process.StandardOutput.ReadToEndAsync();
-        var stderr = await process.StandardError.ReadToEndAsync();
-
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        await process.WaitForExitAsync(cts.Token);
-
-        return new CliResult(process.ExitCode, stdout.Trim(), stderr.Trim());
+        return new CliResult(process.ExitCode, (await stdoutTask).Trim(), (await stderrTask).Trim());
     }
 
     private static CliResult RunProcess(string fileName, string arguments)
