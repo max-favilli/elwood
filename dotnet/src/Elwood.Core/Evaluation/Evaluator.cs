@@ -890,7 +890,11 @@ public sealed class Evaluator
     private IElwoodValue CallExtensionOrThrow(string name, IElwoodValue target, List<IElwoodValue> args, SourceSpan span)
     {
         if (_extensions is not null && _extensions.TryGetMethod(name, out var handler))
-            return handler!(target, args, _factory);
+        {
+            try { return handler!(target, args, _factory); }
+            catch (ElwoodEvaluationException) { throw; }
+            catch (Exception ex) { throw new ElwoodEvaluationException(ex.Message, span); }
+        }
 
         throw new ElwoodEvaluationException(
             $"Unknown method '{name}'.", span,

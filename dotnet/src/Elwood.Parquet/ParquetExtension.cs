@@ -145,19 +145,18 @@ public static class ParquetExtension
     {
         if (value is null || value.Kind == ElwoodValueKind.Null) return null;
 
-        var str = value.GetStringValue() ?? "";
         return type switch
         {
-            "string" => str,
+            "string" => value.Kind == ElwoodValueKind.String ? (value.GetStringValue() ?? "") : value.GetNumberValue().ToString(System.Globalization.CultureInfo.InvariantCulture),
             "int" or "int32" or "integer" => (int)value.GetNumberValue(),
             "long" or "int64" => (long)value.GetNumberValue(),
             "float" => (float)value.GetNumberValue(),
             "double" => value.GetNumberValue(),
             "bool" or "boolean" => value.GetBooleanValue(),
             "decimal" => (decimal)value.GetNumberValue(),
-            "date" => DateOnly.TryParse(str, out var d) ? d : DateOnly.MinValue,
-            "datetime" or "timestamp" => DateTimeOffset.TryParse(str, out var dt) ? dt : DateTimeOffset.MinValue,
-            _ => str
+            "date" => value.Kind == ElwoodValueKind.String && DateOnly.TryParse(value.GetStringValue(), out var d) ? d : DateOnly.MinValue,
+            "datetime" or "timestamp" => value.Kind == ElwoodValueKind.String && DateTimeOffset.TryParse(value.GetStringValue(), out var dt) ? dt : DateTimeOffset.MinValue,
+            _ => value.Kind == ElwoodValueKind.String ? (value.GetStringValue() ?? "") : value.GetNumberValue().ToString(System.Globalization.CultureInfo.InvariantCulture)
         };
     }
 

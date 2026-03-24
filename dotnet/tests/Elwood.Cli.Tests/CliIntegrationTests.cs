@@ -109,6 +109,39 @@ public class CliIntegrationTests : IClassFixture<CliFixture>
         Assert.Contains("<name>Alice</name>", result.Stdout);
     }
 
+    // ── binary ──
+
+    [Fact]
+    public async Task Eval_BinaryInput_AutoDetect()
+    {
+        // Create a small binary file and verify it's passed as base64
+        var tempFile = Path.Combine(Path.GetTempPath(), "elwood-test.bin");
+        File.WriteAllBytes(tempFile, new byte[] { 0x48, 0x65, 0x6C, 0x6C, 0x6F }); // "Hello"
+        try
+        {
+            var result = await _fixture.Run("eval", "$.length()", "--input", tempFile);
+            Assert.Equal(0, result.ExitCode);
+            // base64 of "Hello" = "SGVsbG8=" which has length 8
+            Assert.Contains("8", result.Stdout);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task Eval_BinaryStdin_WithInputFormat()
+    {
+        // Pass raw bytes as base64 via stdin with explicit format
+        var result = await _fixture.Run(
+            new[] { "eval", "$.length()", "--input-format", "binary" },
+            stdin: "Hello");
+        Assert.Equal(0, result.ExitCode);
+        // "Hello" as stdin bytes → base64 "SGVsbG8=" → length 8
+        Assert.Contains("8", result.Stdout);
+    }
+
     // ── run ──
 
     [Fact]
