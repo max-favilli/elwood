@@ -82,7 +82,9 @@ public sealed class ExpressionTreeEmitter
             ArrayExpression arr => EmitArray(arr, current),
             PipelineExpression pipe => EmitPipeline(pipe, current),
             MemberAccessExpression member => EmitMemberAccess(member, current),
+            Syntax.MethodCallExpression method => EmitMethodCall(method, current),
             Syntax.IndexExpression idx => EmitIndex(idx, current),
+            InterpolatedStringExpression interp => EmitInterpolation(interp, current),
             _ => null // unsupported — fall back to interpreter
         };
     }
@@ -260,8 +262,9 @@ public sealed class ExpressionTreeEmitter
                 Expr.LessThan(Expr.Call(_compareValues, left, right), Expr.Constant(0))),
             BinaryOperator.LessThanOrEqual => Expr.Call(_factory, _createBool,
                 Expr.LessThanOrEqual(Expr.Call(_compareValues, left, right), Expr.Constant(0))),
-            BinaryOperator.Add => Expr.Call(_factory, _createNumber,
-                Expr.Add(Expr.Call(left, _getNumberValue), Expr.Call(right, _getNumberValue))),
+            BinaryOperator.Add => Expr.Call(
+                typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.Add))!,
+                left, right, _factory),
             BinaryOperator.Subtract => Expr.Call(_factory, _createNumber,
                 Expr.Subtract(Expr.Call(left, _getNumberValue), Expr.Call(right, _getNumberValue))),
             BinaryOperator.Multiply => Expr.Call(_factory, _createNumber,
@@ -658,5 +661,115 @@ public sealed class ExpressionTreeEmitter
 
         // Implicit lambda — expression uses $ as current item
         return ("$item", expr);
+    }
+
+    // ── Method call compilation ──
+
+    private static readonly Dictionary<string, MethodInfo> _compiledMethods = new()
+    {
+        ["toLower"] = typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.MethodToLower))!,
+        ["toUpper"] = typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.MethodToUpper))!,
+        ["trim"] = typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.MethodTrim))!,
+        ["trimStart"] = typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.MethodTrimStart))!,
+        ["trimEnd"] = typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.MethodTrimEnd))!,
+        ["length"] = typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.MethodLength))!,
+        ["toString"] = typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.MethodToString))!,
+        ["toNumber"] = typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.MethodToNumber))!,
+    };
+
+    private static readonly Dictionary<string, MethodInfo> _compiledMethods1Arg = new()
+    {
+        // contains/startsWith/endsWith deferred — they compile successfully but the fused loop
+        // has issues when method calls are used inside where predicates. Fall back to interpreter.
+    };
+
+    private Expr? EmitMethodCall(Syntax.MethodCallExpression method, Expr current)
+    {
+        var target = TryEmit(method.Target, current);
+        if (target is null) return null;
+
+        var name = method.MethodName;
+
+        // Zero-arg methods
+        if (method.Arguments.Count == 0 && _compiledMethods.TryGetValue(name, out var m0))
+            return Expr.Call(m0, target, _factory);
+
+        // One-arg methods
+        if (method.Arguments.Count == 1 && _compiledMethods1Arg.TryGetValue(name, out var m1))
+        {
+            var arg = TryEmit(method.Arguments[0], current);
+            if (arg is null) return null;
+            return Expr.Call(m1, target, arg, _factory);
+        }
+
+        // replace(search, replacement)
+        if (name == "replace" && method.Arguments.Count == 2)
+        {
+            var search = TryEmit(method.Arguments[0], current);
+            var replacement = TryEmit(method.Arguments[1], current);
+            if (search is null || replacement is null) return null;
+            return Expr.Call(typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.MethodReplace))!,
+                target, search, replacement, _factory);
+        }
+
+        // substring(start) or substring(start, length)
+        if (name == "substring" && method.Arguments.Count >= 1)
+        {
+            var start = TryEmit(method.Arguments[0], current);
+            if (start is null) return null;
+            var length = method.Arguments.Count >= 2 ? TryEmit(method.Arguments[1], current) : null;
+            return Expr.Call(typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.MethodSubstring))!,
+                target, start, length ?? Expr.Constant(null, typeof(IElwoodValue)), _factory);
+        }
+
+        // isNullOrEmpty with optional fallback
+        if (name == "isNullOrEmpty")
+        {
+            if (method.Arguments.Count == 0)
+                return Expr.Call(typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.MethodIsNullOrEmpty))!, target, _factory);
+            if (method.Arguments.Count == 1)
+            {
+                var fallback = TryEmit(method.Arguments[0], current);
+                if (fallback is null) return null;
+                return Expr.Call(typeof(FastPathHelpers).GetMethod(nameof(FastPathHelpers.MethodIsNullOrEmptyWithFallback))!, target, fallback, _factory);
+            }
+        }
+
+        // first/last on arrays (no predicate — simple aggregation)
+        if (name == "first" && method.Arguments.Count == 0)
+            return EmitFirstLast(target, first: true);
+        if (name == "last" && method.Arguments.Count == 0)
+            return EmitFirstLast(target, first: false);
+
+        // count
+        if (name == "count" && method.Arguments.Count == 0)
+            return Expr.Call(_factory, _createNumber,
+                Expr.Convert(Expr.Call(target, _getArrayLength), typeof(double)));
+
+        return null; // Unknown method — fall back to interpreter
+    }
+
+    private Expr? EmitInterpolation(InterpolatedStringExpression interp, Expr current)
+    {
+        // Build: string.Concat(part1, part2, ...) → factory.CreateString(result)
+        var parts = new List<Expr>();
+        foreach (var part in interp.Parts)
+        {
+            if (part is TextPart text)
+            {
+                parts.Add(Expr.Constant(text.Text));
+            }
+            else if (part is ExpressionPart exprPart)
+            {
+                var val = TryEmit(exprPart.Expression, current);
+                if (val is null) return null;
+                parts.Add(Expr.Call(_valueToString, val));
+            }
+        }
+
+        // String.Concat(params string[])
+        var concatMethod = typeof(string).GetMethod("Concat", [typeof(string[])])!;
+        var arrayExpr = Expr.NewArrayInit(typeof(string), parts);
+        return Expr.Call(_factory, _createString, Expr.Call(concatMethod, arrayExpr));
     }
 }
