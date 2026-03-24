@@ -283,13 +283,13 @@ return products | select(p => {
 
 ## Phase 2b — Performance ✅
 
-**Goal:** Ensure Elwood outperforms Eagle's extended JSONPath engine.
+**Goal:** Ensure Elwood outperforms comparable JSONPath-based transformation engines.
 
-### Result: Elwood interpreter is 2x faster than Eagle
+### Result: .NET interpreter is 2x faster than legacy baseline
 
 Benchmarked in-process on 100K rows (fair comparison, same machine, no HTTP overhead):
 
-| Test | Elwood | Eagle | Speedup |
+| Test | Elwood .NET | Legacy baseline | Speedup |
 |---|---|---|---|
 | `where active \| select name` | 121ms | 240ms | **2.0x faster** |
 | `select` with toString + charArray concat | 836ms | 1,819ms | **2.2x faster** |
@@ -500,7 +500,7 @@ Phase 1c  ✅  Publish everything (GitHub, NuGet, npm, CI, Playground, API conta
    ↓
 Phase 2   ✅  Multi-format I/O (fromCsv, toXml, etc.) + script-based maps
    ↓
-Phase 2b  ✅  Performance — 2x faster than Eagle (compiled mode explored, not needed)
+Phase 2b  ✅  Performance — 2x faster than legacy baseline (compiled mode explored, not needed)
    ↓
 Phase 3       Integration pipeline configuration (Elwood Runtime + Executors)
    ↓
@@ -520,7 +520,7 @@ Elwood is designed for **incremental adoption**:
 2. **Phase 1b** (done): Cross-platform reach. Use in browsers, Node.js, edge runtimes.
 3. **Phase 1c** (done): Open-source launch. Available via NuGet, npm, browser playground, and self-hosted API container.
 4. **Phase 2** (done): Multi-format I/O. All formats complete. Extension API for XLSX. CLI format flags.
-5. **Phase 2b** (done): Performance verified — 2x faster than Eagle on 100K rows. Compiled mode explored but interpreter is already optimal.
+5. **Phase 2b** (done): Performance verified — 2x faster than legacy baseline on 100K rows. Compiled mode explored but interpreter is already optimal.
 6. **Phase 3**: Integration pipelines. YAML defines sources, transforms, and destinations. Pluggable executors run them.
 7. **Phase 4**: IDE support, developer tools, and community ecosystem.
 8. **Phase 5**: Elwood DB. Store JSON, query with Elwood. PostgreSQL backend, no size limits.

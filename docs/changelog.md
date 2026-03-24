@@ -1,8 +1,8 @@
 # Changelog
 
-## 2026-03-24 — Parquet extension + binary pass-through (Eagle format parity)
+## 2026-03-24 — Parquet extension + binary pass-through (full format parity)
 
-All Eagle content types are now supported in Elwood.
+All common data integration content types are now supported in Elwood.
 
 - **`Elwood.Parquet`** (.NET) — fromParquet/toParquet using Parquet.Net, all types + compression
 - **`@elwood-lang/parquet`** (npm) — fromParquet (read-only) using hyparquet

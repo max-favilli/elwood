@@ -363,7 +363,7 @@ Same pipeline.elwood.yaml
 - Uses Azure Service Bus for fan-out messaging
 - Azure Functions process each item concurrently
 - Blob Storage for intermediate state
-- This is what would replace Eagle's async processing
+- This is what would replace legacy async processing pipelines
 
 **AWS Executor** (separate package):
 - Uses SQS for fan-out, Lambda for processing, S3 for state
@@ -739,7 +739,7 @@ Phase 3 is implemented incrementally:
 - [ ] `CheckIdm` / `SaveIdm` with TTL
 - [ ] In-memory and file-system implementations
 
-**Step 4 — Azure Executor (private package, Eagle replacement):**
+**Step 4 — Azure Executor (private package, production runtime):**
 - [ ] `AzureTableStateStore` + `AzureBlobDocumentStore`
 - [ ] ASB for fan-out messaging
 - [ ] Azure Functions for concurrent processing
