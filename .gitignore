@@ -32,6 +32,8 @@ BenchmarkDotNet.Artifacts/
 **/Benchmarks/results.log
 **/Benchmarks/timing.log
 **/benchmarks/timing.log
+**/Benchmarks/compiled-benchmark.log
+**/Benchmarks/eagle-comparison.log
 
 ## Private planning docs (not for public repo)
 .private/

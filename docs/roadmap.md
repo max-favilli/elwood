@@ -395,13 +395,33 @@ External scripts are **reusable** — the same `output-id.elwood` and `filter-re
 Guideline: **static config → plain YAML. Simple expressions → inline. Complex logic → external `.elwood` file.** This is a best practice, not enforced. Short inline pipes are fine when readable.
 
 ### Tasks
+
+**Runtime + CLI Executor:**
 - [ ] Define integration YAML schema (sources, outputs, destinations, join, notifications)
 - [ ] YAML parser that resolves `.elwood` file references and evaluates them
 - [ ] Inline Elwood expression evaluation for simple dynamic values
-- [ ] Validation tooling: `elwood validate pipeline.elwood.yaml`
+- [ ] Pipeline Execution State JSON schema (v1) — metadata + refs, not payloads
+- [ ] `IStateStore` + `IDocumentStore` interfaces
+- [ ] `InMemoryStateStore` + `InMemoryDocumentStore` implementations
 - [ ] Pipeline step graph builder (ordering, fan-out, merge)
 - [ ] CLI Executor (sequential, in-process)
+- [ ] `elwood status` — read and display execution state
+- [ ] Validation tooling: `elwood validate pipeline.elwood.yaml`
+
+**Deployment:**
+- [ ] `elwood deploy` command — uploads pipeline YAML + .elwood scripts to pipeline store
+- [ ] Infrastructure is provisioned once, runs all pipelines (not per-pipeline)
+
+**Executors (separate packages):**
 - [ ] IExecutor, ISource, IDestination interfaces for pluggable executors
+- [ ] Azure Executor (Functions + ASB + Storage) — separate package
+- [ ] `FileSystemStateStore` + `FileSystemDocumentStore` for persistent local state
+
+**Infrastructure (separate repo: `elwood-infra`):**
+- [ ] Terraform module: Azure (Function App + ASB + Storage + App Insights)
+- [ ] Terraform module: AWS (Lambda + SQS + DynamoDB + S3)
+- [ ] Terraform module: Kubernetes
+- [ ] Example configurations (minimal, production)
 
 ---
 

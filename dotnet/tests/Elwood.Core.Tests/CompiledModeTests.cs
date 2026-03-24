@@ -79,26 +79,29 @@ public class CompiledModeTests
         var input = Factory.Parse(json);
         var expression = "$.users[*] | where u => u.active | select u => { name: u.name, age: u.age }";
 
-        // Warmup both
+        // Warmup both (3 warm-up runs to stabilize JIT)
         var interpreted = new ElwoodEngine(Factory) { CompiledMode = false };
         var compiled = new ElwoodEngine(Factory) { CompiledMode = true };
 
-        interpreted.Evaluate(expression, input);
-        compiled.Evaluate(expression, input);
+        for (var w = 0; w < 3; w++)
+        {
+            interpreted.Evaluate(expression, input);
+            compiled.Evaluate(expression, input);
+        }
 
-        // Benchmark interpreted (3 iterations, 100K items each)
+        // Benchmark interpreted (10 iterations for stable average)
         var sw = Stopwatch.StartNew();
-        for (var i = 0; i < 3; i++)
+        for (var i = 0; i < 10; i++)
             interpreted.Evaluate(expression, input);
         sw.Stop();
-        var interpretedMs = sw.ElapsedMilliseconds / 3.0;
+        var interpretedMs = sw.ElapsedMilliseconds / 10.0;
 
-        // Benchmark compiled
+        // Benchmark compiled (10 iterations)
         sw.Restart();
-        for (var i = 0; i < 3; i++)
+        for (var i = 0; i < 10; i++)
             compiled.Evaluate(expression, input);
         sw.Stop();
-        var compiledMs = sw.ElapsedMilliseconds / 3.0;
+        var compiledMs = sw.ElapsedMilliseconds / 10.0;
 
         var speedup = interpretedMs / Math.Max(compiledMs, 0.1);
 
