@@ -403,33 +403,112 @@ External scripts are **reusable** — the same `output-id.elwood` and `filter-re
 
 Guideline: **static config → plain YAML. Simple expressions → inline. Complex logic → external `.elwood` file.** This is a best practice, not enforced. Short inline pipes are fine when readable.
 
+### Source envelope — `$` and `$source`
+
+Scripts access data via two root bindings:
+- **`$`** — the payload data (identical to standalone scripts — no prefix needed)
+- **`$source`** — source metadata set by the executor
+
+```
+$source.name         → "api-trigger"
+$source.trigger      → "http"
+$source.eventId      → "evt-abc-123"
+$source.payloadId    → "pay-def-456"
+$source.timestamp    → "2026-03-24T19:00:00Z"
+$source.http.method  → "POST"
+$source.http.headers → { "Content-Type": "...", "X-Correlation-Id": "..." }
+$source.http.query   → { "category": "shoes" }
+$source.queue.name   → "orders-q1"
+$source.queue.metadata → { "priority": "high" }
+```
+
+Scripts that don't need metadata ignore `$source` — they work identically in the playground and in a pipeline. `$source` follows the same mechanism as `$root` (a binding set by the executor).
+
+### Executor model — three levels
+
+| Executor | Purpose | Sources | Destinations |
+|---|---|---|---|
+| **CLI Executor** | Development + testing with saved payloads | Local files (one per named source) | Local files |
+| **Sync Executor** | End-to-end local execution, connects to real sources | HTTP calls, file shares, queues | Real destinations |
+| **Cloud Executors** (Azure, AWS) | Production, distributed, async | Triggers + pull sources | Real destinations |
+
+All three share the same pipeline parser, script resolver, and transformation engine. They differ only in how they acquire source data and deliver outputs.
+
+**CLI Executor usage:**
+```bash
+# Single source
+elwood pipeline run pipeline.elwood.yaml --source api-trigger=payload.json
+
+# Multi-source — provide envelope files with source metadata
+elwood pipeline run pipeline.elwood.yaml \
+  --source api-trigger=trigger-envelope.json \
+  --source product-api=product-response.json
+
+# Outputs written to local files (stdout or --output-dir)
+```
+
+**Envelope file format (for CLI executor):**
+```json
+{
+  "source": {
+    "name": "api-trigger",
+    "trigger": "http",
+    "eventId": "evt-abc-123",
+    "http": { "method": "POST", "headers": { "X-Correlation-Id": "corr-789" } }
+  },
+  "payload": {
+    "orders": [{ "id": 1, "active": true }]
+  }
+}
+```
+
+The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`. Plain JSON files (no envelope) are also accepted — `$` = the file content, `$source` = minimal defaults.
+
 ### Tasks
 
-**Runtime + CLI Executor:**
-- [ ] Define integration YAML schema (sources, outputs, destinations, join, notifications)
-- [ ] YAML parser that resolves `.elwood` file references and evaluates them
-- [ ] Inline Elwood expression evaluation for simple dynamic values
+**Step 1 — Pipeline YAML schema + parser:**
+- [ ] Define integration YAML schema (sources, outputs, destinations, join)
+- [ ] `Elwood.Pipeline` project — YAML parser (using YamlDotNet)
+- [ ] Resolve `.elwood` file references relative to YAML file location
+- [ ] Inline Elwood expression evaluation for simple dynamic values in YAML
+- [ ] Source envelope schema (source metadata + payload)
+- [ ] `$source` binding support in evaluator
+
+**Step 2 — CLI Executor:**
+- [ ] `elwood pipeline run <yaml> --source name=file` command
+- [ ] Parse envelope files (source metadata + payload) or plain data files
+- [ ] Execute pipeline: resolve sources → run maps → apply join → generate outputs
+- [ ] Write outputs to local files or stdout
+- [ ] `elwood pipeline validate <yaml>` — validate YAML schema + script references
+
+**Step 3 — State + persistence:**
 - [ ] Pipeline Execution State JSON schema (v1) — metadata + refs, not payloads
 - [ ] `IStateStore` + `IDocumentStore` interfaces
 - [ ] `InMemoryStateStore` + `InMemoryDocumentStore` implementations
-- [ ] Pipeline step graph builder (ordering, fan-out, merge)
-- [ ] CLI Executor (sequential, in-process)
-- [ ] `elwood status` — read and display execution state
-- [ ] Validation tooling: `elwood validate pipeline.elwood.yaml`
-
-**Deployment:**
-- [ ] `elwood deploy` command — uploads pipeline YAML + .elwood scripts to pipeline store
-- [ ] Infrastructure is provisioned once, runs all pipelines (not per-pipeline)
-
-**Executors (separate packages):**
-- [ ] IExecutor, ISource, IDestination interfaces for pluggable executors
-- [ ] Azure Executor (Functions + ASB + Storage) — separate package
 - [ ] `FileSystemStateStore` + `FileSystemDocumentStore` for persistent local state
+- [ ] `elwood pipeline status` — read and display execution state
+
+**Step 4 — Sync Executor:**
+- [ ] `IExecutor`, `ISource`, `IDestination` interfaces
+- [ ] HTTP source (GET/POST from third-party APIs)
+- [ ] File share source (read from local/network paths)
+- [ ] HTTP destination, file share destination, SFTP destination
+- [ ] `elwood pipeline serve <yaml>` — start HTTP listener for trigger sources
+
+**Step 5 — Deployment + Runtime API:**
+- [ ] `elwood deploy` command — uploads pipeline YAML + scripts to pipeline store
+- [ ] `Elwood.Runtime.Api` — REST API layer over the Runtime
+- [ ] Pipeline CRUD, validation, deploy, execution queries, document access, health, metrics
+- [ ] Auth: JWT bearer tokens
+
+**Step 6 — Cloud Executors (separate packages):**
+- [ ] Azure Executor (Functions + ASB + Storage)
+- [ ] AWS Executor (Lambda + SQS + S3) — later
+- [ ] Infrastructure provisioned once, runs all pipelines
 
 **Infrastructure (separate repo: `elwood-infra`):**
 - [ ] Terraform module: Azure (Function App + ASB + Storage + App Insights)
 - [ ] Terraform module: AWS (Lambda + SQS + DynamoDB + S3)
-- [ ] Terraform module: Kubernetes
 - [ ] Example configurations (minimal, production)
 
 ---
