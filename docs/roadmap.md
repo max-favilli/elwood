@@ -247,6 +247,8 @@ return products | select(p => {
 | `toCsv(options?)` | Array of objects → CSV string | `delimiter`, `headers`, `alwaysQuote` | ✅ |
 | `fromXml(options?)` | Parse XML string → JSON object | `attributePrefix`, `stripNamespaces` | ✅ |
 | `toXml(options?)` | JSON object → XML string | `rootElement`, `attributePrefix`, `declaration` | ✅ |
+| `fromParquet(options?)` | Parse Parquet (base64) → array of objects | *Extension* | ✅ |
+| `toParquet(options?)` | Array of objects → Parquet (base64) | `schema`, `compression` *Extension, .NET only* | ✅ |
 | `fromText(options?)` | Split text into lines or structured data | `delimiter` (default `\n`) | ✅ |
 | `toText(options?)` | Join array into text | `delimiter` (default `\n`) | ✅ |
 
@@ -265,6 +267,8 @@ return products | select(p => {
 - [x] Format converters — XML (attributes → `@` prefix, repeated elements → arrays, namespace stripping)
 - [x] Format converters — XLSX (sheet selection, header row) — via separate extension packages (`Elwood.Xlsx`, `@elwood-lang/xlsx`)
 - [x] Extension/plugin API: `RegisterMethod` (.NET), `registerMethod` (TS) for optional packages
+- [x] Format converters — Parquet (read/write via extension: `Elwood.Parquet`, `@elwood-lang/parquet`)
+- [x] Binary pass-through: CLI `--input-format binary` reads files as base64
 - [x] Multi-format test inputs: test runners support `input.csv`, `input.txt`, `input.xml`
 - [x] Parser fix: `$.method()` resolves correctly when `$` is a non-object value
 - [x] `.parseJson()` general-purpose method + `fromCsv({ parseJson: true })` convenience option

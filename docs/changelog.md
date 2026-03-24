@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-24 — Parquet extension + binary pass-through (Eagle format parity)
+
+All Eagle content types are now supported in Elwood.
+
+- **`Elwood.Parquet`** (.NET) — fromParquet/toParquet using Parquet.Net, all types + compression
+- **`@elwood-lang/parquet`** (npm) — fromParquet (read-only) using hyparquet
+- CLI `--input-format binary` reads files as base64 (auto-detects .pdf, .png, .parquet, etc.)
+
 ## 2026-03-23 — CLI format flags (Phase 2 complete)
 
 Added `--input-format` and `--output-format` flags to the CLI, completing Phase 2.

@@ -325,6 +325,8 @@ Methods are called with dot notation on values. Most also work as pipe operators
 | `.toXml(options?)` | JSON object → XML string | `attributePrefix`, `rootElement`, `declaration` (default `true`) |
 | `.fromXlsx(options?)` | Parse XLSX (base64) → array of objects | `headers`, `sheet` (name or index). *Extension: `Elwood.Xlsx` / `@elwood-lang/xlsx`* |
 | `.toXlsx(options?)` | Array of objects → XLSX (base64) | `headers`, `sheet` (name). *Extension: `Elwood.Xlsx` / `@elwood-lang/xlsx`* |
+| `.fromParquet(options?)` | Parse Parquet (base64) → array of objects | *Extension: `Elwood.Parquet` / `@elwood-lang/parquet`* |
+| `.toParquet(options?)` | Array of objects → Parquet (base64) | `schema` (required), `compression`. *Extension: `Elwood.Parquet` (.NET only)* |
 | `.fromText(options?)` | Split text into array of lines | `delimiter` (default `\n`) |
 | `.toText(options?)` | Join array into text | `delimiter` (default `\n`) |
 

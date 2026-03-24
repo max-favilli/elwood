@@ -1,0 +1,34 @@
+{
+  "name": "@elwood-lang/parquet",
+  "version": "0.2.0",
+  "description": "Parquet format support for the Elwood JSON transformation DSL. Optional extension — install only if you need Parquet I/O.",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@elwood-lang/core": ">=0.2.0"
+  },
+  "dependencies": {
+    "hyparquet": "^1.0.0"
+  },
+  "devDependencies": {
+    "@elwood-lang/core": "file:../ts",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  },
+  "license": "MIT",
+  "author": "Massimiliano Favilli",
+  "keywords": ["json", "elwood", "parquet", "columnar", "analytics"]
+}

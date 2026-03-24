@@ -283,6 +283,7 @@ static string DetectInputFormat(string[] args)
         ".csv" => "csv",
         ".txt" => "txt",
         ".xml" => "xml",
+        ".bin" or ".pdf" or ".png" or ".jpg" or ".jpeg" or ".gif" or ".zip" or ".gz" or ".parquet" => "binary",
         _ => "json"
     };
 }
@@ -300,6 +301,12 @@ static IElwoodValue GetInput(string[] args, JsonNodeValueFactory factory, string
                 Console.Error.WriteLine($"Input file not found: {path}");
                 Environment.Exit(1);
             }
+            if (format == "binary")
+            {
+                // Binary files: read as bytes, pass as base64 string
+                var bytes = File.ReadAllBytes(path);
+                return factory.CreateString(Convert.ToBase64String(bytes));
+            }
             var content = File.ReadAllText(path);
             return format is "csv" or "txt" or "xml"
                 ? factory.CreateString(content)
@@ -314,6 +321,12 @@ static IElwoodValue GetInput(string[] args, JsonNodeValueFactory factory, string
     // Try stdin if piped
     if (Console.IsInputRedirected)
     {
+        if (format == "binary")
+        {
+            using var ms = new MemoryStream();
+            Console.OpenStandardInput().CopyTo(ms);
+            return factory.CreateString(Convert.ToBase64String(ms.ToArray()));
+        }
         var stdin = Console.In.ReadToEnd();
         if (!string.IsNullOrWhiteSpace(stdin))
         {
@@ -338,7 +351,7 @@ static void PrintUsage()
     Console.WriteLine("Options:");
     Console.WriteLine("  --input <file>, -i        Input file (format auto-detected from extension)");
     Console.WriteLine("  --json <json>, -j         Inline JSON input");
-    Console.WriteLine("  --input-format <fmt>, -if Override input format: json, csv, txt, xml");
+    Console.WriteLine("  --input-format <fmt>, -if Override input format: json, csv, txt, xml, binary");
     Console.WriteLine("  --output-format <fmt>, -of Convert output: csv, txt, xml");
     Console.WriteLine();
     Console.WriteLine("Examples:");
