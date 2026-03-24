@@ -1,0 +1,8 @@
+return {
+  orders: $.data.orders[*] | select o => {
+    id: o.orderId,
+    customer: o.customerName,
+    total: o.amount,
+    status: o.orderStatus
+  }
+}

@@ -1,0 +1,5 @@
+return $[*] | select o => {
+  orderId: o.id,
+  customer: o.customer.toUpper(),
+  total: o.total
+}

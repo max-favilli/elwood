@@ -1,0 +1,20 @@
+{
+  "source": {
+    "name": "orders",
+    "trigger": "http",
+    "eventId": "evt-001",
+    "http": {
+      "method": "POST",
+      "headers": { "Content-Type": "application/json" }
+    }
+  },
+  "payload": {
+    "data": {
+      "orders": [
+        { "orderId": "ORD-001", "customerName": "Alice", "amount": 150.00, "orderStatus": "active" },
+        { "orderId": "ORD-002", "customerName": "Bob", "amount": 75.50, "orderStatus": "cancelled" },
+        { "orderId": "ORD-003", "customerName": "Charlie", "amount": 200.00, "orderStatus": "active" }
+      ]
+    }
+  }
+}

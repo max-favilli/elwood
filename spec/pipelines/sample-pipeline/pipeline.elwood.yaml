@@ -1,0 +1,19 @@
+version: 2
+name: sample-order-pipeline
+description: Transforms order data — filters active orders, generates summary output
+
+sources:
+  - name: orders
+    trigger: http
+    contentType: json
+    map: source-map.elwood
+
+outputs:
+  - name: active-orders
+    path: $.orders[*] | where o => o.status == "active"
+    map: output-map.elwood
+    contentType: json
+    destinations:
+      fileShare:
+        - connectionString: ${FS_CONN}
+          filename: active-orders.json
