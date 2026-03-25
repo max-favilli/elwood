@@ -30,7 +30,8 @@ public sealed class ElwoodEngine
     /// <summary>
     /// Evaluate a single Elwood expression against input data.
     /// </summary>
-    public ElwoodResult Evaluate(string expression, IElwoodValue input)
+    public ElwoodResult Evaluate(string expression, IElwoodValue input,
+        Dictionary<string, IElwoodValue>? bindings = null)
     {
         var diagnostics = new List<ElwoodDiagnostic>();
 
@@ -53,6 +54,9 @@ public sealed class ElwoodEngine
             var evaluator = new Evaluator(_factory, _extensions);
             var env = new ElwoodEnvironment();
             env.Set("$root", input);
+            if (bindings is not null)
+                foreach (var (key, value) in bindings)
+                    env.Set(key, value);
             var result = evaluator.Evaluate(ast, input, env);
 
             return new ElwoodResult(result, diagnostics);
@@ -78,7 +82,8 @@ public sealed class ElwoodEngine
     /// <summary>
     /// Execute an Elwood script (with let bindings and return) against input data.
     /// </summary>
-    public ElwoodResult Execute(string script, IElwoodValue input)
+    public ElwoodResult Execute(string script, IElwoodValue input,
+        Dictionary<string, IElwoodValue>? bindings = null)
     {
         var diagnostics = new List<ElwoodDiagnostic>();
 
@@ -99,7 +104,7 @@ public sealed class ElwoodEngine
                 return new ElwoodResult(null, diagnostics);
 
             var evaluator = new Evaluator(_factory, _extensions);
-            var result = evaluator.EvaluateScript(ast, input);
+            var result = evaluator.EvaluateScript(ast, input, bindings);
 
             return new ElwoodResult(result, diagnostics);
         }

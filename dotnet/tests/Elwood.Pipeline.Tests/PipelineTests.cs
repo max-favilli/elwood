@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Elwood.Core;
+using Elwood.Core.Abstractions;
 using Elwood.Json;
 using Elwood.Pipeline;
 
@@ -106,6 +108,72 @@ public class PipelineTests
         var first = items[0];
         Assert.Equal("ORD-001", first.GetProperty("orderId")?.GetStringValue());
         Assert.Equal("ALICE", first.GetProperty("customer")?.GetStringValue());
+    }
+
+    [Fact]
+    public void Execute_SourceBindings_Available()
+    {
+        // Test that $source is accessible in source map scripts
+        var pipelinePath = FindSamplePipeline("pipeline.elwood.yaml");
+        var inputPath = FindSamplePipeline("orders-input.json");
+
+        var parser = new PipelineParser();
+        var pipeline = parser.Parse(pipelinePath);
+        Assert.True(pipeline.IsValid);
+
+        var sourceInput = SourceInput.FromFile(inputPath, Factory);
+        var executor = new PipelineExecutor();
+        var result = executor.Execute(pipeline, new Dictionary<string, SourceInput>
+        {
+            ["orders"] = sourceInput
+        });
+
+        Assert.True(result.IsSuccess, $"Errors: {string.Join("; ", result.Errors)}");
+
+        // The source map writes $source.eventId into each order — verify it's there
+        var output = result.Outputs["active-orders"];
+        var items = output.EnumerateArray().ToList();
+        Assert.True(items.Count > 0);
+
+        var sourceEvent = items[0].GetProperty("sourceEvent")?.GetStringValue();
+        Assert.NotNull(sourceEvent);
+        Assert.Equal("evt-001", sourceEvent); // From the envelope file
+    }
+
+    [Fact]
+    public void Execute_SourceBinding_InScript()
+    {
+        var engine = new ElwoodEngine(Factory);
+        var input = Factory.Parse("""{"x": 1}""");
+        var source = Factory.Parse("""{"name": "test", "eventId": "evt-123"}""");
+        var bindings = new Dictionary<string, IElwoodValue> { ["$source"] = source };
+
+        // Simple expression
+        var r1 = engine.Evaluate("$source.eventId", input, bindings);
+        Assert.True(r1.Success, string.Join("; ", r1.Diagnostics));
+        Assert.Equal("evt-123", r1.Value!.GetStringValue());
+
+        // Inside script with lambda
+        var r2 = engine.Execute("return { items: $[*] | select x => $source.name }", Factory.Parse("[1,2]"), bindings);
+        Assert.True(r2.Success, string.Join("; ", r2.Diagnostics));
+    }
+
+    [Fact]
+    public void Execute_IdmBinding_AccessibleInOutputMap()
+    {
+        // Test that $idm is accessible in output scripts via inline expression
+        var engine = new ElwoodEngine(Factory);
+        var input = Factory.Parse("""{"x": 42}""");
+        var idm = Factory.Parse("""{"total": 100}""");
+
+        var bindings = new Dictionary<string, IElwoodValue>
+        {
+            ["$idm"] = idm,
+        };
+
+        var result = engine.Evaluate("$idm.total", input, bindings);
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics));
+        Assert.Equal(100.0, result.Value!.GetNumberValue());
     }
 
     [Fact]

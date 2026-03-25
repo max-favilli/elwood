@@ -3,6 +3,7 @@ return {
     id: o.orderId,
     customer: o.customerName,
     total: o.amount,
-    status: o.orderStatus
+    status: o.orderStatus,
+    sourceEvent: $source.eventId
   }
 }

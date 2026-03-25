@@ -12,6 +12,8 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Elwood.Core\Elwood.Core.csproj" />
+    <ProjectReference Include="..\..\src\Elwood.Json\Elwood.Json.csproj" />
     <ProjectReference Include="..\..\src\Elwood.Pipeline\Elwood.Pipeline.csproj" />
   </ItemGroup>
   <ItemGroup>

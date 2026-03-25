@@ -230,7 +230,7 @@ export function tokenize(source: string): { tokens: Token[]; diagnostics: Diagno
       return readNumber();
     }
 
-    // $ (dollar — start of path)
+    // $ (dollar — start of path, standalone, or $-prefixed identifier like $source, $idm)
     if (c === '$') {
       advance();
       if (current() === '.') {
@@ -240,6 +240,12 @@ export function tokenize(source: string): { tokens: Token[]; diagnostics: Diagno
         }
         advance();
         return makeToken(TokenKind.DollarDot, '$.', start, pos, startLine, startCol);
+      }
+      // $identifier — named binding (e.g., $source, $idm, $output, $secrets, $root)
+      const nc = current();
+      if (nc !== undefined && (isLetter(nc) || nc === '_')) {
+        while (pos < source.length && (isLetter(source[pos]) || isDigit(source[pos]) || source[pos] === '_')) advance();
+        return makeToken(TokenKind.Identifier, source.slice(start, pos), start, pos, startLine, startCol);
       }
       return makeToken(TokenKind.Dollar, '$', start, pos, startLine, startCol);
     }

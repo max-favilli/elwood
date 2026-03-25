@@ -22,10 +22,14 @@ public sealed class Evaluator
         _extensions = extensions;
     }
 
-    public IElwoodValue EvaluateScript(ScriptNode script, IElwoodValue root)
+    public IElwoodValue EvaluateScript(ScriptNode script, IElwoodValue root,
+        Dictionary<string, Abstractions.IElwoodValue>? bindings = null)
     {
         var env = new ElwoodEnvironment();
         env.Set("$root", root);
+        if (bindings is not null)
+            foreach (var (key, value) in bindings)
+                env.Set(key, value);
 
         foreach (var binding in script.Bindings)
         {

@@ -105,7 +105,7 @@ public sealed class Lexer
         if (char.IsDigit(c) || (c == '.' && Peek(1) is char next && char.IsDigit(next)))
             return ReadNumber();
 
-        // $ (dollar — start of path or standalone)
+        // $ (dollar — start of path, standalone, or $-prefixed identifier like $source, $idm)
         if (c == '$')
         {
             Advance();
@@ -118,6 +118,13 @@ public sealed class Lexer
                 }
                 Advance();
                 return MakeToken(TokenKind.DollarDot, "$.", start, _pos, startLine, startCol);
+            }
+            // $identifier — named binding (e.g., $source, $idm, $output, $secrets, $root)
+            if (Current is char nc && (char.IsLetter(nc) || nc == '_'))
+            {
+                while (_pos < _source.Length && (char.IsLetterOrDigit(_source[_pos]) || _source[_pos] == '_'))
+                    Advance();
+                return MakeToken(TokenKind.Identifier, _source[start.._pos], start, _pos, startLine, startCol);
             }
             return MakeToken(TokenKind.Dollar, "$", start, _pos, startLine, startCol);
         }
