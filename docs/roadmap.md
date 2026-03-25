@@ -403,26 +403,27 @@ External scripts are **reusable** — the same `output-id.elwood` and `filter-re
 
 Guideline: **static config → plain YAML. Simple expressions → inline. Complex logic → external `.elwood` file.** This is a best practice, not enforced. Short inline pipes are fine when readable.
 
-### Source envelope — `$` and `$source`
+### Core concepts
 
-Scripts access data via two root bindings:
-- **`$`** — the payload data (identical to standalone scripts — no prefix needed)
-- **`$source`** — source metadata set by the executor
+**IDM (Intermediate Data Model):** shared JSON document built progressively by sources, consumed by outputs. Sources → IDM → Outputs → Destinations.
 
-```
-$source.name         → "api-trigger"
-$source.trigger      → "http"
-$source.eventId      → "evt-abc-123"
-$source.payloadId    → "pay-def-456"
-$source.timestamp    → "2026-03-24T19:00:00Z"
-$source.http.method  → "POST"
-$source.http.headers → { "Content-Type": "...", "X-Correlation-Id": "..." }
-$source.http.query   → { "category": "shoes" }
-$source.queue.name   → "orders-q1"
-$source.queue.metadata → { "priority": "high" }
-```
+**Script bindings:** named root variables set by the executor, available in `.elwood` scripts:
 
-Scripts that don't need metadata ignore `$source` — they work identically in the playground and in a pipeline. `$source` follows the same mechanism as `$root` (a binding set by the executor).
+| Binding | Available in | What it contains |
+|---|---|---|
+| `$` | Source maps | Raw source payload |
+| `$` | Output maps | Current fan-out slice |
+| `$source` | Everywhere | Source metadata (trigger, headers, eventId) |
+| `$idm` | Source maps (after first source) | Current IDM state from previous sources |
+| `$idm` | Output maps | Complete IDM |
+| `$output` | Output maps | Full array from `path` (all slices) |
+| `$secrets` | YAML properties | Secret references loaded from provider |
+
+Scripts that don't need metadata work identically in the playground and in a pipeline — `$` is always the data.
+
+**Fan-out:** both sources and outputs support `path` — slices the IDM, processes once per slice with optional concurrency.
+
+**Full schema reference:** [`docs/pipeline-yaml-reference.md`](pipeline-yaml-reference.md)
 
 ### Executor model — three levels
 
@@ -467,12 +468,18 @@ The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`.
 ### Tasks
 
 **Step 1 — Pipeline YAML schema + parser:**
-- [ ] Define integration YAML schema (sources, outputs, destinations, join)
-- [ ] `Elwood.Pipeline` project — YAML parser (using YamlDotNet)
-- [ ] Resolve `.elwood` file references relative to YAML file location
-- [ ] Inline Elwood expression evaluation for simple dynamic values in YAML
-- [ ] Source envelope schema (source metadata + payload)
-- [ ] `$source` binding support in evaluator
+- [x] Define integration YAML schema (sources, outputs, destinations)
+- [x] `Elwood.Pipeline` project — YAML parser (using YamlDotNet)
+- [x] Resolve `.elwood` file references relative to YAML file location
+- [x] Source envelope schema (source metadata + payload)
+- [x] PipelineExecutor: source maps → IDM → output path → output maps
+- [x] Sample pipeline with tests (6 tests)
+- [ ] `depends` — source dependency graph + stage resolution
+- [ ] `path` fan-out on sources (process once per slice with concurrency)
+- [ ] `$source`, `$idm`, `$output` bindings in evaluator
+- [ ] `$secrets` resolution from provider
+- [ ] Inline Elwood expression evaluation in YAML string properties
+- [ ] Full destination type schema (11 types: REST, file share, SFTP, blob, ASB, SQL, SOAP, email, service point, request)
 
 **Step 2 — CLI Executor:**
 - [ ] `elwood pipeline run <yaml> --source name=file` command
@@ -496,10 +503,46 @@ The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`.
 - [ ] `elwood pipeline serve <yaml>` — start HTTP listener for trigger sources
 
 **Step 5 — Deployment + Runtime API:**
-- [ ] `elwood deploy` command — uploads pipeline YAML + scripts to pipeline store
-- [ ] `Elwood.Runtime.Api` — REST API layer over the Runtime
-- [ ] Pipeline CRUD, validation, deploy, execution queries, document access, health, metrics
-- [ ] Auth: JWT bearer tokens
+- [ ] `IPipelineStore` interface — where pipeline YAMLs + .elwood scripts are persisted
+  - [ ] `FileSystemPipelineStore` — local folder (dev/CLI)
+  - [ ] `GitPipelineStore` — git repo as backing store (recommended for production)
+    - Every save = git commit (automatic versioning, diff, audit trail)
+    - Revisions API = `git log`, restore = `git checkout` + commit
+    - Deploy = tag or push to deploy branch
+    - Backed by any git remote (Azure DevOps, GitHub, GitLab, local bare repo)
+    - Developers can edit in VS Code and push — portal is optional
+  - [ ] `AzureBlobPipelineStore` — Azure Blob container (simple, no versioning)
+  - [ ] Each pipeline is a folder: `{pipeline-id}/pipeline.elwood.yaml` + `{pipeline-id}/*.elwood`
+- [ ] `elwood deploy` command — uploads pipeline YAML + scripts to the configured IPipelineStore
+- [ ] `Elwood.Runtime.Api` — REST API layer over the Runtime (consumed by Management Portal and external tools)
+- [ ] API reads/writes pipelines and scripts via `IPipelineStore` — same interface regardless of storage backend
+- [ ] Pipelines:
+  - [ ] `GET /api/pipelines` — list pipelines, filter by name/status
+  - [ ] `POST /api/pipelines` — create new pipeline
+  - [ ] `GET /api/pipelines/{id}` — get pipeline YAML + associated .elwood scripts
+  - [ ] `PUT /api/pipelines/{id}` — update pipeline
+  - [ ] `DELETE /api/pipelines/{id}` — delete pipeline
+  - [ ] `GET /api/pipelines/{id}/revisions` — version history
+  - [ ] `POST /api/pipelines/{id}/revisions/{rev}/restore` — restore to previous version
+  - [ ] `POST /api/pipelines/{id}/validate` — run `elwood validate`
+  - [ ] `POST /api/pipelines/{id}/deploy` — deploy to pipeline store
+- [ ] Scripts (`.elwood` files associated with a pipeline):
+  - [ ] `GET /api/pipelines/{id}/scripts` — list all .elwood scripts referenced by this pipeline
+  - [ ] `GET /api/pipelines/{id}/scripts/{name}` — get script content
+  - [ ] `PUT /api/pipelines/{id}/scripts/{name}` — create or update a script
+  - [ ] `DELETE /api/pipelines/{id}/scripts/{name}` — delete a script
+  - [ ] `POST /api/pipelines/{id}/scripts/{name}/test` — run script against provided input, return result
+- [ ] Executions:
+  - [ ] `GET /api/executions` — list executions, filter by pipeline/status/time range
+  - [ ] `GET /api/executions/{id}` — full execution state from IStateStore
+  - [ ] `POST /api/executions` — trigger a pipeline run
+  - [ ] `DELETE /api/executions/{id}` — cancel a running execution
+- [ ] Documents:
+  - [ ] `GET /api/documents/{ref}` — retrieve payload/output from IDocumentStore
+- [ ] System:
+  - [ ] `GET /api/health` — runtime health status
+  - [ ] `GET /api/metrics` — running executions count, recent activity summary
+- [ ] Auth: JWT bearer tokens (MSAL / Azure AD integration)
 
 **Step 6 — Cloud Executors (separate packages):**
 - [ ] Azure Executor (Functions + ASB + Storage)

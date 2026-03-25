@@ -2,6 +2,12 @@
 
 Elwood pipelines are defined in `.elwood.yaml` files. A pipeline describes **where data comes from** (sources), **how it's transformed** (maps and scripts), and **where it goes** (outputs and destinations).
 
+The central concept is the **IDM (Intermediate Data Model)** — a shared JSON document built progressively by sources and consumed by outputs.
+
+```
+Sources → IDM → Outputs → Destinations
+```
+
 ---
 
 ## Quick Example
@@ -9,7 +15,7 @@ Elwood pipelines are defined in `.elwood.yaml` files. A pipeline describes **whe
 ```yaml
 version: 2
 name: order-sync
-description: Receive orders via HTTP, transform, send to file share
+description: Receive orders via HTTP, enrich with products, deliver to file share and API
 
 sources:
   - name: orders
@@ -18,23 +24,32 @@ sources:
     contentType: json
     map: normalize-orders.elwood
 
+  - name: products
+    trigger: pull
+    depends: orders
+    path: $.orders[*]
+    concurrency: 10
+    from:
+      http:
+        url: https://api.example.com/products/{$.sku}
+    map: enrich-order.elwood
+
 outputs:
   - name: active-orders
     path: $.orders[*] | where o => o.status == "active"
     map: format-output.elwood
     contentType: json
+    concurrency: 50
     destinations:
-      fileShare:
-        - connectionString: ${FS_CONNECTION}
-          filename: /exports/active-orders-{$source.eventId}.json
+      azureFileShare:
+        - connectionString: $secrets.fileShare.connectionString
+          filename: /exports/{$.orderId}.json
+      restEndpoint:
+        - url: https://erp.example.com/api/import
+          method: POST
+          headers:
+            Authorization: Bearer $secrets.erp.token
 ```
-
-This pipeline:
-1. Receives JSON orders via an HTTP POST endpoint
-2. Runs `normalize-orders.elwood` to transform the raw payload
-3. Filters for active orders using an inline Elwood expression
-4. Transforms each active order through `format-output.elwood`
-5. Writes the result to a file share
 
 ---
 
@@ -46,131 +61,439 @@ name: my-pipeline             # Pipeline name (required)
 description: What it does     # Human-readable description (optional)
 
 sources: [...]                # Where data comes from (required, 1+)
-join: { ... }                 # How multiple sources are combined (optional)
 outputs: [...]                # What data to produce and where to send it (required, 1+)
 ```
 
 ---
 
-## Sources
+## The IDM (Intermediate Data Model)
 
-A source defines where input data comes from and how to initially transform it.
+The IDM is the **single JSON document built by merging data from all sources**. It is the input to the output stage.
 
-```yaml
-sources:
-  - name: orders              # Unique name for this source (required)
-    trigger: http             # How this source is activated (required)
-    endpoint: /api/orders     # HTTP path (for http trigger)
-    contentType: json         # Payload format: json, csv, xml, text, binary, xlsx, parquet
-    map: normalize.elwood     # Transformation script (optional)
+```
+Source 1 (orders API)     → map writes $.orders
+Source 2 (product catalog) → map writes $.products
+Source 3 (warehouse stock) → map writes $.stock
+    ↓
+IDM = {
+    orders: [...],     ← from source 1
+    products: [...],   ← from source 2
+    stock: [...]       ← from source 3
+}
+    ↓
+Output 1: reads $.orders[*], transforms, delivers to file share
+Output 2: reads $.orders[*], summarizes, delivers to API
 ```
 
-### Trigger Types
+Sources build the IDM. Outputs consume it. The IDM is never modified by outputs.
 
-| Trigger | Description | When it fires |
-|---|---|---|
-| `http` | HTTP endpoint | Third-party system sends a POST to the endpoint |
-| `queue` | Message broker | Message arrives on a queue (Azure Service Bus, RabbitMQ, etc.) |
-| `schedule` | Cron schedule | Runs on a timer (e.g., every hour, daily at 3am) |
-| `pull` | Pull from external system | Pipeline pulls data from an API, file share, or SFTP |
-| `file` | File system watch | File appears in a monitored directory |
+### How sources build the IDM
 
-### Source Properties
+Each source map script receives:
+- **`$`** — the raw payload from this source (the HTTP body, file content, queue message, etc.)
+- **`$source`** — source metadata (trigger info, headers, event ID)
+- **`$idm`** — the current IDM state (what previous sources have written)
 
-| Property | Type | Required | Description |
-|---|---|---|---|
-| `name` | string | yes | Unique identifier for this source |
-| `trigger` | string | yes | Trigger type: `http`, `queue`, `schedule`, `pull`, `file` |
-| `endpoint` | string | for http | HTTP path. Supports inline expressions: `/api/{$.category}` |
-| `contentType` | string | no | Payload format. Default: `json`. Options: `json`, `csv`, `xml`, `text`, `binary`, `xlsx`, `parquet` |
-| `map` | string | no | Transformation: `.elwood` file path or inline Elwood expression |
-| `from` | object | for pull | Pull source configuration (see below) |
+The script returns data that is **merged into the IDM**.
 
-### Pull Sources
-
-When `trigger: pull`, the `from` section specifies where to get the data:
-
-```yaml
-sources:
-  - name: products
-    trigger: pull
-    contentType: json
-    from:
-      http:
-        url: https://api.example.com/products
-        method: GET
-        headers:
-          Authorization: Bearer ${API_TOKEN}
-```
-
-```yaml
-sources:
-  - name: inventory-file
-    trigger: pull
-    contentType: csv
-    from:
-      sftp:
-        connectionString: ${SFTP_CONN}
-        path: /exports/inventory.csv
-```
-
-```yaml
-sources:
-  - name: reports
-    trigger: pull
-    contentType: xlsx
-    from:
-      fileShare:
-        connectionString: ${FS_CONN}
-        path: /shared/reports/latest.xlsx
-```
-
----
-
-## Source Maps
-
-The `map` property transforms raw source data into a normalized structure. It can be:
-
-**An external `.elwood` script file** (recommended for complex transforms):
-```yaml
-map: normalize-orders.elwood
-```
-
-**An inline Elwood expression** (for simple transforms):
-```yaml
-map: $.data.results[*]
-```
-
-### How maps work
-
-The map script receives:
-- **`$`** — the raw payload (the data as received from the source)
-- **`$source`** — source metadata (trigger info, headers, event ID, etc.)
-
-The script returns the transformed data, which becomes the input for the rest of the pipeline.
-
-**Example: `normalize-orders.elwood`**
 ```elwood
+// normalize-orders.elwood — Source map for the "orders" source
+// $ = raw HTTP payload, $idm = empty (first source), $source = HTTP metadata
+
 return {
   orders: $.data.orderList[*] | select o => {
     id: o.orderId,
+    sku: o.itemCode,
     customer: o.customerName,
     total: o.amount,
     status: o.orderStatus,
     correlationId: $source.http.headers["X-Correlation-Id"]
   }
 }
+// After this runs: IDM = { orders: [...] }
 ```
+
+```elwood
+// enrich-order.elwood — Source map for the "products" source (runs per order slice)
+// $ = product API response for one order, $idm = current IDM with all orders
+
+return {
+  ...($idm),
+  productName: $.name,
+  productCategory: $.category
+}
+// Merged back into the IDM slice
+```
+
+---
+
+## Sources
+
+A source defines where input data comes from, how to transform it, and how it relates to other sources.
+
+```yaml
+sources:
+  - name: orders              # Unique name (required)
+    trigger: http             # Trigger type (required)
+    endpoint: /api/orders     # HTTP path (for http trigger)
+    contentType: json         # Payload format
+    map: normalize.elwood     # Transformation script
+    depends: other-source     # Execution dependency (optional)
+    path: $.items[*]          # Fan-out: process once per slice (optional)
+    concurrency: 10           # Parallel fan-out processing (optional)
+```
+
+### Trigger Types
+
+| Trigger | Description | When it fires |
+|---|---|---|
+| `http` | HTTP endpoint | External system POSTs to the endpoint |
+| `http-request` | Synchronous HTTP | Request-response: the output is returned to the caller |
+| `queue` | Message broker | Message arrives on a queue (ASB, RabbitMQ, etc.) |
+| `schedule` | Cron schedule | Runs on a timer |
+| `pull` | Pull from external system | Pipeline fetches data from an API, file share, SFTP, SQL, etc. |
+| `file` | File system watch | File appears in a monitored directory |
+
+### Source Properties
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | Unique identifier |
+| `trigger` | string | yes | Trigger type |
+| `endpoint` | string | for http | HTTP path. Supports expressions: `/api/{$.category}` |
+| `contentType` | string | no | Payload format. Default: `json` |
+| `map` | string | no | `.elwood` script or inline expression |
+| `depends` | string or string[] | no | Source(s) that must complete before this one runs |
+| `path` | string | no | Fan-out: slice the IDM, process this source once per slice |
+| `concurrency` | int | no | Max parallel slices when `path` is set. Default: `1` |
+| `from` | object | for pull | Pull source configuration |
+
+### Source Dependencies
+
+Sources can depend on other sources. The executor resolves dependencies into a stage graph:
+
+```yaml
+sources:
+  - name: orders              # Stage 1: no dependencies, runs first
+    trigger: http
+
+  - name: products            # Stage 2: needs orders data
+    trigger: pull
+    depends: orders
+    from:
+      http:
+        url: https://api.example.com/products
+
+  - name: warehouse           # Stage 2: also needs orders, runs CONCURRENTLY with products
+    trigger: pull
+    depends: orders
+    from:
+      http:
+        url: https://api.example.com/stock
+
+  - name: shipping            # Stage 3: needs BOTH products and warehouse
+    trigger: pull
+    depends: [products, warehouse]
+    from:
+      http:
+        url: https://api.example.com/shipping
+```
+
+Execution graph:
+```
+orders
+  ├──→ products   ──┐
+  │                  ├──→ shipping ──→ IDM complete ──→ outputs
+  └──→ warehouse  ──┘
+```
+
+Sources in the same stage (same dependency level) run concurrently. The IDM is only mutated between stages — never during concurrent execution.
+
+### Source Fan-Out (path)
+
+When a source has `path`, the IDM is sliced and the source is processed **once per slice**:
+
+```yaml
+sources:
+  - name: orders
+    trigger: http
+    map: extract-orders.elwood
+    # After this: IDM = { orders: [{ sku: "A" }, { sku: "B" }, { sku: "C" }] }
+
+  - name: product-details
+    trigger: pull
+    depends: orders
+    path: $.orders[*]           # ← Fan-out: one API call per order
+    concurrency: 10             # ← Up to 10 in parallel
+    from:
+      http:
+        url: https://api.example.com/products/{$.sku}
+    map: merge-product.elwood
+```
+
+With `path: $.orders[*]` and 3 orders, the product-details source runs 3 times — once per order. Each invocation receives one order slice as context. With `concurrency: 10`, up to 10 slices process in parallel.
+
+### Pull Sources
+
+When `trigger: pull`, the `from` section specifies where to get data:
+
+```yaml
+# REST API
+from:
+  http:
+    url: https://api.example.com/data
+    method: GET
+    headers:
+      Authorization: Bearer $secrets.api.token
+
+# SFTP file
+from:
+  sftp:
+    connectionString: $secrets.sftp.connectionString
+    path: /exports/data.csv
+
+# Azure File Share
+from:
+  azureFileShare:
+    connectionString: $secrets.fileShare.connectionString
+    path: /shared/data.json
+
+# Azure Blob Storage
+from:
+  blobStorage:
+    connectionString: $secrets.blob.connectionString
+    container: input-data
+    path: latest/data.json
+
+# SQL database
+from:
+  sql:
+    connectionString: $secrets.sql.connectionString
+    query: SELECT * FROM orders WHERE status = 'pending'
+```
+
+---
+
+## Outputs
+
+An output defines what data to extract from the IDM, how to transform it, and where to deliver it.
+
+```yaml
+outputs:
+  - name: active-orders
+    path: $.orders[*] | where o => o.status == "active"
+    outputId: $.orderId
+    map: format-for-erp.elwood
+    contentType: json
+    concurrency: 50
+    destinations:
+      restEndpoint:
+        - url: https://erp.example.com/api/orders
+          method: POST
+```
+
+### Output Properties
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | Unique name |
+| `path` | string | no | Fan-out: slice the IDM, process once per slice |
+| `outputId` | string | no | Expression or script generating a unique ID per item |
+| `map` | string | no | Transformation: `.elwood` script or inline expression |
+| `contentType` | string | no | Output format. Default: `json` |
+| `concurrency` | int | no | Max parallel items. Default: `1` |
+| `destinations` | object | no | Where to deliver (see Destinations) |
+
+### Output Fan-Out (path)
+
+The `path` property slices the IDM. The output is processed **once per slice**:
+
+```yaml
+path: $.orders[*]                                     # One output per order
+path: $.orders[*] | where o => o.status == "active"   # One output per active order
+path: filter-orders.elwood                            # Script that returns the slices
+```
+
+### Context Bindings in Output Maps
+
+When an output map runs, these bindings are available:
+
+| Binding | What it contains |
+|---|---|
+| `$` | The current slice (one item from the fan-out) |
+| `$idm` | The complete IDM (all source data) |
+| `$output` | The full array selected by `path` (all slices, not just current) |
+| `$source` | Source metadata from the triggering source |
+
+```elwood
+// format-for-erp.elwood — Output map
+// $ = one active order (the current slice)
+// $idm = full IDM with all orders, products, etc.
+// $output = all active orders (the full filtered array)
+
+let totalOrders = $output | count
+
+return {
+  OrderID: $.orderId,
+  Customer: $.customer.toUpper(),
+  Amount: $.total.toString(),
+  BatchSize: totalOrders,
+  Category: $idm.products[*] | first p => p.sku == $.sku | select p => p.category
+}
+```
+
+### Output Processing Pipeline
+
+```
+IDM
+  → path (fan-out: slice the IDM into items)
+  → map (transform each item)
+  → contentType (serialize: json, csv, xml, etc.)
+  → destinations (deliver each item)
+```
+
+---
+
+## Destinations
+
+Destinations define where output data is delivered. An output can have multiple destinations (fan-out to multiple targets).
+
+### Destination Types
+
+| Type | Description |
+|---|---|
+| `restEndpoint` | REST API call (POST, PUT, PATCH) |
+| `azureFileShare` | Azure File Share |
+| `sftp` | SFTP file delivery |
+| `blobStorage` | Azure Blob Storage |
+| `serviceBus` | Azure Service Bus queue/topic |
+| `sql` | SQL database (stored procedure) |
+| `soap` | SOAP web service |
+| `emailCommService` | Azure Email Communication Services |
+| `servicePoint` | HTTP endpoint for pull retrieval |
+| `request` | Response body for http-request trigger (sync flow) |
+
+### REST API
+
+```yaml
+destinations:
+  restEndpoint:
+    - url: https://api.target.com/import
+      method: POST
+      headers:
+        Authorization: Bearer $secrets.target.token
+        Content-Type: application/json
+```
+
+### Azure File Share
+
+```yaml
+destinations:
+  azureFileShare:
+    - connectionString: $secrets.fileShare.connectionString
+      filename: /exports/{$.orderId}.json
+```
+
+### SFTP
+
+```yaml
+destinations:
+  sftp:
+    - connectionString: $secrets.sftp.connectionString
+      filename: /incoming/{$.code}.xml
+```
+
+### Blob Storage
+
+```yaml
+destinations:
+  blobStorage:
+    - connectionString: $secrets.blob.connectionString
+      container: output-data
+      filename: orders/{$.orderId}/{$source.eventId}.json
+```
+
+### Service Bus
+
+```yaml
+destinations:
+  serviceBus:
+    - connectionString: $secrets.asb.connectionString
+      queue: order-notifications
+```
+
+### SQL
+
+```yaml
+destinations:
+  sql:
+    - connectionString: $secrets.sql.connectionString
+      storedProcedure: usp_ImportOrder
+```
+
+### Email
+
+```yaml
+destinations:
+  emailCommService:
+    - connectionString: $secrets.email.connectionString
+      to: notifications@example.com
+      subject: Order {$.orderId} processed
+```
+
+### Multiple Destinations
+
+```yaml
+destinations:
+  restEndpoint:
+    - url: https://erp.example.com/api/orders
+      method: POST
+  azureFileShare:
+    - connectionString: $secrets.fs.connectionString
+      filename: /archive/{$.orderId}.json
+  serviceBus:
+    - connectionString: $secrets.asb.connectionString
+      queue: order-events
+```
+
+### Retry Policy
+
+Destinations support retry policies:
+
+```yaml
+destinations:
+  restEndpoint:
+    - url: https://api.target.com/import
+      method: POST
+      retryPolicy:
+        maxRetries: 3
+        waitSeconds: 5
+```
+
+### Dynamic Expressions in Destinations
+
+All string properties in destinations support inline Elwood expressions:
+
+```yaml
+filename: /exports/{$.category}/{$.orderId}.json     # Data from current slice
+url: https://api.example.com/orders/{$.orderId}      # Dynamic URL
+subject: Order {$.orderId} - {$.status}              # Dynamic email subject
+```
+
+In destination expressions:
+- `$` is the current output slice
+- `$source` is the source metadata
+- `$idm` is the full IDM
 
 ---
 
 ## Source Metadata (`$source`)
 
-Every source provides metadata alongside the payload. Scripts access it via `$source`:
+Every source provides metadata alongside the payload:
 
 ```
 $source.name             → "orders" (source name from YAML)
-$source.trigger          → "http" (trigger type)
+$source.trigger          → "http"
 $source.eventId          → "evt-abc-123" (unique execution ID)
 $source.payloadId        → "pay-def-456" (unique payload ID)
 $source.timestamp        → "2026-03-25T10:30:00Z"
@@ -180,7 +503,7 @@ $source.timestamp        → "2026-03-25T10:30:00Z"
 ```
 $source.http.method      → "POST"
 $source.http.path        → "/api/orders"
-$source.http.headers     → { "Content-Type": "application/json", "X-Correlation-Id": "..." }
+$source.http.headers     → { "Content-Type": "...", "X-Correlation-Id": "..." }
 $source.http.query       → { "category": "shoes" }
 ```
 
@@ -191,246 +514,59 @@ $source.queue.messageId  → "msg-123"
 $source.queue.metadata   → { "priority": "high" }
 ```
 
-Scripts that don't need metadata can ignore `$source` — they work identically in the playground, CLI, and production.
-
 ---
 
-## Outputs
+## Secrets
 
-An output defines what data to extract, how to transform it, and where to send it.
-
-```yaml
-outputs:
-  - name: active-orders
-    path: $.orders[*] | where o => o.status == "active"
-    outputId: generate-id.elwood
-    map: format-output.elwood
-    contentType: json
-    concurrency: 50
-    destinations:
-      fileShare:
-        - connectionString: ${FS_CONN}
-          filename: /exports/{$.id}.json
-```
-
-### Output Properties
-
-| Property | Type | Required | Description |
-|---|---|---|---|
-| `name` | string | yes | Unique name for this output |
-| `path` | string | no | Filter/select expression or `.elwood` script. Selects which data goes to this output |
-| `outputId` | string | no | Expression or `.elwood` script that generates a unique ID per output item |
-| `map` | string | no | Transformation: `.elwood` file path or inline expression |
-| `contentType` | string | no | Output format. Default: `json`. Options: `json`, `csv`, `xml`, `text`, `parquet`, `xlsx` |
-| `concurrency` | int | no | Max parallel items for async executors. Default: `1` |
-| `destinations` | object | no | Where to deliver the output (see below) |
-
-### Output Processing Pipeline
-
-Each output item flows through these stages in order:
-
-```
-Source data
-  → path (filter/select — pick which items)
-  → map (transform each item)
-  → contentType (serialize to target format)
-  → destinations (deliver)
-```
-
-### The `path` property
-
-Selects which data from the source(s) goes to this output. Can be:
-
-- **A JSONPath-style expression:** `$.orders[*]`
-- **An Elwood pipe expression:** `$.orders[*] | where o => o.status == "active"`
-- **An `.elwood` script file:** `filter-orders.elwood`
-
-If omitted, the full source data is passed to the output.
-
-### The `map` property
-
-Transforms each item selected by `path`. Same syntax as source maps — `.elwood` file or inline expression.
-
-### The `outputId` property
-
-Generates a unique identifier for each output item. Used by executors for idempotency, tracking, and deduplication.
+Secrets use `$secrets` references. The executor loads them from a configured provider — secrets are never stored in the pipeline YAML.
 
 ```yaml
-outputId: $.id                                    # Simple field reference
-outputId: generate-output-id.elwood               # Script that computes an ID
+# In the pipeline YAML — just references
+connectionString: $secrets.sql.connectionString
+headers:
+  Authorization: Bearer $secrets.api.token
 ```
 
----
+### Secret Providers
 
-## Destinations
+The executor is configured (separately from the pipeline) with a secret provider:
 
-Destinations define where output data is delivered. An output can have multiple destinations (fan-out).
+| Provider | Description |
+|---|---|
+| Environment variables | `$secrets.x.y` → env var `ELWOOD_SECRET_X_Y` |
+| Azure App Configuration | Reads from Azure App Configuration service |
+| Azure Key Vault | Reads from Azure Key Vault |
+| `.env` file | Reads from a local `.env` file (development) |
 
-### File Share
-
-```yaml
-destinations:
-  fileShare:
-    - connectionString: ${FS_CONN}
-      filename: /exports/orders/{$.id}.json
-```
-
-### SFTP
-
-```yaml
-destinations:
-  sftp:
-    - connectionString: ${SFTP_CONN}
-      filename: /incoming/{$.code}.xml
-```
-
-### HTTP (POST/PUT)
-
-```yaml
-destinations:
-  http:
-    - url: https://api.target-system.com/import
-      method: POST
-      headers:
-        Authorization: Bearer ${TARGET_TOKEN}
-        Content-Type: application/json
-```
-
-### Blob Storage
-
-```yaml
-destinations:
-  blobStorage:
-    - connectionString: ${BLOB_CONN}
-      container: output-data
-      filename: orders/{$.id}.json
-```
-
-### Multiple Destinations
-
-An output can go to multiple destinations simultaneously:
-
-```yaml
-destinations:
-  fileShare:
-    - connectionString: ${FS_CONN}
-      filename: /exports/{$.id}.json
-  http:
-    - url: https://api.system-a.com/import
-      method: POST
-    - url: https://api.system-b.com/import
-      method: POST
-  blobStorage:
-    - connectionString: ${BLOB_CONN}
-      container: archive
-      filename: archive/{$.id}.json
-```
-
-### Dynamic Filenames
-
-Filenames and URLs support inline Elwood expressions:
-
-```yaml
-filename: /exports/{$.category}/{$.id}.json       # Data-driven path
-filename: /daily/{$source.timestamp}.csv           # Timestamp from source metadata
-```
-
----
-
-## Join
-
-When a pipeline has multiple sources, the `join` section defines how they're combined.
-
-```yaml
-sources:
-  - name: orders
-    trigger: http
-    contentType: json
-
-  - name: products
-    trigger: pull
-    contentType: json
-    from:
-      http:
-        url: https://api.example.com/products
-
-join:
-  path: $
-  keys:
-    - orders.productId
-    - products.id
-```
-
-Without a `join`, multiple sources are available as a merged object:
-```
-$.orders    → data from the "orders" source
-$.products  → data from the "products" source
-```
-
----
-
-## Inline Expressions vs External Scripts
-
-Values in the YAML can be:
-
-| Type | Syntax | When to use |
-|---|---|---|
-| **Static** | `contentType: json` | Fixed configuration values |
-| **Inline expression** | `path: $.orders[*]` | Simple data access, short filters |
-| **External script** | `map: transform.elwood` | Complex logic, multiple pipes, let bindings |
-
-**Guideline:** use inline for anything short and readable. Use external `.elwood` files for anything with multiple pipes, conditionals, or let bindings. This is a recommendation — not enforced.
-
-**Examples of good inline:**
-```yaml
-path: $.orders[*]
-path: $.items[*] | where i => i.active
-outputId: $.id
-filename: /exports/{$.code}.json
-```
-
-**Examples that should be external scripts:**
-```yaml
-map: complex-transform.elwood    # Has let bindings, conditionals, multiple pipes
-outputId: generate-id.elwood     # Has logic beyond simple field access
-```
-
----
-
-## Environment Variables
-
-Connection strings, tokens, and other secrets use `${VAR_NAME}` syntax:
-
-```yaml
-destinations:
-  fileShare:
-    - connectionString: ${FS_CONNECTION_STRING}
-      filename: /exports/data.json
-  http:
-    - url: https://api.example.com/import
-      headers:
-        Authorization: Bearer ${API_TOKEN}
-```
-
-Environment variables are resolved at runtime by the executor. They are **not** Elwood expressions — they are simple string substitution for configuration values.
+For the CLI executor, secrets default to environment variables or a `.env` file.
 
 ---
 
 ## Content Type Conversion
 
-When a source has a non-JSON `contentType`, the executor automatically converts the raw data before passing it to scripts:
+Sources and outputs specify `contentType` to handle format conversion automatically:
 
-| contentType | What happens | `$` in scripts |
+| contentType | Source (input) | Output (serialization) |
 |---|---|---|
-| `json` | Parsed as JSON | JSON object/array |
-| `csv` | Parsed with `fromCsv()` | Array of objects (headers become keys) |
-| `xml` | Parsed with `fromXml()` | JSON object (XML structure) |
-| `text` | Passed as string | Raw string |
-| `binary` | Base64-encoded | Base64 string |
-| `xlsx` | Parsed with `fromXlsx()` | Array of objects (requires Elwood.Xlsx extension) |
-| `parquet` | Parsed with `fromParquet()` | Array of objects (requires Elwood.Parquet extension) |
+| `json` | Parsed as JSON | Pretty-printed JSON |
+| `csv` | Parsed with `fromCsv()` | Serialized with `toCsv()` |
+| `xml` | Parsed with `fromXml()` | Serialized with `toXml()` |
+| `text` | Passed as string | Joined with `toText()` |
+| `binary` | Base64-encoded | Base64 decoded to bytes |
+| `xlsx` | Parsed with `fromXlsx()` | Serialized with `toXlsx()` (requires extension) |
+| `parquet` | Parsed with `fromParquet()` | Serialized with `toParquet()` (requires extension) |
 
-For outputs, the reverse happens — the `contentType` determines serialization format.
+---
+
+## Inline Expressions vs External Scripts
+
+| Type | Syntax | When to use |
+|---|---|---|
+| **Static** | `contentType: json` | Fixed config values |
+| **Inline expression** | `path: $.orders[*]` | Simple data access, short filters |
+| **External script** | `map: transform.elwood` | Complex logic, let bindings, multiple pipes |
+
+**Guideline:** inline for anything short. External `.elwood` files for anything with `let`, conditionals, or multi-pipe logic.
 
 ---
 
@@ -439,25 +575,27 @@ For outputs, the reverse happens — the `contentType` determines serialization 
 ### CLI Executor (development & testing)
 
 ```bash
-# Single source — provide a data file
+# Single source
 elwood pipeline run pipeline.elwood.yaml --source orders=payload.json
 
-# Multi-source — one file per named source
+# Multi-source
 elwood pipeline run pipeline.elwood.yaml \
   --source orders=orders-payload.json \
   --source products=products-data.json
 
-# Outputs are written to stdout or --output-dir
+# With output directory
 elwood pipeline run pipeline.elwood.yaml \
   --source orders=payload.json \
   --output-dir ./output/
+
+# Validate only
+elwood pipeline validate pipeline.elwood.yaml
 ```
 
-Source files can be:
-- **Plain data files** — `$` is the file content, `$source` has minimal defaults
-- **Envelope files** — JSON with `"source"` and `"payload"` keys, providing full `$source` metadata
+### Envelope Files
 
-**Envelope file example:**
+Source files can include metadata for testing scripts that use `$source`:
+
 ```json
 {
   "source": {
@@ -470,116 +608,15 @@ Source files can be:
     }
   },
   "payload": {
-    "orders": [
-      { "id": "ORD-001", "customer": "Alice", "total": 150.00 }
-    ]
+    "orders": [{ "id": "ORD-001", "customer": "Alice" }]
   }
 }
 ```
 
-### Validate a pipeline
-
-```bash
-elwood pipeline validate pipeline.elwood.yaml
-```
-
-Checks:
-- YAML syntax and schema
-- All referenced `.elwood` scripts exist
-- Elwood expressions parse without errors
-- Source names are unique
-- Required properties are present
+Plain data files (no envelope) also work — `$source` gets minimal defaults.
 
 ---
 
-## Complete Example: Multi-Source Pipeline
+## Complete Example
 
-```yaml
-version: 2
-name: order-enrichment
-description: |
-  Receives orders via HTTP, enriches with product data from external API,
-  outputs to file share and blob storage.
-
-sources:
-  - name: orders
-    trigger: http
-    endpoint: /api/orders
-    contentType: json
-    map: normalize-orders.elwood
-
-  - name: products
-    trigger: pull
-    contentType: json
-    from:
-      http:
-        url: https://api.products.example.com/catalog
-        method: GET
-        headers:
-          Authorization: Bearer ${PRODUCT_API_TOKEN}
-
-outputs:
-  - name: enriched-orders
-    path: enrich-with-products.elwood
-    map: format-for-erp.elwood
-    contentType: json
-    concurrency: 100
-    destinations:
-      http:
-        - url: https://erp.example.com/api/import
-          method: POST
-          headers:
-            Authorization: Bearer ${ERP_TOKEN}
-      blobStorage:
-        - connectionString: ${BLOB_CONN}
-          container: order-archive
-          filename: orders/{$.orderId}/{$source.eventId}.json
-
-  - name: order-summary
-    path: $.orders[*] | select o => { id: o.id, total: o.total }
-    contentType: csv
-    destinations:
-      fileShare:
-        - connectionString: ${FS_CONN}
-          filename: /reports/daily-orders.csv
-```
-
-**Supporting scripts:**
-
-`normalize-orders.elwood`:
-```elwood
-return {
-  orders: $.data.orderList[*] | select o => {
-    id: o.orderId,
-    customer: o.customerName,
-    productCode: o.itemCode,
-    total: o.amount,
-    status: o.orderStatus,
-    correlationId: $source.http.headers["X-Correlation-Id"]
-  }
-}
-```
-
-`enrich-with-products.elwood`:
-```elwood
-let orders = $.orders
-let products = $.products
-
-return orders[*] | select o => {
-  ...o,
-  productName: products[*] | first p => p.code == o.productCode | select p => p.name,
-  productCategory: products[*] | first p => p.code == o.productCode | select p => p.category
-}
-```
-
-`format-for-erp.elwood`:
-```elwood
-return $[*] | select o => {
-  OrderID: o.id,
-  CustomerName: o.customer.toUpper(),
-  ProductName: o.productName,
-  Category: o.productCategory,
-  Amount: o.total.toString(),
-  Status: o.status
-}
-```
+See the [sample pipeline](../spec/pipelines/sample-pipeline/) for a working example with YAML, scripts, and test data.
