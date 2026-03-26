@@ -176,6 +176,132 @@ public class PipelineTests
         Assert.Equal(100.0, result.Value!.GetNumberValue());
     }
 
+    // ── Dependency resolution ──
+
+    [Fact]
+    public void DependencyResolver_SingleStage()
+    {
+        var sources = new List<Schema.SourceConfig>
+        {
+            new() { Name = "a", Trigger = "http" },
+            new() { Name = "b", Trigger = "http" },
+        };
+        var stages = DependencyResolver.ResolveStages(sources);
+        Assert.Single(stages);
+        Assert.Equal(2, stages[0].Count);
+    }
+
+    [Fact]
+    public void DependencyResolver_TwoStages()
+    {
+        var sources = new List<Schema.SourceConfig>
+        {
+            new() { Name = "orders", Trigger = "http" },
+            new() { Name = "products", Trigger = "pull", Depends = "orders" },
+        };
+        var stages = DependencyResolver.ResolveStages(sources);
+        Assert.Equal(2, stages.Count);
+        Assert.Equal("orders", stages[0][0].Name);
+        Assert.Equal("products", stages[1][0].Name);
+    }
+
+    [Fact]
+    public void DependencyResolver_DiamondDependency()
+    {
+        var sources = new List<Schema.SourceConfig>
+        {
+            new() { Name = "a", Trigger = "http" },
+            new() { Name = "b", Trigger = "pull", Depends = "a" },
+            new() { Name = "c", Trigger = "pull", Depends = "a" },
+            new() { Name = "d", Trigger = "pull", Depends = new List<object> { "b", "c" } },
+        };
+        var stages = DependencyResolver.ResolveStages(sources);
+        Assert.Equal(3, stages.Count);
+        Assert.Equal("a", stages[0][0].Name);
+        Assert.Equal(2, stages[1].Count); // b and c run concurrently
+        Assert.Equal("d", stages[2][0].Name);
+    }
+
+    [Fact]
+    public void DependencyResolver_CircularThrows()
+    {
+        var sources = new List<Schema.SourceConfig>
+        {
+            new() { Name = "a", Trigger = "http", Depends = "b" },
+            new() { Name = "b", Trigger = "http", Depends = "a" },
+        };
+        Assert.Throws<InvalidOperationException>(() => DependencyResolver.ResolveStages(sources));
+    }
+
+    [Fact]
+    public void DependencyResolver_MissingDependencyDetected()
+    {
+        var sources = new List<Schema.SourceConfig>
+        {
+            new() { Name = "a", Trigger = "http", Depends = "nonexistent" },
+        };
+        var errors = DependencyResolver.ValidateDependencies(sources);
+        Assert.Single(errors);
+        Assert.Contains("nonexistent", errors[0]);
+    }
+
+    // ── Fan-out ──
+
+    [Fact]
+    public void Execute_SourceFanOut_ProcessesPerSlice()
+    {
+        var yamlContent = @"version: 2
+name: fanout-test
+sources:
+  - name: orders
+    trigger: http
+  - name: enrichment
+    trigger: pull
+    depends: orders
+    path: $.orders[*]
+    map: enrich.elwood
+outputs:
+  - name: result
+    path: $.enrichment[*]";
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "elwood-fanout-" + Guid.NewGuid().ToString()[..8]);
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tempDir, "pipeline.elwood.yaml"), yamlContent);
+            File.WriteAllText(Path.Combine(tempDir, "enrich.elwood"),
+                "return { id: $slice.id, enriched: true }");
+
+            var parser = new PipelineParser();
+            var pipeline = parser.Parse(Path.Combine(tempDir, "pipeline.elwood.yaml"));
+            Assert.True(pipeline.IsValid, $"Parse errors: {string.Join("; ", pipeline.Errors)}");
+
+            var ordersInput = new SourceInput(Factory.Parse("""{ "orders": [{"id":"A"}, {"id":"B"}, {"id":"C"}] }"""));
+            var enrichInput = new SourceInput(Factory.Parse("{}"));
+
+            var executor = new PipelineExecutor();
+            var result = executor.Execute(pipeline, new Dictionary<string, SourceInput>
+            {
+                ["orders"] = ordersInput,
+                ["enrichment"] = enrichInput,
+            });
+
+            Assert.True(result.IsSuccess, $"Errors: {string.Join("; ", result.Errors)}");
+            Assert.True(result.Outputs.ContainsKey("result"));
+
+            var items = result.Outputs["result"].EnumerateArray().ToList();
+            Assert.Equal(3, items.Count);
+            Assert.Equal("A", items[0].GetProperty("id")?.GetStringValue());
+            Assert.True(items[0].GetProperty("enriched")?.GetBooleanValue());
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    // ── Source input ──
+
     [Fact]
     public void SourceInput_DetectsEnvelope()
     {

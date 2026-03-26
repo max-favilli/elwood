@@ -32,42 +32,32 @@ public sealed class PipelineExecutor
 
         var errors = new List<string>();
 
+        // Validate dependencies
+        var depErrors = DependencyResolver.ValidateDependencies(pipeline.Config.Sources);
+        if (depErrors.Count > 0)
+            return PipelineResult.Failed(depErrors);
+
+        // Resolve execution stages
+        List<List<Schema.SourceConfig>> stages;
+        try { stages = DependencyResolver.ResolveStages(pipeline.Config.Sources); }
+        catch (InvalidOperationException ex)
+        {
+            return PipelineResult.Failed([ex.Message]);
+        }
+
         // The IDM starts empty and is built up by sources
         var idm = _factory.CreateObject([]);
 
-        // Step 1: Process each source — apply maps, merge into IDM
-        // TODO: respect `depends` ordering and concurrency. For now, process sequentially.
-        foreach (var source in pipeline.Config.Sources)
+        // Step 1: Process sources stage by stage (respecting dependencies)
+        foreach (var stage in stages)
         {
-            if (!sourceInputs.TryGetValue(source.Name, out var input))
+            // Sources in the same stage can run concurrently (TODO: actual parallelism)
+            foreach (var source in stage)
             {
-                errors.Add($"No input provided for source '{source.Name}'");
-                continue;
+                var sourceResult = ProcessSource(source, sourceInputs, idm, pipeline, errors);
+                if (sourceResult is not null)
+                    idm = MergeIntoIdm(idm, source.Name, sourceResult);
             }
-
-            var payload = input.Payload;
-            var sourceMetadata = input.Metadata ?? CreateDefaultMetadata(source);
-
-            // Apply source map if specified
-            if (!string.IsNullOrWhiteSpace(source.Map))
-            {
-                var bindings = new Dictionary<string, IElwoodValue>
-                {
-                    ["$source"] = sourceMetadata,
-                    ["$idm"] = idm,
-                };
-
-                var mapped = EvaluateReference(source.Map, payload, bindings, pipeline);
-                if (mapped is null)
-                {
-                    errors.Add($"Source map '{source.Map}' failed for source '{source.Name}'");
-                    continue;
-                }
-                payload = mapped;
-            }
-
-            // Merge source result into IDM
-            idm = MergeIntoIdm(idm, source.Name, payload);
         }
 
         if (errors.Count > 0)
@@ -112,6 +102,106 @@ public sealed class PipelineExecutor
         }
 
         return PipelineResult.Success(outputs);
+    }
+
+    /// <summary>
+    /// Process a single source — handle fan-out via path, apply map, return result.
+    /// </summary>
+    private IElwoodValue? ProcessSource(Schema.SourceConfig source,
+        Dictionary<string, SourceInput> sourceInputs, IElwoodValue idm,
+        ParsedPipeline pipeline, List<string> errors)
+    {
+        // Fan-out: if source has path, slice the IDM and process per slice
+        if (!string.IsNullOrWhiteSpace(source.Path))
+        {
+            return ProcessSourceFanOut(source, sourceInputs, idm, pipeline, errors);
+        }
+
+        // Normal (non-fan-out) source processing
+        if (!sourceInputs.TryGetValue(source.Name, out var input))
+        {
+            // Pull sources don't need input files — they'll fetch data at runtime.
+            // For CLI executor, they must be provided as files.
+            errors.Add($"No input provided for source '{source.Name}'");
+            return null;
+        }
+
+        var payload = input.Payload;
+        var sourceMetadata = input.Metadata ?? CreateDefaultMetadata(source);
+
+        if (!string.IsNullOrWhiteSpace(source.Map))
+        {
+            var bindings = new Dictionary<string, IElwoodValue>
+            {
+                ["$source"] = sourceMetadata,
+                ["$idm"] = idm,
+            };
+
+            var mapped = EvaluateReference(source.Map, payload, bindings, pipeline);
+            if (mapped is null)
+            {
+                errors.Add($"Source map '{source.Map}' failed for source '{source.Name}'");
+                return null;
+            }
+            return mapped;
+        }
+
+        return payload;
+    }
+
+    /// <summary>
+    /// Process a source with path fan-out.
+    /// Slices the IDM by evaluating the path expression, then processes the source
+    /// once per slice (applying the map to each). Results are collected back.
+    /// </summary>
+    private IElwoodValue? ProcessSourceFanOut(Schema.SourceConfig source,
+        Dictionary<string, SourceInput> sourceInputs, IElwoodValue idm,
+        ParsedPipeline pipeline, List<string> errors)
+    {
+        // Evaluate the path expression against the IDM to get slices
+        var slicesResult = EvaluateReference(source.Path!, idm, null, pipeline);
+        if (slicesResult is null || slicesResult.Kind != ElwoodValueKind.Array)
+        {
+            errors.Add($"Source '{source.Name}' path '{source.Path}' did not produce an array");
+            return null;
+        }
+
+        var slices = slicesResult.EnumerateArray().ToList();
+        if (slices.Count == 0) return _factory.CreateArray([]);
+
+        // For each slice, get the source input (if provided) and apply the map
+        var results = new List<IElwoodValue>();
+        var hasInput = sourceInputs.TryGetValue(source.Name, out var sourceInput);
+
+        foreach (var slice in slices)
+        {
+            // The payload for a fan-out source is the source input (if provided),
+            // or the slice itself if no input is given (e.g., pull sources get per-slice data)
+            var payload = hasInput ? sourceInput!.Payload : slice;
+            var sourceMetadata = hasInput
+                ? (sourceInput!.Metadata ?? CreateDefaultMetadata(source))
+                : CreateDefaultMetadata(source);
+
+            if (!string.IsNullOrWhiteSpace(source.Map))
+            {
+                var bindings = new Dictionary<string, IElwoodValue>
+                {
+                    ["$source"] = sourceMetadata,
+                    ["$idm"] = idm,
+                    ["$slice"] = slice, // The current fan-out slice from the IDM
+                };
+
+                var mapped = EvaluateReference(source.Map, payload, bindings, pipeline);
+                if (mapped is not null)
+                    results.Add(mapped);
+            }
+            else
+            {
+                results.Add(payload);
+            }
+        }
+
+        return _factory.CreateArray(results);
     }
 
     /// <summary>

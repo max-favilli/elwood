@@ -61,10 +61,41 @@ public sealed class SourceConfig
     public string? Map { get; set; }
 
     /// <summary>
+    /// Source(s) that must complete before this one runs.
+    /// Single string or list of strings.
+    /// </summary>
+    [YamlMember(Alias = "depends")]
+    public object? Depends { get; set; }
+
+    /// <summary>
+    /// Fan-out path: slice the IDM, process this source once per slice.
+    /// Example: $.orders[*] processes one API call per order.
+    /// </summary>
+    [YamlMember(Alias = "path")]
+    public string? Path { get; set; }
+
+    /// <summary>
+    /// Max parallel slices when path fan-out is set. Default: 1.
+    /// </summary>
+    [YamlMember(Alias = "concurrency")]
+    public int Concurrency { get; set; } = 1;
+
+    /// <summary>
     /// Pull source configuration (for pull trigger).
     /// </summary>
     [YamlMember(Alias = "from")]
     public PullSourceConfig? From { get; set; }
+
+    /// <summary>
+    /// Get dependency names as a list (handles both string and list YAML formats).
+    /// </summary>
+    public List<string> GetDependencies()
+    {
+        if (Depends is null) return [];
+        if (Depends is string s) return [s];
+        if (Depends is List<object> list) return list.Select(x => x.ToString()!).ToList();
+        return [];
+    }
 }
 
 /// <summary>
