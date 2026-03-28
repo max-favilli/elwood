@@ -154,6 +154,92 @@ public class CliIntegrationTests : IClassFixture<CliFixture>
         Assert.False(string.IsNullOrWhiteSpace(result.Stdout));
     }
 
+    // ── pipeline ──
+
+    [Fact]
+    public async Task Pipeline_Validate_Valid()
+    {
+        var yamlPath = _fixture.SpecPath("..", "pipelines", "sample-pipeline", "pipeline.elwood.yaml");
+        var result = await _fixture.Run("pipeline", "validate", yamlPath);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("valid", result.Stdout);
+        Assert.Contains("Sources:", result.Stdout);
+    }
+
+    [Fact]
+    public async Task Pipeline_Validate_MissingFile()
+    {
+        var result = await _fixture.Run("pipeline", "validate", "nonexistent.yaml");
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("not found", result.Stderr);
+    }
+
+    [Fact]
+    public async Task Pipeline_Run_WithSource()
+    {
+        var yamlPath = _fixture.SpecPath("..", "pipelines", "sample-pipeline", "pipeline.elwood.yaml");
+        var inputPath = _fixture.SpecPath("..", "pipelines", "sample-pipeline", "orders-input.json");
+        var result = await _fixture.Run("pipeline", "run", yamlPath,
+            "--source-envelope", $"orders={inputPath}");
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("ALICE", result.Stdout);
+        Assert.Contains("ORD-001", result.Stdout);
+    }
+
+    [Fact]
+    public async Task Pipeline_Run_WithOutputDir()
+    {
+        var yamlPath = _fixture.SpecPath("..", "pipelines", "sample-pipeline", "pipeline.elwood.yaml");
+        var inputPath = _fixture.SpecPath("..", "pipelines", "sample-pipeline", "orders-input.json");
+        var outputDir = Path.Combine(Path.GetTempPath(), "elwood-cli-test-" + Guid.NewGuid().ToString()[..8]);
+        try
+        {
+            var result = await _fixture.Run("pipeline", "run", yamlPath,
+                "--source-envelope", $"orders={inputPath}",
+                "--output-dir", outputDir);
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("active-orders", result.Stdout);
+
+            var outputFile = Path.Combine(outputDir, "active-orders.json");
+            Assert.True(File.Exists(outputFile));
+            var content = File.ReadAllText(outputFile);
+            Assert.Contains("ALICE", content);
+        }
+        finally
+        {
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task Pipeline_Run_MissingSource()
+    {
+        var yamlPath = _fixture.SpecPath("..", "pipelines", "sample-pipeline", "pipeline.elwood.yaml");
+        var result = await _fixture.Run("pipeline", "run", yamlPath);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("No input", result.Stderr);
+    }
+
+    [Fact]
+    public async Task Pipeline_Run_PlainSource()
+    {
+        var yamlPath = _fixture.SpecPath("..", "pipelines", "sample-pipeline", "pipeline.elwood.yaml");
+        // Plain JSON (no envelope) — $source gets defaults
+        var tempFile = Path.GetTempFileName();
+        File.WriteAllText(tempFile, """{"data":{"orders":[{"orderId":"T1","customerName":"Test","amount":50,"orderStatus":"active"}]}}""");
+        try
+        {
+            var result = await _fixture.Run("pipeline", "run", yamlPath,
+                "--source", $"orders={tempFile}");
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("TEST", result.Stdout);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
     // ── error handling ──
 
     [Fact]
@@ -209,6 +295,9 @@ public class CliFixture : IDisposable
 
     public string SpecPath(string testCase, string file)
         => System.IO.Path.Combine(_specDir, testCase, file);
+
+    public string SpecPath(params string[] parts)
+        => System.IO.Path.GetFullPath(System.IO.Path.Combine([_specDir, .. parts]));
 
     public Task<CliResult> Run(params string[] args)
         => Run(args, stdin: null);

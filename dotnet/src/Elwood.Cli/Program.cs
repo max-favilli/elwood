@@ -101,14 +101,36 @@ static int RunPipeline(string[] args, JsonNodeValueFactory factory)
 
     if (subCommand == "validate")
     {
-        if (!pipeline.IsValid)
+        var allErrors = new List<string>(pipeline.Errors);
+
+        // Validate dependencies
+        allErrors.AddRange(Elwood.Pipeline.DependencyResolver.ValidateDependencies(pipeline.Config.Sources));
+
+        // Check dependency graph is acyclic
+        try { Elwood.Pipeline.DependencyResolver.ResolveStages(pipeline.Config.Sources); }
+        catch (InvalidOperationException ex) { allErrors.Add(ex.Message); }
+
+        // Check source names are unique
+        var dupSources = pipeline.Config.Sources.GroupBy(s => s.Name).Where(g => g.Count() > 1);
+        foreach (var dup in dupSources)
+            allErrors.Add($"Duplicate source name: '{dup.Key}'");
+
+        // Check output names are unique
+        var dupOutputs = pipeline.Config.Outputs.GroupBy(o => o.Name).Where(g => g.Count() > 1);
+        foreach (var dup in dupOutputs)
+            allErrors.Add($"Duplicate output name: '{dup.Key}'");
+
+        if (allErrors.Count > 0)
         {
-            foreach (var err in pipeline.Errors)
+            Console.Error.WriteLine($"Pipeline '{pipeline.Config.Name ?? yamlPath}' has {allErrors.Count} error(s):");
+            foreach (var err in allErrors)
                 Console.Error.WriteLine($"  ERROR: {err}");
             return 1;
         }
+
+        var stages = Elwood.Pipeline.DependencyResolver.ResolveStages(pipeline.Config.Sources);
         Console.WriteLine($"Pipeline '{pipeline.Config.Name}' is valid.");
-        Console.WriteLine($"  Sources: {pipeline.Config.Sources.Count}");
+        Console.WriteLine($"  Sources: {pipeline.Config.Sources.Count} ({stages.Count} stage{(stages.Count != 1 ? "s" : "")})");
         Console.WriteLine($"  Outputs: {pipeline.Config.Outputs.Count}");
         Console.WriteLine($"  Scripts: {pipeline.Scripts.Count}");
         return 0;
@@ -129,8 +151,9 @@ static int RunPipeline(string[] args, JsonNodeValueFactory factory)
         return 1;
     }
 
-    // Parse --source and --source-envelope arguments
+    // Parse arguments
     var sourceInputs = new Dictionary<string, Elwood.Pipeline.SourceInput>();
+    string? outputDir = null;
     for (var i = 3; i < args.Length; i++)
     {
         if ((args[i] == "--source" || args[i] == "--source-envelope") && i + 1 < args.Length)
@@ -156,7 +179,8 @@ static int RunPipeline(string[] args, JsonNodeValueFactory factory)
         }
         else if (args[i] == "--output-dir" && i + 1 < args.Length)
         {
-            i++; // TODO: implement output directory
+            outputDir = args[i + 1];
+            i++;
         }
     }
 
@@ -173,25 +197,40 @@ static int RunPipeline(string[] args, JsonNodeValueFactory factory)
         return 1;
     }
 
+    // Create output directory if specified
+    if (outputDir is not null)
+        Directory.CreateDirectory(outputDir);
+
     // Output results
+    var jsonOpts = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
     foreach (var (name, value) in result.Outputs)
     {
-        if (result.Outputs.Count > 1)
-            Console.WriteLine($"--- {name} ---");
-
+        string json;
         if (value is JsonNodeValue jnv)
         {
-            Console.WriteLine(jnv.Node?.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }) ?? "null");
+            json = jnv.Node?.ToJsonString(jsonOpts) ?? "null";
         }
         else if (value.Kind == Elwood.Core.Abstractions.ElwoodValueKind.Array)
         {
             var materialized = factory.CreateArray(value.EnumerateArray());
-            Console.WriteLine(((JsonNodeValue)materialized).Node?.ToJsonString(
-                new System.Text.Json.JsonSerializerOptions { WriteIndented = true }) ?? "[]");
+            json = ((JsonNodeValue)materialized).Node?.ToJsonString(jsonOpts) ?? "[]";
         }
         else
         {
-            Console.WriteLine(value.GetStringValue() ?? "null");
+            json = value.GetStringValue() ?? "null";
+        }
+
+        if (outputDir is not null)
+        {
+            var outputFile = Path.Combine(outputDir, $"{name}.json");
+            File.WriteAllText(outputFile, json);
+            Console.WriteLine($"  {name} → {outputFile}");
+        }
+        else
+        {
+            if (result.Outputs.Count > 1)
+                Console.WriteLine($"--- {name} ---");
+            Console.WriteLine(json);
         }
     }
 
