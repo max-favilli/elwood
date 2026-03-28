@@ -90,7 +90,7 @@ public class PipelineTests
         var pipeline = parser.Parse(pipelinePath);
         Assert.True(pipeline.IsValid, $"Parse errors: {string.Join("; ", pipeline.Errors)}");
 
-        var sourceInput = SourceInput.FromFile(inputPath, Factory);
+        var sourceInput = SourceInput.FromEnvelopeFile(inputPath, Factory);
         var executor = new PipelineExecutor();
         var result = executor.Execute(pipeline, new Dictionary<string, SourceInput>
         {
@@ -121,7 +121,7 @@ public class PipelineTests
         var pipeline = parser.Parse(pipelinePath);
         Assert.True(pipeline.IsValid);
 
-        var sourceInput = SourceInput.FromFile(inputPath, Factory);
+        var sourceInput = SourceInput.FromEnvelopeFile(inputPath, Factory);
         var executor = new PipelineExecutor();
         var result = executor.Execute(pipeline, new Dictionary<string, SourceInput>
         {
@@ -306,7 +306,7 @@ outputs:
     public void SourceInput_DetectsEnvelope()
     {
         var inputPath = FindSamplePipeline("orders-input.json");
-        var input = SourceInput.FromFile(inputPath, Factory);
+        var input = SourceInput.FromEnvelopeFile(inputPath, Factory);
 
         Assert.NotNull(input.Metadata);
         Assert.Equal("orders", input.Metadata!.GetProperty("name")?.GetStringValue());
@@ -320,7 +320,7 @@ outputs:
         File.WriteAllText(tempFile, """{"items":[1,2,3]}""");
         try
         {
-            var input = SourceInput.FromFile(tempFile, Factory);
+            var input = SourceInput.FromDataFile(tempFile, Factory);
             Assert.Null(input.Metadata);
             Assert.Equal(3, input.Payload.GetProperty("items")?.GetArrayLength());
         }

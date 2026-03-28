@@ -77,8 +77,13 @@ static int RunPipeline(string[] args, JsonNodeValueFactory factory)
     if (args.Length < 3)
     {
         Console.Error.WriteLine("Usage:");
-        Console.Error.WriteLine("  elwood pipeline run <yaml-file> --source name=file [--source name=file ...]");
+        Console.Error.WriteLine("  elwood pipeline run <yaml-file> [options]");
         Console.Error.WriteLine("  elwood pipeline validate <yaml-file>");
+        Console.Error.WriteLine();
+        Console.Error.WriteLine("Options:");
+        Console.Error.WriteLine("  --source name=file           Provide payload data for a named source");
+        Console.Error.WriteLine("  --source-envelope name=file  Provide envelope (source metadata + payload)");
+        Console.Error.WriteLine("  --output-dir <dir>           Write outputs to directory (default: stdout)");
         return 1;
     }
 
@@ -124,16 +129,17 @@ static int RunPipeline(string[] args, JsonNodeValueFactory factory)
         return 1;
     }
 
-    // Parse --source name=file arguments
+    // Parse --source and --source-envelope arguments
     var sourceInputs = new Dictionary<string, Elwood.Pipeline.SourceInput>();
     for (var i = 3; i < args.Length; i++)
     {
-        if (args[i] == "--source" && i + 1 < args.Length)
+        if ((args[i] == "--source" || args[i] == "--source-envelope") && i + 1 < args.Length)
         {
+            var isEnvelope = args[i] == "--source-envelope";
             var parts = args[i + 1].Split('=', 2);
             if (parts.Length != 2)
             {
-                Console.Error.WriteLine($"Invalid --source format: {args[i + 1]} (expected name=file)");
+                Console.Error.WriteLine($"Invalid {args[i]} format: {args[i + 1]} (expected name=file)");
                 return 1;
             }
             var sourceName = parts[0];
@@ -143,8 +149,10 @@ static int RunPipeline(string[] args, JsonNodeValueFactory factory)
                 Console.Error.WriteLine($"Source file not found: {filePath}");
                 return 1;
             }
-            sourceInputs[sourceName] = Elwood.Pipeline.SourceInput.FromFile(filePath, factory);
-            i++; // Skip the value
+            sourceInputs[sourceName] = isEnvelope
+                ? Elwood.Pipeline.SourceInput.FromEnvelopeFile(filePath, factory)
+                : Elwood.Pipeline.SourceInput.FromDataFile(filePath, factory);
+            i++;
         }
         else if (args[i] == "--output-dir" && i + 1 < args.Length)
         {

@@ -302,33 +302,35 @@ public sealed class SourceInput
     }
 
     /// <summary>
-    /// Parse from an envelope file (has "source" + "payload" keys) or plain data file.
+    /// Load a plain data file as payload (no source metadata).
     /// </summary>
-    public static SourceInput FromFile(string path, JsonNodeValueFactory factory)
+    public static SourceInput FromDataFile(string path, JsonNodeValueFactory factory)
     {
         var content = File.ReadAllText(path);
-
-        // Try to detect envelope format
-        try
-        {
-            var doc = JsonDocument.Parse(content);
-            if (doc.RootElement.TryGetProperty("payload", out _) &&
-                doc.RootElement.TryGetProperty("source", out _))
-            {
-                var node = JsonNode.Parse(content)!;
-                var payload = factory.Parse(node["payload"]!.ToJsonString());
-                var metadata = factory.Parse(node["source"]!.ToJsonString());
-                return new SourceInput(payload, metadata);
-            }
-        }
-        catch { /* Not JSON or not envelope */ }
-
         var ext = Path.GetExtension(path).ToLowerInvariant();
         var value = ext is ".csv" or ".txt" or ".xml"
             ? factory.CreateString(content)
             : factory.Parse(content);
-
         return new SourceInput(value);
+    }
+
+    /// <summary>
+    /// Load an envelope file — JSON with explicit "source" (metadata) and "payload" (data) keys.
+    /// </summary>
+    public static SourceInput FromEnvelopeFile(string path, JsonNodeValueFactory factory)
+    {
+        var content = File.ReadAllText(path);
+        var node = JsonNode.Parse(content)
+            ?? throw new InvalidOperationException($"Invalid JSON in envelope file: {path}");
+
+        var payloadNode = node["payload"]
+            ?? throw new InvalidOperationException($"Envelope file missing 'payload' key: {path}");
+        var sourceNode = node["source"]
+            ?? throw new InvalidOperationException($"Envelope file missing 'source' key: {path}");
+
+        var payload = factory.Parse(payloadNode.ToJsonString());
+        var metadata = factory.Parse(sourceNode.ToJsonString());
+        return new SourceInput(payload, metadata);
     }
 }
 
