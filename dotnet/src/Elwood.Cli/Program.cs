@@ -21,6 +21,8 @@ switch (command)
         return RunEval(args, engine, factory);
     case "run":
         return RunScript(args, engine, factory);
+    case "pipeline":
+        return RunPipeline(args, factory);
     case "repl":
         RunRepl(engine, factory);
         return 0;
@@ -68,6 +70,124 @@ static int RunScript(string[] args, ElwoodEngine engine, JsonNodeValueFactory fa
     var result = engine.Execute(script, input);
 
     return PrintResult(result, factory, outputFormat);
+}
+
+static int RunPipeline(string[] args, JsonNodeValueFactory factory)
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("Usage:");
+        Console.Error.WriteLine("  elwood pipeline run <yaml-file> --source name=file [--source name=file ...]");
+        Console.Error.WriteLine("  elwood pipeline validate <yaml-file>");
+        return 1;
+    }
+
+    var subCommand = args[1].ToLower();
+    var yamlPath = args[2];
+
+    if (!File.Exists(yamlPath))
+    {
+        Console.Error.WriteLine($"Pipeline YAML not found: {yamlPath}");
+        return 1;
+    }
+
+    var parser = new Elwood.Pipeline.PipelineParser();
+    var pipeline = parser.Parse(yamlPath);
+
+    if (subCommand == "validate")
+    {
+        if (!pipeline.IsValid)
+        {
+            foreach (var err in pipeline.Errors)
+                Console.Error.WriteLine($"  ERROR: {err}");
+            return 1;
+        }
+        Console.WriteLine($"Pipeline '{pipeline.Config.Name}' is valid.");
+        Console.WriteLine($"  Sources: {pipeline.Config.Sources.Count}");
+        Console.WriteLine($"  Outputs: {pipeline.Config.Outputs.Count}");
+        Console.WriteLine($"  Scripts: {pipeline.Scripts.Count}");
+        return 0;
+    }
+
+    if (subCommand != "run")
+    {
+        Console.Error.WriteLine($"Unknown pipeline subcommand: {subCommand}");
+        Console.Error.WriteLine("Expected: run or validate");
+        return 1;
+    }
+
+    if (!pipeline.IsValid)
+    {
+        Console.Error.WriteLine("Pipeline has errors:");
+        foreach (var err in pipeline.Errors)
+            Console.Error.WriteLine($"  {err}");
+        return 1;
+    }
+
+    // Parse --source name=file arguments
+    var sourceInputs = new Dictionary<string, Elwood.Pipeline.SourceInput>();
+    for (var i = 3; i < args.Length; i++)
+    {
+        if (args[i] == "--source" && i + 1 < args.Length)
+        {
+            var parts = args[i + 1].Split('=', 2);
+            if (parts.Length != 2)
+            {
+                Console.Error.WriteLine($"Invalid --source format: {args[i + 1]} (expected name=file)");
+                return 1;
+            }
+            var sourceName = parts[0];
+            var filePath = parts[1];
+            if (!File.Exists(filePath))
+            {
+                Console.Error.WriteLine($"Source file not found: {filePath}");
+                return 1;
+            }
+            sourceInputs[sourceName] = Elwood.Pipeline.SourceInput.FromFile(filePath, factory);
+            i++; // Skip the value
+        }
+        else if (args[i] == "--output-dir" && i + 1 < args.Length)
+        {
+            i++; // TODO: implement output directory
+        }
+    }
+
+    // Execute the pipeline
+    var executor = new Elwood.Pipeline.PipelineExecutor(
+        new Elwood.Pipeline.Secrets.EnvironmentSecretProvider());
+    var result = executor.Execute(pipeline, sourceInputs);
+
+    if (!result.IsSuccess)
+    {
+        Console.Error.WriteLine("Pipeline execution failed:");
+        foreach (var err in result.Errors)
+            Console.Error.WriteLine($"  {err}");
+        return 1;
+    }
+
+    // Output results
+    foreach (var (name, value) in result.Outputs)
+    {
+        if (result.Outputs.Count > 1)
+            Console.WriteLine($"--- {name} ---");
+
+        if (value is JsonNodeValue jnv)
+        {
+            Console.WriteLine(jnv.Node?.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }) ?? "null");
+        }
+        else if (value.Kind == Elwood.Core.Abstractions.ElwoodValueKind.Array)
+        {
+            var materialized = factory.CreateArray(value.EnumerateArray());
+            Console.WriteLine(((JsonNodeValue)materialized).Node?.ToJsonString(
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true }) ?? "[]");
+        }
+        else
+        {
+            Console.WriteLine(value.GetStringValue() ?? "null");
+        }
+    }
+
+    return 0;
 }
 
 static void RunRepl(ElwoodEngine engine, JsonNodeValueFactory factory)
@@ -347,6 +467,8 @@ static void PrintUsage()
     Console.WriteLine("  elwood                                    Start REPL");
     Console.WriteLine("  elwood eval <expr> [options]              Evaluate expression");
     Console.WriteLine("  elwood run <script.elwood> [options]      Execute script");
+    Console.WriteLine("  elwood pipeline run <yaml> [--source name=file ...]  Execute pipeline");
+    Console.WriteLine("  elwood pipeline validate <yaml>           Validate pipeline YAML");
     Console.WriteLine();
     Console.WriteLine("Options:");
     Console.WriteLine("  --input <file>, -i        Input file (format auto-detected from extension)");

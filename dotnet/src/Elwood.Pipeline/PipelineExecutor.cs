@@ -4,6 +4,7 @@ using Elwood.Core;
 using Elwood.Core.Abstractions;
 using Elwood.Json;
 using Elwood.Pipeline.Schema;
+using Elwood.Pipeline.Secrets;
 
 namespace Elwood.Pipeline;
 
@@ -15,11 +16,13 @@ public sealed class PipelineExecutor
 {
     private readonly ElwoodEngine _engine;
     private readonly JsonNodeValueFactory _factory;
+    private readonly StringResolver _stringResolver;
 
-    public PipelineExecutor()
+    public PipelineExecutor(ISecretProvider? secretProvider = null)
     {
         _factory = JsonNodeValueFactory.Instance;
         _engine = new ElwoodEngine(_factory);
+        _stringResolver = new StringResolver(secretProvider);
     }
 
     /// <summary>

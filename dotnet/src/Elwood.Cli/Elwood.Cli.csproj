@@ -27,6 +27,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Elwood.Core\Elwood.Core.csproj" />
     <ProjectReference Include="..\Elwood.Json\Elwood.Json.csproj" />
+    <ProjectReference Include="..\Elwood.Pipeline\Elwood.Pipeline.csproj" />
   </ItemGroup>
 
   <ItemGroup>
