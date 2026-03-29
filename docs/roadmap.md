@@ -556,6 +556,55 @@ The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`.
 
 ---
 
+## Phase 3b — Elwood Management Portal
+
+**Goal:** A web-based management UI for authoring, deploying, testing, and monitoring Elwood integration pipelines. Re-engineered from an existing enterprise integration frontend, adapted for Elwood's pipeline YAML + script architecture.
+
+**Tech stack:** Next.js + React + Tailwind + Monaco Editor + Redux (separate repo: `elwood-portal`)
+
+**Implementation prompt:** See [`docs/prompts/implement-portal.md`](prompts/implement-portal.md)
+
+### Pipeline Authoring
+- [ ] Browse, search, create, edit pipeline YAML files (`.elwood.yaml`)
+- [ ] Browse, search, create, edit Elwood scripts (`.elwood`) with full Monaco syntax highlighting + autocomplete
+- [ ] Version history with diff view and restore (via GitPipelineStore)
+- [ ] Deploy pipelines to runtime
+- [ ] Bulk upload (ZIP of pipeline + scripts)
+- [ ] Validation: `elwood validate` integrated in the editor
+
+### Transformation Testing
+- [ ] Run `.elwood` scripts against input data with live preview
+- [ ] Load payloads from execution history or file upload
+- [ ] Format-aware input: JSON, CSV, XML, Text with conversion preview
+- [ ] Compare input vs output side-by-side
+
+### Execution Monitoring
+- [ ] Pipeline execution dashboard (reads from `IStateStore`)
+- [ ] Real-time activity log with filtering (by pipeline, status, time range)
+- [ ] Execution detail view: steps, fan-out progress, errors, duration
+- [ ] Correlation tracing across multi-step async flows
+- [ ] Health status indicator for the runtime
+
+### Document & State Inspection
+- [ ] Browse execution state (reads from `IStateStore`)
+- [ ] Browse stored documents / IDM (reads from `IDocumentStore`)
+- [ ] Download payloads and outputs
+
+### Administration
+- [ ] Role-based access control (Admin, Editor, Viewer)
+- [ ] Authentication (Azure AD / MSAL)
+- [ ] Multi-environment support (dev, staging, production)
+
+### Tasks (detailed WBS to be defined later)
+- [ ] Project setup (Next.js + Tailwind + Monaco)
+- [ ] API layer consuming `Elwood.Runtime.Api` endpoints
+- [ ] Core pages: pipeline list, pipeline editor, execution dashboard, execution detail
+- [ ] Testing/preview panel
+- [ ] Authentication + role-based access
+- [ ] Deployment integration
+
+---
+
 ## Phase 4 — Developer Tooling & Ecosystem
 
 **Goal:** IDE support, developer tools, and community ecosystem.
@@ -626,13 +675,14 @@ Phase 2b  ✅  Performance — 2x faster than legacy baseline (compiled mode exp
    ↓
 Phase 3       Integration pipeline configuration (Elwood Runtime + Executors)
    ↓
+Phase 3b      Elwood Management Portal (web UI for authoring, testing, monitoring)
+   ↓
 Phase 4       IDE support, developer tools, ecosystem
    ↓
 Phase 5       Elwood DB — JSON database with Elwood queries (separate repo)
 ```
 
-Phases 2b and 4 span both .NET and TypeScript implementations.
-Phase 5 is a separate project building on Elwood Core.
+Phase 3b is a separate repo (`elwood-portal`). Phase 5 is a separate repo (`elwood-db`).
 
 ## Adoption Strategy
 
@@ -644,8 +694,9 @@ Elwood is designed for **incremental adoption**:
 4. **Phase 2** (done): Multi-format I/O. All formats complete. Extension API for XLSX. CLI format flags.
 5. **Phase 2b** (done): Performance verified — 2x faster than legacy baseline on 100K rows. Compiled mode explored but interpreter is already optimal.
 6. **Phase 3**: Integration pipelines. YAML defines sources, transforms, and destinations. Pluggable executors run them.
-7. **Phase 4**: IDE support, developer tools, and community ecosystem.
-8. **Phase 5**: Elwood DB. Store JSON, query with Elwood. PostgreSQL backend, no size limits.
+7. **Phase 3b**: Management portal. Web UI for authoring pipelines, testing transformations, monitoring executions.
+8. **Phase 4**: IDE support, developer tools, and community ecosystem.
+9. **Phase 5**: Elwood DB. Store JSON, query with Elwood. PostgreSQL backend, no size limits.
 
 Each phase is independently useful. No phase requires adopting a later one.
 

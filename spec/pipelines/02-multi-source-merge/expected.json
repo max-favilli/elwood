@@ -1,0 +1,7 @@
+{
+  "enriched": [
+    { "orderId": "ORD-001", "sku": "SKU-A", "qty": 3, "productName": "Widget Pro", "price": 29.99 },
+    { "orderId": "ORD-002", "sku": "SKU-B", "qty": 1, "productName": "Gadget Plus", "price": 49.99 },
+    { "orderId": "ORD-003", "sku": "SKU-A", "qty": 5, "productName": "Widget Pro", "price": 29.99 }
+  ]
+}

@@ -283,40 +283,122 @@ The YAML defines the **pipeline topology** — steps, splits, merges, and delive
 
 ```yaml
 version: 2
+name: order-enrichment
 
-pipeline:
-  - name: fetch-orders
-    source:
-      type: http
-      method: GET
-      url: `https://api.example.com/orders?date={$.triggerDate}`
-      headers:
-        Authorization: `Bearer {$.token}`
-    transform: fetch-orders.elwood         # ← complex transform → external script
+sources:
+  - name: order-trigger
+    trigger: http
+    endpoint: /api/orders/{order-type}/{action}
+    contentType: json
+    map: extract-order.elwood
 
-  - name: enrich-each-order
-    input: $.orders[*]                     # SPLIT: fan-out over this array
-    concurrency: 50                        # hint to executor
-    source:
-      type: http
-      method: GET
-      url: `https://api.example.com/details/{$.orderId}`
-    transform: enrich-order.elwood         # ← external script
-    merge: $.orders[{index}]               # AGGREGATE: merge back by index
+  - name: product-details
+    trigger: pull
+    depends: order-trigger                  # ← waits for order-trigger, reads $idm
+    from:
+      http:
+        url: https://api.example.com/products/{$idm.order.sku}
+    map: merge-products.elwood
 
-  - name: upload-results
-    input: $.orders[*]                     # SPLIT again for outputs
+  - name: warehouse-stock
+    trigger: pull
+    depends: order-trigger                  # ← also depends on order-trigger
+    from:                                   # ← runs CONCURRENTLY with product-details
+      http:
+        url: https://api.example.com/stock/{$idm.order.sku}
+    map: merge-stock.elwood
+
+  - name: shipping-rates
+    trigger: pull
+    depends: [product-details, warehouse-stock]   # ← waits for BOTH
+    from:
+      http:
+        url: shipping-request.elwood
+    map: merge-shipping.elwood
+
+outputs:
+  - name: upload-to-cdn
+    path: filter-results.elwood
+    outputId: output-id.elwood
+    contentType: json
     concurrency: 100
-    outputId: generate-output-id.elwood    # ← method chains → external script
-    destination:
-      type: blob
-      connectionString: ${BLOB_CONN}
-      container: processed
-      path: build-path.elwood              # ← complex interpolation → external script
-    transform: prepare-upload.elwood       # ← external script
+    map: output-map.elwood
+    destinations:
+      blobStorage:
+        - connectionString: $secrets.cdn.connectionString
+          container: output
+          filename: output-filename.elwood
 ```
 
 External scripts are **reusable** (same script across multiple outputs) and **independently testable** via the CLI.
+
+### Source dependency graph
+
+Sources have dependencies — source B may need data from source A's result to know what to fetch. The `depends` field creates a **dependency graph**:
+
+```
+order-trigger
+    ├──→ product-details  ──┐
+    │                       ├──→ shipping-rates ──→ outputs
+    └──→ warehouse-stock  ──┘
+```
+
+The runtime resolves this into execution stages:
+- Sources with no dependencies run first
+- Sources that share the same dependencies run **concurrently** within a stage
+- Merging into the IDM happens **after each stage completes**, single-threaded
+- The next stage reads the updated IDM (this is `$` in their URL and map scripts)
+
+```
+Stage 1: order-trigger (no deps)
+    → fetch → run map → merge into IDM
+    → IDM = { order: { items: [...] } }
+
+Stage 2: product-details + warehouse-stock (both depend on order-trigger)
+    → run concurrently (Task.WhenAll / Promise.all)
+    → each writes to separate key (no concurrent IDM mutation)
+    → both complete → merge both into IDM (single-threaded)
+    → IDM = { order: {...}, products: [...], stock: [...] }
+
+Stage 3: shipping-rates (depends on both)
+    → reads IDM → fetch → merge
+    → IDM = { order: {...}, products: [...], stock: [...], shipping: {...} }
+
+Outputs: read final IDM
+```
+
+**The IDM is only mutated single-threaded** — between concurrent stages, never during. No locks, no race conditions — safe by design.
+
+### The IDM (Intermediate Data Model)
+
+The IDM is the **merged document** built from all source data. It's the input to the output stage. It can be larger than any individual source:
+
+```
+Source 1: 200K orders (80MB)
+Source 2: product catalog (30MB)
+    ↓ merge script
+IDM: 200K enriched orders with product data (150MB)
+    ↓
+Every output reads from this IDM
+```
+
+### Script bindings
+
+Scripts access data through named root bindings set by the executor:
+
+| Binding | Available in | What it contains |
+|---|---|---|
+| `$` | Source maps | Raw source payload (HTTP body, file content, etc.) |
+| `$` | Output maps | Current fan-out slice (one item from `path`) |
+| `$source` | Everywhere | Source metadata (trigger type, headers, eventId) |
+| `$idm` | Source maps (after first source) | Current IDM state from previous sources |
+| `$idm` | Output maps | Complete IDM |
+| `$output` | Output maps | Full array from `path` (all slices) |
+| `$secrets` | YAML properties | Secret references loaded from provider |
+
+Scripts that don't use `$source`, `$idm`, or `$output` work identically in the playground, CLI, and pipeline — `$` is always the data. Source and output map scripts are independently testable.
+
+**Full schema reference:** See [`docs/pipeline-yaml-reference.md`](pipeline-yaml-reference.md)
 
 ### What the YAML defines vs what it doesn't
 
@@ -471,19 +553,215 @@ elwood status product-sync          # one pipeline's execution history
 elwood status run-abc-123           # detailed state for one execution
 ```
 
+---
+
+## Data Architecture
+
+### What's stored where
+
+```
+┌──────────────────────────────────────────────────┐
+│  Git (IPipelineStore)                             │
+│                                                    │
+│  Pipeline YAML + .elwood scripts                   │
+│  Source of truth for definitions                   │
+│  Versioned, diffable, collaborative               │
+│  GitPipelineStore wraps git operations             │
+└──────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────┐
+│  Redis (IPipelineRegistry + IStateStore)           │
+│                                                    │
+│  Pipeline registry:                                │
+│    Route table (endpoint patterns for matching)    │
+│    Search index (name + content for portal)        │
+│    Rebuilt on deploy / git sync                    │
+│                                                    │
+│  Execution state:                                  │
+│    Step status, fan-out counters, error list        │
+│    Refs to documents (NOT the documents themselves) │
+│    idmRef, sourceRefs, outputRefs = pointers       │
+│                                                    │
+│  IDM dedup:                                        │
+│    idm:{key}:{itemId} with TTL                     │
+│                                                    │
+│  ONLY metadata and pointers — nothing large        │
+└──────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────┐
+│  Blob / S3 (IDocumentStore)                       │
+│                                                    │
+│  Source data:                                      │
+│    doc:{executionId}:source:{name}  (up to 100MB+) │
+│                                                    │
+│  IDM (merged document from all sources):           │
+│    doc:{executionId}:idm            (up to 300MB+) │
+│                                                    │
+│  Output results:                                   │
+│    doc:{executionId}:output:{name}  (varies)       │
+│                                                    │
+│  ALL large data lives here                         │
+└──────────────────────────────────────────────────┘
+```
+
+Redis is shared across all compute instances (Functions, Lambda, pods). Blob/S3 handles large payloads that Redis can't (or shouldn't) hold. Git is the source of truth for pipeline definitions with built-in versioning.
+
+### Route matching — how incoming requests find their pipeline
+
+The Elwood runtime exposes a catch-all HTTP endpoint. When a request arrives, it matches against all pipeline endpoint patterns:
+
+```
+Request: POST https://somedomain.com/api/v1/sap/invoice/fk01/create
+    ↓
+Pipeline registry (Redis, cached locally per instance with 30s TTL):
+    /sap/invoice/{invoice-type}/{action}  → order-pipeline  ← match!
+    /api/products/{category}              → product-pipeline
+    /webhooks/shopify/{event}             → shopify-pipeline
+    ↓
+Extract route params: { "invoice-type": "fk01", "action": "create" }
+    ↓
+Load pipeline from IPipelineStore (local git clone)
+    ↓
+Execute with:
+    $ = request body
+    $source.http.params = { "invoice-type": "fk01", "action": "create" }
+    $source.http.headers = { ... }
+```
+
+The route table is built from all pipeline YAML files on deploy/sync. Each instance caches it locally with a short TTL — pipeline definitions change rarely (deploys, not per-request), so 30-second staleness is acceptable.
+
+### Sync flow — IDM lifecycle
+
+In sync flow, all processing happens in one process. Performance target: 300-500ms response time. The IDM is kept in memory during processing to avoid blob read/write latency between stages.
+
+```
+IDM = {}
+
+Stage 1: order-trigger (no deps)
+    → fetch → run map → merge into IDM (in memory)
+    → IDM = { order: { items: [...] } }
+
+Stage 2: product-details + warehouse-stock (concurrent, Task.WhenAll)
+    → product-details: reads IDM → fetch → result in separate key
+    → warehouse-stock: reads IDM → fetch → result in separate key
+    → both complete → merge both into IDM (single-threaded, no race condition)
+    → IDM = { order: {...}, products: [...], stock: [...] }
+
+Stage 3: shipping-rates
+    → reads IDM → fetch → merge
+    → IDM = { order: {...}, products: [...], stock: [...], shipping: {...} }
+
+Generate outputs from IDM → return response (within 300-500ms target)
+
+After response sent:
+    → background write: IDM → blob (best-effort, for observability/replay)
+    → update Redis state with idmRef
+```
+
+The post-response blob write is **best-effort**. If the process dies before it completes:
+- The caller already has their response — no data loss from their perspective
+- The execution state in Redis is missing the IDM blob — the portal shows "IDM not persisted"
+- Acceptable trade-off: sync flow prioritizes latency; the blob is for debugging/replay only
+
+**Concurrency safety:** the IDM is only mutated single-threaded — between concurrent stages (after `Task.WhenAll`), never during. Concurrent sources write to separate keys. The merge step runs after all concurrent sources complete. No locks needed.
+
+### Async flow — IDM lifecycle
+
+In async flow, each step may run in a different function instance. All data goes through blob storage.
+
+```
+Source 1 completes (function instance A):
+    → write source result to blob: doc:run-123:source:orders
+    → update Redis: source "orders" = completed, ref = doc:run-123:source:orders
+    → check: all sources for current stage complete? If yes → trigger merge
+
+Merge step (function instance B):
+    → read all source blobs for this stage
+    → run merge/join script → produces IDM
+    → write IDM to blob: doc:run-123:idm (await — MUST complete before next step)
+    → update Redis: idmRef = doc:run-123:idm
+    → check: more source stages? If yes → trigger next stage
+    → if all sources done → trigger outputs
+
+Output fan-out (function instance C, D, E, ...):
+    → read IDM from blob
+    → process assigned items
+    → deliver to destinations
+    → update Redis: output progress
+```
+
+Blob writes in async flow are **always awaited** (not fire-and-forget) because the next step runs in a different process and needs the data to be persisted.
+
+### Interfaces
+
+```csharp
+// Pipeline definitions — git-backed, versioned
+interface IPipelineStore
+{
+    Task<List<PipelineSummary>> ListPipelines(PipelineFilter filter);
+    Task<PipelineDefinition> GetPipeline(string id);
+    Task SavePipeline(string id, PipelineContent content, string author, string message);
+    Task<List<Revision>> GetRevisions(string id);
+    Task RestoreRevision(string id, string revisionHash);
+    Task Sync();  // git pull → rebuild registry
+}
+
+// Route matching + search — Redis-backed, cached locally
+interface IPipelineRegistry
+{
+    Task<RouteMatch?> MatchRoute(string method, string path);
+    Task<QueueMatch?> MatchQueue(string queueName);
+    Task<List<PipelineSummary>> Search(string query);
+    Task Rebuild();  // called after deploy/sync
+}
+
+// Execution state — Redis-backed, metadata + pointers only
+interface IStateStore
+{
+    Task<PipelineExecution> CreateExecution(string pipeline, TriggerInfo trigger);
+    Task<PipelineExecution> GetExecution(string executionId);
+    Task UpdateStepStatus(string executionId, string stepName, StepStatus status);
+    Task InitFanOut(string executionId, string stepName, int totalItems);
+    Task RecordFanOutItemComplete(string executionId, string stepName, int index);
+    Task<FanOutProgress> GetFanOutProgress(string executionId, string stepName);
+    Task<bool> CheckIdm(string key, string itemId);
+    Task SaveIdm(string key, string itemId, TimeSpan ttl);
+}
+
+// Large data — Blob/S3-backed
+interface IDocumentStore
+{
+    Task<string> Save(string refKey, Stream data);
+    Task<Stream> Load(string refKey);
+    Task Delete(string refKey);
+}
+
+// Sync flow optimization — in-memory cache + blob write-through
+class SyncDocumentStore : IDocumentStore
+{
+    // Save: cache in memory + await blob write (or background after response)
+    // Load: try memory cache first, fall back to blob
+    // EvictAll: called after sync execution completes to free memory
+}
+```
+
 ### Updated architecture diagram
 
 See the ecosystem diagram at the top of this document. The full stack from bottom to top: Core (Phase 1) → Format I/O (Phase 2) → Compiled Mode (Phase 2b) → Runtime (Phase 3) → Executors (separate packages) → Infrastructure (Terraform modules).
 
 ### Phase 3 implementation order
 
-1. **Pipeline YAML spec** — define the schema for steps, sources, destinations, transforms
-2. **Runtime library** — parse pipeline YAML, build step graph, define IExecutor/ISource/IDestination/IStateStore/IDocumentStore interfaces
-3. **CLI Executor** — sequential execution, no fan-out (single source → transform → single destination)
-4. **Fan-out/merge in CLI** — sequential fan-out (process items in a loop), proves the split/merge YAML semantics
-5. **`elwood deploy` command** — uploads pipeline YAML + scripts to a configured pipeline store
-6. **Azure Executor** — async fan-out via ASB + Functions (separate package, likely private)
-7. **Terraform modules** — provision the Elwood runtime platform on Azure/AWS/K8s (separate repo: `elwood-infra`)
+1. **Pipeline YAML spec** — define the schema for sources (with `depends`), destinations, transforms
+2. **Runtime library** — parse pipeline YAML, build dependency graph, resolve execution stages
+3. **CLI Executor** — sequential execution with local file sources
+4. **Source dependency resolution** — concurrent sources within a stage, sequential between stages, IDM merging
+5. **IPipelineStore (Git)** + **IPipelineRegistry (Redis)** — storage, versioning, route matching, search
+6. **IStateStore (Redis)** + **IDocumentStore (Blob)** — execution state + large payloads
+7. **SyncDocumentStore** — in-memory caching for sync flow performance
+8. **Runtime API** — REST endpoints for portal and external tools
+9. **`elwood deploy`** — uploads to pipeline store, rebuilds registry
+10. **Azure Executor** — async fan-out via ASB + Functions (separate package)
+11. **Terraform modules** — provision the Elwood runtime platform (separate repo: `elwood-infra`)
 
 Each step is independently useful. Step 3 alone is enough for simple sync pipelines.
 

@@ -1,0 +1,18 @@
+version: 2
+name: multi-source-merge
+description: Merge orders with product catalog to produce enriched output
+
+sources:
+  - name: orders
+    trigger: http
+    contentType: json
+    map: orders-map.elwood
+
+  - name: products
+    trigger: pull
+    contentType: json
+
+outputs:
+  - name: enriched
+    map: enrich.elwood
+    contentType: json

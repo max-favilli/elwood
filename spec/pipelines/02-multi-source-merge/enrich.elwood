@@ -1,0 +1,12 @@
+let orders = $idm.orders
+let products = $idm.products
+
+let findProduct = memo (sku) => products[*] | first p => p.sku == sku
+
+return orders[*] | select o => {
+  orderId: o.id,
+  sku: o.sku,
+  qty: o.qty,
+  productName: findProduct(o.sku).name,
+  price: findProduct(o.sku).price
+}

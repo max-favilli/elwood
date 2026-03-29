@@ -1,0 +1,33 @@
+version: 2
+name: depends-chain
+description: Three-stage dependency chain testing execution order
+
+sources:
+  - name: stage1
+    trigger: http
+    contentType: json
+    map: stage1-map.elwood
+
+  - name: stage2a
+    trigger: pull
+    depends: stage1
+    contentType: json
+    map: stage2a-map.elwood
+
+  - name: stage2b
+    trigger: pull
+    depends: stage1
+    contentType: json
+    map: stage2b-map.elwood
+
+  - name: stage3
+    trigger: pull
+    depends:
+      - stage2a
+      - stage2b
+    contentType: json
+    map: stage3-map.elwood
+
+outputs:
+  - name: final
+    path: $.result

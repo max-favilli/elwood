@@ -1,0 +1,7 @@
+return {
+  id: $slice.id,
+  customer: $slice.customer,
+  total: $slice.amount,
+  enriched: true,
+  itemCount: $idm.orders | count
+}

@@ -1,0 +1,7 @@
+{
+  "orders": [
+    { "id": "A1", "customer": "Alice", "amount": 100 },
+    { "id": "B2", "customer": "Bob", "amount": 200 },
+    { "id": "C3", "customer": "Charlie", "amount": 300 }
+  ]
+}

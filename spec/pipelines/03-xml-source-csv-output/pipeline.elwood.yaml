@@ -1,0 +1,15 @@
+version: 2
+name: xml-to-csv
+description: Read XML catalog, transform, output as CSV
+
+sources:
+  - name: catalog
+    trigger: http
+    contentType: xml
+    map: parse-catalog.elwood
+
+outputs:
+  - name: product-list
+    path: $.products[*]
+    map: format-csv-row.elwood
+    contentType: csv

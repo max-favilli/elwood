@@ -1,0 +1,7 @@
+{
+  "products": [
+    { "sku": "SKU-A", "name": "Widget Pro", "price": 29.99 },
+    { "sku": "SKU-B", "name": "Gadget Plus", "price": 49.99 },
+    { "sku": "SKU-C", "name": "Thingamajig", "price": 9.99 }
+  ]
+}

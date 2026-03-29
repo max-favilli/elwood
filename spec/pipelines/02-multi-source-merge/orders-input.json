@@ -1,0 +1,7 @@
+{
+  "items": [
+    { "id": "ORD-001", "productSku": "SKU-A", "quantity": 3 },
+    { "id": "ORD-002", "productSku": "SKU-B", "quantity": 1 },
+    { "id": "ORD-003", "productSku": "SKU-A", "quantity": 5 }
+  ]
+}

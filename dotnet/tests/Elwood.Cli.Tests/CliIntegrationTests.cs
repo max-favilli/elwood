@@ -159,7 +159,7 @@ public class CliIntegrationTests : IClassFixture<CliFixture>
     [Fact]
     public async Task Pipeline_Validate_Valid()
     {
-        var yamlPath = _fixture.SpecPath("..", "pipelines", "sample-pipeline", "pipeline.elwood.yaml");
+        var yamlPath = _fixture.SpecPath("..", "pipelines", "01-single-source-json", "pipeline.elwood.yaml");
         var result = await _fixture.Run("pipeline", "validate", yamlPath);
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("valid", result.Stdout);
@@ -177,8 +177,8 @@ public class CliIntegrationTests : IClassFixture<CliFixture>
     [Fact]
     public async Task Pipeline_Run_WithSource()
     {
-        var yamlPath = _fixture.SpecPath("..", "pipelines", "sample-pipeline", "pipeline.elwood.yaml");
-        var inputPath = _fixture.SpecPath("..", "pipelines", "sample-pipeline", "orders-input.json");
+        var yamlPath = _fixture.SpecPath("..", "pipelines", "01-single-source-json", "pipeline.elwood.yaml");
+        var inputPath = _fixture.SpecPath("..", "pipelines", "01-single-source-json", "orders-envelope.json");
         var result = await _fixture.Run("pipeline", "run", yamlPath,
             "--source-envelope", $"orders={inputPath}");
         Assert.Equal(0, result.ExitCode);
@@ -189,8 +189,8 @@ public class CliIntegrationTests : IClassFixture<CliFixture>
     [Fact]
     public async Task Pipeline_Run_WithOutputDir()
     {
-        var yamlPath = _fixture.SpecPath("..", "pipelines", "sample-pipeline", "pipeline.elwood.yaml");
-        var inputPath = _fixture.SpecPath("..", "pipelines", "sample-pipeline", "orders-input.json");
+        var yamlPath = _fixture.SpecPath("..", "pipelines", "01-single-source-json", "pipeline.elwood.yaml");
+        var inputPath = _fixture.SpecPath("..", "pipelines", "01-single-source-json", "orders-envelope.json");
         var outputDir = Path.Combine(Path.GetTempPath(), "elwood-cli-test-" + Guid.NewGuid().ToString()[..8]);
         try
         {
@@ -214,7 +214,7 @@ public class CliIntegrationTests : IClassFixture<CliFixture>
     [Fact]
     public async Task Pipeline_Run_MissingSource()
     {
-        var yamlPath = _fixture.SpecPath("..", "pipelines", "sample-pipeline", "pipeline.elwood.yaml");
+        var yamlPath = _fixture.SpecPath("..", "pipelines", "01-single-source-json", "pipeline.elwood.yaml");
         var result = await _fixture.Run("pipeline", "run", yamlPath);
         Assert.NotEqual(0, result.ExitCode);
         Assert.Contains("No input", result.Stderr);
@@ -223,7 +223,7 @@ public class CliIntegrationTests : IClassFixture<CliFixture>
     [Fact]
     public async Task Pipeline_Run_PlainSource()
     {
-        var yamlPath = _fixture.SpecPath("..", "pipelines", "sample-pipeline", "pipeline.elwood.yaml");
+        var yamlPath = _fixture.SpecPath("..", "pipelines", "01-single-source-json", "pipeline.elwood.yaml");
         // Plain JSON (no envelope) — $source gets defaults
         var tempFile = Path.GetTempFileName();
         File.WriteAllText(tempFile, """{"data":{"orders":[{"orderId":"T1","customerName":"Test","amount":50,"orderStatus":"active"}]}}""");

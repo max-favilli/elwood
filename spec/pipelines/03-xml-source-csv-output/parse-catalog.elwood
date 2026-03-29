@@ -1,0 +1,8 @@
+let catalog = $.fromXml()
+return {
+  products: catalog.catalog.product | select p => {
+    name: p.name,
+    price: p.price,
+    category: p.category
+  }
+}

@@ -84,7 +84,7 @@ public class PipelineTests
     public void Execute_SamplePipeline_EndToEnd()
     {
         var pipelinePath = FindSamplePipeline("pipeline.elwood.yaml");
-        var inputPath = FindSamplePipeline("orders-input.json");
+        var inputPath = FindSamplePipeline("orders-envelope.json");
 
         var parser = new PipelineParser();
         var pipeline = parser.Parse(pipelinePath);
@@ -115,7 +115,7 @@ public class PipelineTests
     {
         // Test that $source is accessible in source map scripts
         var pipelinePath = FindSamplePipeline("pipeline.elwood.yaml");
-        var inputPath = FindSamplePipeline("orders-input.json");
+        var inputPath = FindSamplePipeline("orders-envelope.json");
 
         var parser = new PipelineParser();
         var pipeline = parser.Parse(pipelinePath);
@@ -305,7 +305,7 @@ outputs:
     [Fact]
     public void SourceInput_DetectsEnvelope()
     {
-        var inputPath = FindSamplePipeline("orders-input.json");
+        var inputPath = FindSamplePipeline("orders-envelope.json");
         var input = SourceInput.FromEnvelopeFile(inputPath, Factory);
 
         Assert.NotNull(input.Metadata);
@@ -335,7 +335,7 @@ outputs:
         var dir = AppContext.BaseDirectory;
         for (var i = 0; i < 10; i++)
         {
-            var candidate = Path.Combine(dir, "spec", "pipelines", "sample-pipeline", filename);
+            var candidate = Path.Combine(dir, "spec", "pipelines", "01-single-source-json", filename);
             if (File.Exists(candidate)) return candidate;
             dir = Path.GetDirectoryName(dir)!;
         }

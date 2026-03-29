@@ -1,0 +1,7 @@
+return {
+  orders: $.items[*] | select o => {
+    id: o.id,
+    sku: o.productSku,
+    qty: o.quantity
+  }
+}

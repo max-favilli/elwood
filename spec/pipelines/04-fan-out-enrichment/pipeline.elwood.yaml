@@ -1,0 +1,18 @@
+version: 2
+name: fan-out-enrichment
+description: First source provides a list, second source fans out per item
+
+sources:
+  - name: orders
+    trigger: http
+    contentType: json
+
+  - name: details
+    trigger: pull
+    depends: orders
+    path: $.orders[*]
+    map: enrich-detail.elwood
+
+outputs:
+  - name: enriched-orders
+    path: $.details[*]
