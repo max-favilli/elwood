@@ -88,6 +88,18 @@ static int RunPipeline(string[] args, JsonNodeValueFactory factory)
     }
 
     var subCommand = args[1].ToLower();
+
+    if (subCommand == "status")
+    {
+        return PipelineStatus(args);
+    }
+
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("Usage: elwood pipeline <run|validate|status> [options]");
+        return 1;
+    }
+
     var yamlPath = args[2];
 
     if (!File.Exists(yamlPath))
@@ -184,9 +196,18 @@ static int RunPipeline(string[] args, JsonNodeValueFactory factory)
         }
     }
 
+    // Set up state store when output-dir is specified
+    Elwood.Pipeline.Storage.IStateStore? stateStore = null;
+    if (outputDir is not null)
+    {
+        var stateDir = Path.Combine(outputDir, ".state");
+        stateStore = new Elwood.Pipeline.Storage.FileSystemStateStore(stateDir);
+    }
+
     // Execute the pipeline
     var executor = new Elwood.Pipeline.PipelineExecutor(
-        new Elwood.Pipeline.Secrets.EnvironmentSecretProvider());
+        new Elwood.Pipeline.Secrets.EnvironmentSecretProvider(),
+        stateStore);
     var result = executor.Execute(pipeline, sourceInputs);
 
     if (!result.IsSuccess)
@@ -232,6 +253,54 @@ static int RunPipeline(string[] args, JsonNodeValueFactory factory)
                 Console.WriteLine($"--- {name} ---");
             Console.WriteLine(json);
         }
+    }
+
+    return 0;
+}
+
+static int PipelineStatus(string[] args)
+{
+    var stateDir = args.Length > 2 ? args[2] : Path.Combine(Directory.GetCurrentDirectory(), ".elwood", "state");
+    if (!Directory.Exists(stateDir))
+    {
+        Console.WriteLine("No execution state found.");
+        Console.WriteLine($"  (Looking in: {stateDir})");
+        Console.WriteLine("  Use --output-dir with 'pipeline run' to persist state, or pass a state directory.");
+        return 0;
+    }
+
+    var stateStore = new Elwood.Pipeline.Storage.FileSystemStateStore(stateDir);
+    var executions = stateStore.ListExecutionsAsync(limit: 20).GetAwaiter().GetResult();
+
+    if (executions.Count == 0)
+    {
+        Console.WriteLine("No executions found.");
+        return 0;
+    }
+
+    Console.WriteLine($"Recent executions ({executions.Count}):");
+    Console.WriteLine();
+    foreach (var exec in executions)
+    {
+        var statusIcon = exec.Status switch
+        {
+            Elwood.Pipeline.State.ExecutionStatus.Completed => "✓",
+            Elwood.Pipeline.State.ExecutionStatus.Failed => "✗",
+            Elwood.Pipeline.State.ExecutionStatus.Running => "⟳",
+            _ => "○"
+        };
+        Console.WriteLine($"  {statusIcon} {exec.ExecutionId[..8]}  {exec.PipelineName,-25} {exec.Status,-10} {exec.DurationMs}ms  {exec.StartedAt:yyyy-MM-dd HH:mm:ss}");
+
+        if (exec.Errors.Count > 0)
+        {
+            foreach (var err in exec.Errors)
+                Console.WriteLine($"      ERROR: {err}");
+        }
+
+        foreach (var (name, step) in exec.Sources)
+            Console.WriteLine($"      source: {name,-20} {step.Status}");
+        foreach (var (name, step) in exec.Outputs)
+            Console.WriteLine($"      output: {name,-20} {step.Status}  ({step.ItemCount} items)");
     }
 
     return 0;

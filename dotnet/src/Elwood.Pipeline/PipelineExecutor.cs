@@ -5,6 +5,8 @@ using Elwood.Core.Abstractions;
 using Elwood.Json;
 using Elwood.Pipeline.Schema;
 using Elwood.Pipeline.Secrets;
+using Elwood.Pipeline.State;
+using Elwood.Pipeline.Storage;
 
 namespace Elwood.Pipeline;
 
@@ -17,12 +19,17 @@ public sealed class PipelineExecutor
     private readonly ElwoodEngine _engine;
     private readonly JsonNodeValueFactory _factory;
     private readonly StringResolver _stringResolver;
+    private readonly IStateStore? _stateStore;
+    private readonly IDocumentStore? _documentStore;
 
-    public PipelineExecutor(ISecretProvider? secretProvider = null)
+    public PipelineExecutor(ISecretProvider? secretProvider = null,
+        IStateStore? stateStore = null, IDocumentStore? documentStore = null)
     {
         _factory = JsonNodeValueFactory.Instance;
         _engine = new ElwoodEngine(_factory);
         _stringResolver = new StringResolver(secretProvider);
+        _stateStore = stateStore;
+        _documentStore = documentStore;
     }
 
     /// <summary>
@@ -48,23 +55,57 @@ public sealed class PipelineExecutor
             return PipelineResult.Failed([ex.Message]);
         }
 
+        // Initialize execution state
+        var executionId = Guid.NewGuid().ToString();
+        var execState = new ExecutionState
+        {
+            ExecutionId = executionId,
+            PipelineName = pipeline.Config.Name ?? "unknown",
+            Status = ExecutionStatus.Running,
+            StartedAt = DateTime.UtcNow,
+        };
+        foreach (var source in pipeline.Config.Sources)
+            execState.Sources[source.Name] = new SourceStepState { SourceName = source.Name };
+        foreach (var output in pipeline.Config.Outputs)
+            execState.Outputs[output.Name] = new OutputStepState { OutputName = output.Name };
+        _stateStore?.SaveExecutionAsync(execState).GetAwaiter().GetResult();
+
         // The IDM starts empty and is built up by sources
         var idm = _factory.CreateObject([]);
 
-        // Step 1: Process sources stage by stage (respecting dependencies)
+        // Step 1: Process sources stage by stage
         foreach (var stage in stages)
         {
-            // Sources in the same stage can run concurrently (TODO: actual parallelism)
             foreach (var source in stage)
             {
+                var stepState = execState.Sources[source.Name];
+                stepState.Status = ExecutionStatus.Running;
+                stepState.StartedAt = DateTime.UtcNow;
+
                 var sourceResult = ProcessSource(source, sourceInputs, idm, pipeline, errors);
                 if (sourceResult is not null)
+                {
                     idm = MergeIntoIdm(idm, source.Name, sourceResult);
+                    stepState.Status = ExecutionStatus.Completed;
+                }
+                else
+                {
+                    stepState.Status = ExecutionStatus.Failed;
+                    stepState.Errors.AddRange(errors.TakeLast(1));
+                }
+                stepState.CompletedAt = DateTime.UtcNow;
+                _stateStore?.UpdateSourceStepAsync(executionId, source.Name, stepState).GetAwaiter().GetResult();
             }
         }
 
         if (errors.Count > 0)
-            return PipelineResult.Failed(errors);
+        {
+            execState.Status = ExecutionStatus.Failed;
+            execState.Errors = errors;
+            execState.CompletedAt = DateTime.UtcNow;
+            _stateStore?.SaveExecutionAsync(execState).GetAwaiter().GetResult();
+            return PipelineResult.Failed(errors, executionId);
+        }
 
         // Step 2: Process each output
         var outputs = new Dictionary<string, IElwoodValue>();
@@ -102,9 +143,19 @@ public sealed class PipelineExecutor
             }
 
             outputs[output.Name] = data;
+
+            var outStep = execState.Outputs[output.Name];
+            outStep.Status = ExecutionStatus.Completed;
+            outStep.CompletedAt = DateTime.UtcNow;
+            outStep.ItemCount = data.Kind == ElwoodValueKind.Array ? data.GetArrayLength() : 1;
+            _stateStore?.UpdateOutputStepAsync(executionId, output.Name, outStep).GetAwaiter().GetResult();
         }
 
-        return PipelineResult.Success(outputs);
+        execState.Status = ExecutionStatus.Completed;
+        execState.CompletedAt = DateTime.UtcNow;
+        _stateStore?.SaveExecutionAsync(execState).GetAwaiter().GetResult();
+
+        return PipelineResult.Success(outputs, executionId);
     }
 
     /// <summary>
@@ -340,16 +391,20 @@ public sealed class SourceInput
 public sealed class PipelineResult
 {
     public bool IsSuccess { get; }
+    public string? ExecutionId { get; }
     public IReadOnlyDictionary<string, IElwoodValue> Outputs { get; }
     public IReadOnlyList<string> Errors { get; }
 
-    private PipelineResult(bool success, Dictionary<string, IElwoodValue>? outputs, List<string>? errors)
+    private PipelineResult(bool success, Dictionary<string, IElwoodValue>? outputs, List<string>? errors, string? executionId = null)
     {
         IsSuccess = success;
+        ExecutionId = executionId;
         Outputs = outputs ?? new Dictionary<string, IElwoodValue>();
         Errors = errors ?? [];
     }
 
-    public static PipelineResult Success(Dictionary<string, IElwoodValue> outputs) => new(true, outputs, null);
-    public static PipelineResult Failed(List<string> errors) => new(false, null, errors);
+    public static PipelineResult Success(Dictionary<string, IElwoodValue> outputs, string? executionId = null)
+        => new(true, outputs, null, executionId);
+    public static PipelineResult Failed(List<string> errors, string? executionId = null)
+        => new(false, null, errors, executionId);
 }
