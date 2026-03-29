@@ -467,26 +467,28 @@ The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`.
 
 ### Tasks
 
-**Step 1 — Pipeline YAML schema + parser:**
+**Step 1 — Pipeline YAML schema + parser: ✅**
 - [x] Define integration YAML schema (sources, outputs, destinations)
 - [x] `Elwood.Pipeline` project — YAML parser (using YamlDotNet)
 - [x] Resolve `.elwood` file references relative to YAML file location
 - [x] Source envelope schema (source metadata + payload)
 - [x] PipelineExecutor: source maps → IDM → output path → output maps
-- [x] Sample pipeline with tests (6 tests)
-- [ ] `depends` — source dependency graph + stage resolution
-- [ ] `path` fan-out on sources (process once per slice with concurrency)
-- [ ] `$source`, `$idm`, `$output` bindings in evaluator
-- [ ] `$secrets` resolution from provider
-- [ ] Inline Elwood expression evaluation in YAML string properties
-- [ ] Full destination type schema (11 types: REST, file share, SFTP, blob, ASB, SQL, SOAP, email, service point, request)
+- [x] `depends` — source dependency graph + stage resolution
+- [x] `path` fan-out on sources (with `$slice` binding)
+- [x] `$source`, `$idm`, `$output` bindings in evaluator
+- [x] `$`-prefixed identifiers in both .NET and TS lexers
+- [x] `$secrets` resolution from provider (EnvironmentSecretProvider, DictionarySecretProvider)
+- [x] StringResolver for inline expressions in YAML ({$.field}, $secrets.x, ${ENV_VAR})
+- [ ] Full destination type schema (11 types — schema defined in docs, code deferred to Step 4)
 
-**Step 2 — CLI Executor:**
-- [ ] `elwood pipeline run <yaml> --source name=file` command
-- [ ] Parse envelope files (source metadata + payload) or plain data files
-- [ ] Execute pipeline: resolve sources → run maps → apply join → generate outputs
-- [ ] Write outputs to local files or stdout
-- [ ] `elwood pipeline validate <yaml>` — validate YAML schema + script references
+**Step 2 — CLI Executor: ✅**
+- [x] `elwood pipeline run <yaml> --source name=file` command
+- [x] `--source-envelope name=file` for explicit envelope files (no auto-detection)
+- [x] `--output-dir` writes each output as `{name}.json`
+- [x] `elwood pipeline validate <yaml>` — validates YAML, scripts, dependencies, duplicates
+- [x] 5 pipeline test scenarios (single source, multi-source merge, XML→CSV, fan-out, depends chain)
+- [x] Pipeline conformance test runner (discovers spec/pipelines/*)
+- [x] 21 CLI integration tests (including 6 pipeline tests)
 
 **Step 3 — State + persistence:**
 - [ ] Pipeline Execution State JSON schema (v1) — metadata + refs, not payloads
