@@ -490,12 +490,14 @@ The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`.
 - [x] Pipeline conformance test runner (discovers spec/pipelines/*)
 - [x] 21 CLI integration tests (including 6 pipeline tests)
 
-**Step 3 — State + persistence:**
-- [ ] Pipeline Execution State JSON schema (v1) — metadata + refs, not payloads
-- [ ] `IStateStore` + `IDocumentStore` interfaces
-- [ ] `InMemoryStateStore` + `InMemoryDocumentStore` implementations
-- [ ] `FileSystemStateStore` + `FileSystemDocumentStore` for persistent local state
-- [ ] `elwood pipeline status` — read and display execution state
+**Step 3 — State + persistence: ✅**
+- [x] ExecutionState model: per-execution, per-source, per-output step state with timestamps
+- [x] `IStateStore` + `IDocumentStore` interfaces
+- [x] `InMemoryStateStore` + `InMemoryDocumentStore` implementations
+- [x] `FileSystemStateStore` + `FileSystemDocumentStore` for persistent local state
+- [x] PipelineExecutor tracks state automatically when stores are provided
+- [x] `elwood pipeline status [state-dir]` — shows recent executions with step details
+- [x] `--output-dir` persists state to `.state/` subdirectory
 
 **Step 4 — Sync Executor:**
 - [ ] `IExecutor`, `ISource`, `IDestination` interfaces
@@ -505,7 +507,7 @@ The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`.
 - [ ] `elwood pipeline serve <yaml>` — start HTTP listener for trigger sources
 
 **Step 5 — Deployment + Runtime API:**
-- [ ] `IPipelineStore` interface — where pipeline YAMLs + .elwood scripts are persisted
+- [ ] `IPipelineStore` interface — source of truth for pipeline YAMLs + .elwood scripts
   - [ ] `FileSystemPipelineStore` — local folder (dev/CLI)
   - [ ] `GitPipelineStore` — git repo as backing store (recommended for production)
     - Every save = git commit (automatic versioning, diff, audit trail)
@@ -513,11 +515,17 @@ The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`.
     - Deploy = tag or push to deploy branch
     - Backed by any git remote (Azure DevOps, GitHub, GitLab, local bare repo)
     - Developers can edit in VS Code and push — portal is optional
-  - [ ] `AzureBlobPipelineStore` — Azure Blob container (simple, no versioning)
   - [ ] Each pipeline is a folder: `{pipeline-id}/pipeline.elwood.yaml` + `{pipeline-id}/*.elwood`
-- [ ] `elwood deploy` command — uploads pipeline YAML + scripts to the configured IPipelineStore
-- [ ] `Elwood.Runtime.Api` — REST API layer over the Runtime (consumed by Management Portal and external tools)
-- [ ] API reads/writes pipelines and scripts via `IPipelineStore` — same interface regardless of storage backend
+- [ ] `IPipelineRegistry` — Redis-backed distribution cache for executors
+  - [ ] Route table: endpoint patterns → pipeline ID (for HTTP request matching)
+  - [ ] Pipeline content cache: full YAML + all .elwood scripts stored in Redis (~30KB per pipeline)
+  - [ ] Search index: pipeline names + content for portal search
+  - [ ] Webhook-triggered sync: git push → API server pulls → reads changed files → updates Redis
+  - [ ] Incremental updates for normal commits, full rebuild on startup
+  - [ ] Executors are fully stateless — read everything from Redis, no local git clone needed
+- [ ] `elwood deploy` command — writes to IPipelineStore (git) + updates IPipelineRegistry (Redis)
+- [ ] `Elwood.Runtime.Api` — REST API layer (the API server has the local git clone, bridges git ↔ Redis)
+- [ ] API reads/writes pipelines via `IPipelineStore`, executors read from `IPipelineRegistry`
 - [ ] Pipelines:
   - [ ] `GET /api/pipelines` — list pipelines, filter by name/status
   - [ ] `POST /api/pipelines` — create new pipeline
