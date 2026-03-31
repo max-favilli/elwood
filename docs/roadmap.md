@@ -499,12 +499,15 @@ The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`.
 - [x] `elwood pipeline status [state-dir]` — shows recent executions with step details
 - [x] `--output-dir` persists state to `.state/` subdirectory
 
-**Step 4 — Sync Executor:**
-- [ ] `IExecutor`, `ISource`, `IDestination` interfaces
-- [ ] HTTP source (GET/POST from third-party APIs)
-- [ ] File share source (read from local/network paths)
-- [ ] HTTP destination, file share destination, SFTP destination
-- [ ] `elwood pipeline serve <yaml>` — start HTTP listener for trigger sources
+**Step 4 — Sync Executor: ✅**
+- [x] `ISourceConnector` + `IDestinationConnector` interfaces
+- [x] `HttpSourceConnector` — fetch from REST APIs
+- [x] `FileSourceConnector` — read from local/network paths
+- [x] `HttpDestinationConnector` — deliver to REST APIs
+- [x] `FileDestinationConnector` — write to local/network paths
+- [x] `SyncExecutor` — end-to-end execution: trigger + pull sources, maps, IDM, outputs, destinations
+- [x] 7 SyncExecutor tests with mock HTTP (no real network calls)
+- [ ] `elwood pipeline serve <yaml>` — start HTTP listener for trigger sources (deferred)
 
 **Step 5 — Deployment + Runtime API:**
 - [ ] `IPipelineStore` interface — source of truth for pipeline YAMLs + .elwood scripts
