@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-04-07 — v0.3.0 npm follow-up
+
+The first `v0.3.0` workflow run shipped all six NuGet packages successfully but the npm publish job failed because `ts/package.json` was still at `0.2.0` (already on npm). This follow-up bumps the npm packages and adds `@elwood-lang/xlsx` to the workflow alongside `@elwood-lang/core`.
+
+### Published to npm
+- `@elwood-lang/core` 0.3.0
+- `@elwood-lang/xlsx` 0.3.0 (newly added to workflow — was never auto-published before)
+
+### Not published — `@elwood-lang/parquet`
+The npm Parquet extension cannot ship in its current form. The only mature JS Parquet reader (`hyparquet`) is async-only, but Elwood's TS extension API in `ts/src/extensions.ts` is synchronous. Use `Elwood.Parquet` (.NET) for Parquet I/O. Tracked in `docs/known-issues.md`.
+
+### Release workflow fixes
+- Move `NPM_TOKEN` env to job level (same fix pattern as `NUGET_API_KEY`)
+- Add `@elwood-lang/xlsx` install/build/publish steps
+- Comment in workflow explains why `ts-parquet` is excluded
+
+### Files modified
+- `.github/workflows/release.yml`
+- `ts/package.json`
+- `ts/package-lock.json`
+- `ts-xlsx/package.json`
+- `ts-xlsx/package-lock.json`
+- `docs/known-issues.md`
+- `docs/changelog.md`
+
 ## 2026-04-07 — v0.3.0 NuGet release (Phase 1c complete)
 
 All Elwood packages published to nuget.org. Closes the last open item in Phase 1c (publishing was previously blocked on a locked NuGet account).

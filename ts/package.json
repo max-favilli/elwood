@@ -1,6 +1,6 @@
 {
   "name": "@elwood-lang/core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Elwood — a functional JSON transformation DSL",
   "type": "module",
   "main": "dist/index.cjs",
