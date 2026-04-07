@@ -16,5 +16,6 @@
     <Project Path="tests/Elwood.Cli.Tests/Elwood.Cli.Tests.csproj" />
     <Project Path="tests/Elwood.Parquet.Tests/Elwood.Parquet.Tests.csproj" />
     <Project Path="tests/Elwood.Pipeline.Tests/Elwood.Pipeline.Tests.csproj" />
+    <Project Path="tests/Elwood.Pipeline.Azure.Tests/Elwood.Pipeline.Azure.Tests.csproj" />
   </Folder>
 </Solution>
