@@ -13,6 +13,7 @@ outputs:
     path: $.orders[*] | where o => o.status == "active"
     map: output-map.elwood
     contentType: json
+    response: true
     destinations:
       fileShare:
         - connectionString: ${FS_CONN}

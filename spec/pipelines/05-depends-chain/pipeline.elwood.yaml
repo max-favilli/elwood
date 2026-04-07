@@ -31,3 +31,4 @@ sources:
 outputs:
   - name: final
     path: $.result
+    response: true

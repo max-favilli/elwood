@@ -16,3 +16,4 @@ outputs:
   - name: enriched
     map: enrich.elwood
     contentType: json
+    response: true
