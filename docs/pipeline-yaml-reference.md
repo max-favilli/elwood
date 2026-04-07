@@ -16,6 +16,7 @@ Sources → IDM → Outputs → Destinations
 version: 2
 name: order-sync
 description: Receive orders via HTTP, enrich with products, deliver to file share and API
+mode: sync                    # see "Execution Mode" below
 
 sources:
   - name: orders
@@ -35,9 +36,14 @@ sources:
     map: enrich-order.elwood
 
 outputs:
-  - name: active-orders
+  - name: api-response
     path: $.orders[*] | where o => o.status == "active"
     map: format-output.elwood
+    contentType: json
+    response: true            # ← returned to the HTTP caller (required for sync mode)
+
+  - name: file-archive
+    path: $.orders[*] | where o => o.status == "active"
     contentType: json
     concurrency: 50
     destinations:
@@ -59,10 +65,87 @@ outputs:
 version: 2                    # Schema version (required)
 name: my-pipeline             # Pipeline name (required)
 description: What it does     # Human-readable description (optional)
+mode: sync                    # Execution mode: "sync" (default) or "async"
 
 sources: [...]                # Where data comes from (required, 1+)
 outputs: [...]                # What data to produce and where to send it (required, 1+)
 ```
+
+---
+
+## Execution Mode
+
+The `mode` field controls how the pipeline runs in the cloud runtime (Azure Functions / AWS Lambda / Kubernetes). It does **not** affect CLI execution — `elwood pipeline run` always runs end-to-end in-process.
+
+### `mode: sync` (default)
+
+The HTTP function runs the entire pipeline within its own invocation lifetime, then **returns one designated output** to the HTTP caller. This is the request-response pattern most integrations use.
+
+```yaml
+mode: sync   # explicit (default — the field can be omitted)
+
+sources:
+  - name: api-trigger
+    trigger: http
+    endpoint: /api/products/{sku}
+
+outputs:
+  - name: api-response
+    map: build-response.elwood
+    response: true            # ← exactly one output must set this
+  - name: audit-log
+    destinations:
+      blob:
+        - container: audit    # side effect — not returned to caller
+```
+
+**Rules:**
+- Exactly **one** output must have `response: true`
+- The pipeline runs synchronously inside the HTTP function (subject to Function timeout — 10 min on Consumption plan, 60 min on Premium)
+- The designated output's content is returned to the caller as the HTTP response body
+- Other outputs (without `response: true`) execute as **side effects** — they run before the response is returned, so failures abort the request
+
+### `mode: async`
+
+The HTTP function returns `202 Accepted` + `executionId` immediately and queues the work. Each fan-out item is processed by a separate queue trigger invocation. State persists in `IStateStore`. The caller polls `GET /api/executions/{id}` or receives a webhook on completion.
+
+```yaml
+mode: async
+
+sources:
+  - name: bulk-orders
+    trigger: http
+    endpoint: /api/bulk-import
+    path: $.orders[*]         # fan out per order
+    concurrency: 50
+
+outputs:
+  - name: write-warehouse
+    destinations:
+      restEndpoint:
+        - url: https://wms.example.com/import
+          method: POST
+  # No "response: true" — async pipelines do not return data to the caller
+```
+
+**Rules:**
+- **No** output may set `response: true` (validation error)
+- The HTTP function returns `202 Accepted` with the execution ID
+- Long-running and high-concurrency pipelines should use this mode
+- State is queryable via the `Elwood.Runtime.Api` execution endpoints
+
+### When to use which
+
+| Use sync when... | Use async when... |
+|---|---|
+| Caller expects a response body | Caller fires-and-forgets (just acknowledges acceptance) |
+| Total runtime fits inside the Function timeout | Total runtime may exceed Function timeout |
+| Fan-out is small (≤ a few hundred items) | Fan-out is large (thousands+) — async parallelizes via queue workers |
+| Errors should propagate to the caller as HTTP 4xx/5xx | Errors should be tracked in execution state for later retry |
+
+You can convert a pipeline between modes by changing one line: `mode: sync` ↔ `mode: async` (and adding/removing `response: true` on the appropriate output).
+
+---
 
 ---
 
@@ -303,6 +386,7 @@ outputs:
 | `contentType` | string | no | Output format. Default: `json` |
 | `concurrency` | int | no | Max parallel items. Default: `1` |
 | `destinations` | object | no | Where to deliver (see Destinations) |
+| `response` | bool | no | Sync mode only — marks this output as the HTTP response returned to the caller. Exactly one output must set this when `mode: sync`. Forbidden in async mode. See [Execution Mode](#execution-mode). |
 
 ### Output Fan-Out (path)
 

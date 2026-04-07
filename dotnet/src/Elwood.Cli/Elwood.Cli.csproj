@@ -11,7 +11,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>elwood</ToolCommandName>
     <PackageId>Elwood.Cli</PackageId>
-    <Version>0.3.0</Version>
+    <Version>0.4.0</Version>
     <Authors>Massimiliano Favilli</Authors>
     <Description>CLI for the Elwood JSON transformation DSL — REPL, eval, and script execution.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
