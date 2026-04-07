@@ -561,21 +561,24 @@ elwood status run-abc-123           # detailed state for one execution
 
 ```
 ┌──────────────────────────────────────────────────┐
-│  Git (IPipelineStore)                             │
+│  Git (IPipelineStore) — source of truth           │
 │                                                    │
 │  Pipeline YAML + .elwood scripts                   │
-│  Source of truth for definitions                   │
 │  Versioned, diffable, collaborative               │
 │  GitPipelineStore wraps git operations             │
+│  API server has the local clone                    │
+│  Developers edit via portal or VS Code + git push  │
 └──────────────────────────────────────────────────┘
-
+            ↓ webhook on push
 ┌──────────────────────────────────────────────────┐
 │  Redis (IPipelineRegistry + IStateStore)           │
 │                                                    │
-│  Pipeline registry:                                │
-│    Route table (endpoint patterns for matching)    │
+│  Pipeline registry + content cache:                │
+│    Route table (endpoint patterns → pipeline ID)   │
 │    Search index (name + content for portal)        │
-│    Rebuilt on deploy / git sync                    │
+│    Full pipeline content (YAML + all scripts)      │
+│    ~30KB per pipeline, ~15MB for 500 pipelines     │
+│    Rebuilt incrementally on webhook, full on start  │
 │                                                    │
 │  Execution state:                                  │
 │    Step status, fan-out counters, error list        │
@@ -585,7 +588,8 @@ elwood status run-abc-123           # detailed state for one execution
 │  IDM dedup:                                        │
 │    idm:{key}:{itemId} with TTL                     │
 │                                                    │
-│  ONLY metadata and pointers — nothing large        │
+│  Executors are STATELESS — read everything          │
+│  from Redis, no local git clone needed              │
 └──────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────┐
@@ -604,7 +608,31 @@ elwood status run-abc-123           # detailed state for one execution
 └──────────────────────────────────────────────────┘
 ```
 
-Redis is shared across all compute instances (Functions, Lambda, pods). Blob/S3 handles large payloads that Redis can't (or shouldn't) hold. Git is the source of truth for pipeline definitions with built-in versioning.
+**Git** is the source of truth — versioned, collaborative. **Redis** is the distribution cache — executors read pipeline content and state from Redis, never from disk. **Blob/S3** handles large payloads. The **API server** bridges git ↔ Redis: it has the local clone, reads files on webhook, and writes to Redis.
+
+### How pipeline content flows from git to executor
+
+```
+Developer pushes to git
+    ↓
+Git webhook → Elwood Runtime API server:
+    1. git pull (API server has local clone)
+    2. Read changed pipeline YAML + referenced .elwood scripts
+    3. Write to Redis:
+         pipeline:{id}:metadata  → { name, endpoint, trigger, ... }
+         pipeline:{id}:yaml      → full YAML content
+         pipeline:{id}:scripts   → { "transform.elwood": "...", "output.elwood": "..." }
+         pipeline:{id}:version   → git commit hash
+    4. Update route table in Redis
+    ↓
+Executor (Azure Function / Lambda / K8s pod):
+    1. Request arrives → match route in Redis (~1ms)
+    2. Read pipeline YAML + scripts from Redis (~5ms)
+    3. Parse and execute
+    4. Fully stateless — no local clone, no disk
+```
+
+Normal commits: incremental update (only changed pipelines). Startup: full rebuild (read all YAMLs, populate Redis). The route table stays live during rebuild — no downtime.
 
 ### Route matching — how incoming requests find their pipeline
 
@@ -613,14 +641,14 @@ The Elwood runtime exposes a catch-all HTTP endpoint. When a request arrives, it
 ```
 Request: POST https://somedomain.com/api/v1/sap/invoice/fk01/create
     ↓
-Pipeline registry (Redis, cached locally per instance with 30s TTL):
+Route table (Redis):
     /sap/invoice/{invoice-type}/{action}  → order-pipeline  ← match!
     /api/products/{category}              → product-pipeline
     /webhooks/shopify/{event}             → shopify-pipeline
     ↓
 Extract route params: { "invoice-type": "fk01", "action": "create" }
     ↓
-Load pipeline from IPipelineStore (local git clone)
+Read pipeline YAML + scripts from Redis (pipeline:order-pipeline:yaml + :scripts)
     ↓
 Execute with:
     $ = request body
@@ -706,13 +734,23 @@ interface IPipelineStore
     Task Sync();  // git pull → rebuild registry
 }
 
-// Route matching + search — Redis-backed, cached locally
+// Route matching + search + content cache — Redis-backed
+// Executors read everything from here (stateless, no local clone)
 interface IPipelineRegistry
 {
+    // Route matching
     Task<RouteMatch?> MatchRoute(string method, string path);
     Task<QueueMatch?> MatchQueue(string queueName);
+
+    // Pipeline content (for executors — full YAML + scripts from Redis)
+    Task<PipelineContent?> GetPipelineContent(string pipelineId);
+
+    // Search (for portal)
     Task<List<PipelineSummary>> Search(string query);
-    Task Rebuild();  // called after deploy/sync
+
+    // Sync (called by webhook handler or on startup)
+    Task RebuildAll();                              // full rebuild from git
+    Task UpdatePipeline(string pipelineId);         // incremental, one pipeline
 }
 
 // Execution state — Redis-backed, metadata + pointers only

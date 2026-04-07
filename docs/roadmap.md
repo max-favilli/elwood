@@ -111,7 +111,7 @@ New features follow the workflow: spec test case first → implement in .NET →
 - [x] `global.json` pinning SDK version
 - [x] `dotnet tool` configured (`dotnet tool install --global Elwood.Cli` → `elwood` command)
 - [x] Native AOT binaries on GitHub Release (linux-x64, macos-x64, win-x64)
-- [ ] Publish NuGet packages to nuget.org (needs `NUGET_API_KEY` secret — account unlock pending)
+- [x] Publish NuGet packages to nuget.org — `Elwood.Core`, `Elwood.Json`, `Elwood.Pipeline`, `Elwood.Cli`, `Elwood.Xlsx`, `Elwood.Parquet` (v0.3.0)
 
 ### TypeScript distribution ✅
 - [x] npm package published: `@elwood-lang/core` on npmjs.com
@@ -509,17 +509,17 @@ The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`.
 - [x] 7 SyncExecutor tests with mock HTTP (no real network calls)
 - [ ] `elwood pipeline serve <yaml>` — start HTTP listener for trigger sources (deferred)
 
-**Step 5 — Deployment + Runtime API:**
-- [ ] `IPipelineStore` interface — source of truth for pipeline YAMLs + .elwood scripts
-  - [ ] `FileSystemPipelineStore` — local folder (dev/CLI)
-  - [ ] `GitPipelineStore` — git repo as backing store (recommended for production)
+**Step 5 — Deployment + Runtime API: ⚠️ partial**
+- [x] `IPipelineStore` interface — source of truth for pipeline YAMLs + .elwood scripts
+  - [x] `FileSystemPipelineStore` — local folder (dev/CLI)
+  - [ ] `GitPipelineStore` — git repo as backing store (deferred to Step 6)
     - Every save = git commit (automatic versioning, diff, audit trail)
     - Revisions API = `git log`, restore = `git checkout` + commit
     - Deploy = tag or push to deploy branch
     - Backed by any git remote (Azure DevOps, GitHub, GitLab, local bare repo)
     - Developers can edit in VS Code and push — portal is optional
-  - [ ] Each pipeline is a folder: `{pipeline-id}/pipeline.elwood.yaml` + `{pipeline-id}/*.elwood`
-- [ ] `IPipelineRegistry` — Redis-backed distribution cache for executors
+  - [x] Each pipeline is a folder: `{pipeline-id}/pipeline.elwood.yaml` + `{pipeline-id}/*.elwood`
+- [x] `IPipelineRegistry` interface defined — Redis impl deferred to Step 6
   - [ ] Route table: endpoint patterns → pipeline ID (for HTTP request matching)
   - [ ] Pipeline content cache: full YAML + all .elwood scripts stored in Redis (~30KB per pipeline)
   - [ ] Search index: pipeline names + content for portal search
@@ -527,35 +527,34 @@ The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`.
   - [ ] Incremental updates for normal commits, full rebuild on startup
   - [ ] Executors are fully stateless — read everything from Redis, no local git clone needed
 - [ ] `elwood deploy` command — writes to IPipelineStore (git) + updates IPipelineRegistry (Redis)
-- [ ] `Elwood.Runtime.Api` — REST API layer (the API server has the local git clone, bridges git ↔ Redis)
-- [ ] API reads/writes pipelines via `IPipelineStore`, executors read from `IPipelineRegistry`
-- [ ] Pipelines:
-  - [ ] `GET /api/pipelines` — list pipelines, filter by name/status
-  - [ ] `POST /api/pipelines` — create new pipeline
-  - [ ] `GET /api/pipelines/{id}` — get pipeline YAML + associated .elwood scripts
-  - [ ] `PUT /api/pipelines/{id}` — update pipeline
-  - [ ] `DELETE /api/pipelines/{id}` — delete pipeline
-  - [ ] `GET /api/pipelines/{id}/revisions` — version history
-  - [ ] `POST /api/pipelines/{id}/revisions/{rev}/restore` — restore to previous version
-  - [ ] `POST /api/pipelines/{id}/validate` — run `elwood validate`
-  - [ ] `POST /api/pipelines/{id}/deploy` — deploy to pipeline store
-- [ ] Scripts (`.elwood` files associated with a pipeline):
-  - [ ] `GET /api/pipelines/{id}/scripts` — list all .elwood scripts referenced by this pipeline
-  - [ ] `GET /api/pipelines/{id}/scripts/{name}` — get script content
-  - [ ] `PUT /api/pipelines/{id}/scripts/{name}` — create or update a script
-  - [ ] `DELETE /api/pipelines/{id}/scripts/{name}` — delete a script
-  - [ ] `POST /api/pipelines/{id}/scripts/{name}/test` — run script against provided input, return result
-- [ ] Executions:
-  - [ ] `GET /api/executions` — list executions, filter by pipeline/status/time range
-  - [ ] `GET /api/executions/{id}` — full execution state from IStateStore
-  - [ ] `POST /api/executions` — trigger a pipeline run
-  - [ ] `DELETE /api/executions/{id}` — cancel a running execution
+- [x] `Elwood.Runtime.Api` — REST API layer (ASP.NET minimal API project created)
+- [x] API reads/writes pipelines via `IPipelineStore` (Redis registry deferred)
+- [x] Pipelines:
+  - [x] `GET /api/pipelines` — list pipelines, filter by name
+  - [x] `POST /api/pipelines` — create new pipeline
+  - [x] `GET /api/pipelines/{id}` — get pipeline YAML + associated .elwood scripts
+  - [x] `PUT /api/pipelines/{id}` — update pipeline
+  - [x] `DELETE /api/pipelines/{id}` — delete pipeline
+  - [x] `GET /api/pipelines/{id}/revisions` — version history (returns empty for FileSystem store)
+  - [ ] `POST /api/pipelines/{id}/revisions/{rev}/restore` — restore to previous version (deferred with Git store)
+  - [x] `POST /api/pipelines/{id}/validate` — run `elwood validate`
+  - [ ] `POST /api/pipelines/{id}/deploy` — deploy to pipeline store (deferred)
+- [x] Scripts (`.elwood` files associated with a pipeline):
+  - [x] `GET /api/pipelines/{id}/scripts/{name}` — get script content
+  - [x] `PUT /api/pipelines/{id}/scripts/{name}` — create or update a script
+  - [x] `DELETE /api/pipelines/{id}/scripts/{name}` — delete a script
+  - [x] `POST /api/pipelines/{id}/scripts/{name}/test` — run script against provided input, return result
+- [x] Executions:
+  - [x] `GET /api/executions` — list executions, filter by pipeline/status/time range
+  - [x] `GET /api/executions/{id}` — full execution state from IStateStore
+  - [x] `POST /api/executions` — trigger a pipeline run
+  - [ ] `DELETE /api/executions/{id}` — cancel a running execution (deferred)
 - [ ] Documents:
-  - [ ] `GET /api/documents/{ref}` — retrieve payload/output from IDocumentStore
-- [ ] System:
-  - [ ] `GET /api/health` — runtime health status
-  - [ ] `GET /api/metrics` — running executions count, recent activity summary
-- [ ] Auth: JWT bearer tokens (MSAL / Azure AD integration)
+  - [ ] `GET /api/documents/{ref}` — retrieve payload/output from IDocumentStore (deferred)
+- [x] System:
+  - [x] `GET /api/health` — runtime health status
+  - [x] `GET /api/metrics` — running executions count, recent activity summary
+- [ ] Auth: JWT bearer tokens (MSAL / Azure AD integration) — deferred to portal phase
 
 **Step 6 — Cloud Executors (separate packages):**
 - [ ] Azure Executor (Functions + ASB + Storage)

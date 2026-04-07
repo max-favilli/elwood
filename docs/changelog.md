@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-04-07 — v0.3.0 NuGet release (Phase 1c complete)
+
+All Elwood packages published to nuget.org. Closes the last open item in Phase 1c (publishing was previously blocked on a locked NuGet account).
+
+### Packages published
+
+| Package | Version | Notes |
+|---|---|---|
+| `Elwood.Core` | 0.3.0 | Engine, multi-target net8.0;net10.0 |
+| `Elwood.Json` | 0.3.0 | System.Text.Json adapter |
+| `Elwood.Pipeline` | 0.3.0 | Pipeline YAML parser + executor (new) |
+| `Elwood.Cli` | 0.3.0 | `dotnet tool install --global Elwood.Cli` |
+| `Elwood.Xlsx` | 0.3.0 | XLSX format extension |
+| `Elwood.Parquet` | 0.3.0 | Parquet format extension |
+
+### Release workflow fixes
+- Moved `NUGET_API_KEY` env to job level so the `if:` guard on the push step works correctly
+- Added pack/push commands for `Elwood.Pipeline`, `Elwood.Xlsx`, `Elwood.Parquet` (previously the workflow only published Core/Json/Cli)
+- Pipeline is packed and pushed before Cli so the dotnet tool can resolve its dependency
+
+### Files modified
+- `.github/workflows/release.yml`
+- `dotnet/src/Elwood.Core/Elwood.Core.csproj`
+- `dotnet/src/Elwood.Json/Elwood.Json.csproj`
+- `dotnet/src/Elwood.Cli/Elwood.Cli.csproj`
+- `dotnet/src/Elwood.Xlsx/Elwood.Xlsx.csproj`
+- `dotnet/src/Elwood.Parquet/Elwood.Parquet.csproj`
+- `docs/roadmap.md`
+- `docs/changelog.md`
+
 ## 2026-03-24 — Performance benchmarks (Phase 2b complete)
 
 Benchmarked Elwood against a legacy JSONPath-based transformation engine on 100K rows (fair in-process comparison):
