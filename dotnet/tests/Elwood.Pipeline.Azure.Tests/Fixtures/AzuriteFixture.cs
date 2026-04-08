@@ -14,30 +14,32 @@ namespace Elwood.Pipeline.Azure.Tests.Fixtures;
 /// </summary>
 public sealed class AzuriteFixture : IAsyncLifetime
 {
-    // We keep AzuriteBuilder's default image (mcr.microsoft.com/azure-storage/azurite:3.28.0
-    // as of Testcontainers.Azurite 3.10.0) and only override the command to add
-    // --skipApiVersionCheck on top of the default args.
+    // Pin Azurite to 3.35.0 (newer than the 3.28.0 default in Testcontainers.Azurite 3.10.0)
+    // and add --skipApiVersionCheck on top of the default WithCommand args.
+    //
+    // Why pin a newer image:
+    //   Azure.Storage.Blobs 12.x sends x-ms-version: 2026-02-06 headers AND uses
+    //   request shapes from that API revision. The 3.28.0 default in
+    //   Testcontainers.Azurite is too old — even with --skipApiVersionCheck, it
+    //   accepts the version header but then crashes mid-request because it can't
+    //   parse the new request format (we observed "HttpIOException: The response
+    //   ended prematurely" in CI). Azurite 3.35.0 understands enough of the new
+    //   API surface for our basic blob operations to work.
     //
     // Why --skipApiVersionCheck:
-    //   Azure.Storage.Blobs 12.x sends x-ms-version: 2026-02-06 headers, but
-    //   Azurite (any version) only recognizes API versions current at the time
-    //   of its release. Without the skip flag, the emulator returns
-    //   400 InvalidHeaderValue on every blob operation. The flag tells Azurite
-    //   to accept any version header.
-    //
-    // Why NOT pin the image:
-    //   AzuriteBuilder is tested against its bundled image version. Pinning to
-    //   a newer image may introduce incompatibilities with the builder's
-    //   wait-strategy log-message matchers, port handling, etc. Stick with the
-    //   default unless we have a concrete reason to override.
+    //   Even Azurite 3.35.0 doesn't claim support for 2026-02-06 in its version
+    //   table; the flag tells it to accept any version header rather than 400.
     //
     // Critical details when overriding WithCommand:
     //   1. "azurite" is the ENTRYPOINT (not part of WithCommand). Don't include it
     //      as an arg or Docker calls "azurite azurite ..." which fails.
-    //   2. The default args are exactly:
+    //   2. The AzuriteBuilder default args are exactly:
     //        --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0
-    //      No "-l /data", no explicit port flags. Match those exactly + the skip flag.
+    //      No "-l /data", no explicit port flags. Match those exactly + skip flag.
+    //   3. The wait strategy ("Blob service is successfully listening" log match)
+    //      is set up by AzuriteBuilder.Build() and is preserved across our overrides.
     private readonly AzuriteContainer _container = new AzuriteBuilder()
+        .WithImage("mcr.microsoft.com/azure-storage/azurite:3.35.0")
         .WithCommand(
             "--blobHost", "0.0.0.0",
             "--queueHost", "0.0.0.0",
