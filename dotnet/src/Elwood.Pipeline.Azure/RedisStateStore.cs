@@ -9,16 +9,35 @@ namespace Elwood.Pipeline.Azure;
 /// Redis-backed implementation of <see cref="IStateStore"/>.
 /// </summary>
 /// <remarks>
-/// Key layout:
-///   exec:{executionId}              → JSON-serialized ExecutionState
-///   exec:by-pipeline:{pipelineName} → SortedSet, score = StartedAt ticks, value = executionId
+/// Storage layout (one Hash per execution):
+/// <code>
+/// exec:{executionId}                  Hash
+///   "Header"          → JSON of { ExecutionId, PipelineName, Status,
+///                                  StartedAt, CompletedAt, IdmRef, Errors }
+///   "Source:{name}"   → JSON of SourceStepState (one per source)
+///   "Output:{name}"   → JSON of OutputStepState (one per output)
 ///
-/// Per-step updates (UpdateSourceStepAsync, UpdateOutputStepAsync) are atomic via
-/// a Lua script that runs server-side: load → mutate → save in a single round trip,
-/// with no risk of lost updates from concurrent fan-out workers.
+/// exec:by-pipeline:{pipelineName}     SortedSet
+///   member = executionId, score = StartedAt.Ticks
+/// </code>
 ///
-/// TTL: configurable, default 3 days. The Lua scripts use SET ... KEEPTTL so updates
-/// preserve the original expiration set on first save.
+/// Why a Hash instead of a single JSON String:
+///
+/// Per-step updates (UpdateSourceStepAsync / UpdateOutputStepAsync) are a single
+/// <c>HSET</c> on one field — atomic by design, no read-modify-write race, no Lua.
+/// Concurrent fan-out workers updating different sources of the same execution
+/// never collide because they touch different hash fields.
+///
+/// We previously used a Lua script to load → mutate → save the entire JSON state,
+/// but Redis's bundled cjson library cannot distinguish empty Lua tables from
+/// empty arrays (both are <c>{}</c>) — empty <c>Errors: []</c> arrays would round-trip
+/// as <c>Errors: {}</c> objects and break .NET deserialization. Splitting the state
+/// across hash fields side-steps the cjson ambiguity entirely.
+///
+/// TTL: configurable, default 3 days. Applied to the entire hash via EXPIRE.
+/// On UpdateSourceStep / UpdateOutputStep, we do NOT touch the TTL — Redis preserves
+/// the existing expiration on HSET to existing keys (this is native Redis semantics,
+/// no equivalent of the Lua KEEPTTL flag is needed).
 /// </remarks>
 public sealed class RedisStateStore : IStateStore
 {
@@ -28,29 +47,9 @@ public sealed class RedisStateStore : IStateStore
         WriteIndented = false,
     };
 
-    // Lua: read state, replace Sources[name] with the supplied step JSON, write back with KEEPTTL.
-    // KEYS[1] = exec:{id}    ARGV[1] = sourceName    ARGV[2] = step JSON
-    private const string UpdateSourceStepScript = @"
-local raw = redis.call('GET', KEYS[1])
-if not raw then return 0 end
-local state = cjson.decode(raw)
-if not state.Sources then state.Sources = {} end
-state.Sources[ARGV[1]] = cjson.decode(ARGV[2])
-redis.call('SET', KEYS[1], cjson.encode(state), 'KEEPTTL')
-return 1
-";
-
-    // Same pattern for outputs.
-    // KEYS[1] = exec:{id}    ARGV[1] = outputName    ARGV[2] = step JSON
-    private const string UpdateOutputStepScript = @"
-local raw = redis.call('GET', KEYS[1])
-if not raw then return 0 end
-local state = cjson.decode(raw)
-if not state.Outputs then state.Outputs = {} end
-state.Outputs[ARGV[1]] = cjson.decode(ARGV[2])
-redis.call('SET', KEYS[1], cjson.encode(state), 'KEEPTTL')
-return 1
-";
+    private const string HeaderField = "Header";
+    private const string SourcePrefix = "Source:";
+    private const string OutputPrefix = "Output:";
 
     private readonly IConnectionMultiplexer _redis;
     private readonly TimeSpan _ttl;
@@ -70,10 +69,25 @@ return 1
     {
         var db = _redis.GetDatabase();
         var key = ExecKey(state.ExecutionId);
-        var json = JsonSerializer.Serialize(state, JsonOptions);
 
+        // Build all fields up-front so the HSET is a single atomic call.
+        var fields = new List<HashEntry>(2 + state.Sources.Count + state.Outputs.Count)
+        {
+            new(HeaderField, JsonSerializer.Serialize(BuildHeader(state), JsonOptions)),
+        };
+        foreach (var (name, src) in state.Sources)
+            fields.Add(new HashEntry(SourcePrefix + name, JsonSerializer.Serialize(src, JsonOptions)));
+        foreach (var (name, output) in state.Outputs)
+            fields.Add(new HashEntry(OutputPrefix + name, JsonSerializer.Serialize(output, JsonOptions)));
+
+        // Save: replace the entire hash and refresh the TTL.
+        // KeyDelete + HashSet is "almost atomic" — between the two ops, a reader could
+        // observe an empty key. For our usage (callers don't read partial state mid-save)
+        // this is acceptable. The alternative would be Lua, which we explicitly avoided.
         var batch = db.CreateBatch();
-        var setTask = batch.StringSetAsync(key, json, _ttl);
+        var deleteTask = batch.KeyDeleteAsync(key);
+        var hashSetTask = batch.HashSetAsync(key, fields.ToArray());
+        var ttlTask = batch.KeyExpireAsync(key, _ttl);
         var indexTask = batch.SortedSetAddAsync(
             ByPipelineKey(state.PipelineName),
             state.ExecutionId,
@@ -81,16 +95,18 @@ return 1
         var indexTtlTask = batch.KeyExpireAsync(ByPipelineKey(state.PipelineName), _ttl);
         batch.Execute();
 
-        await Task.WhenAll(setTask, indexTask, indexTtlTask);
+        await Task.WhenAll(deleteTask, hashSetTask, ttlTask, indexTask, indexTtlTask);
     }
 
     public async Task<ExecutionState?> GetExecutionAsync(string executionId)
     {
         var db = _redis.GetDatabase();
-        var raw = await db.StringGetAsync(ExecKey(executionId));
-        return raw.IsNullOrEmpty
-            ? null
-            : JsonSerializer.Deserialize<ExecutionState>((string)raw!, JsonOptions);
+        var key = ExecKey(executionId);
+
+        var entries = await db.HashGetAllAsync(key);
+        if (entries.Length == 0) return null;
+
+        return DeserializeFromHash(entries);
     }
 
     public async Task<List<ExecutionState>> ListExecutionsAsync(string? pipelineName = null, int limit = 50)
@@ -109,13 +125,13 @@ return 1
 
             if (ids.Length == 0) return results;
 
-            var keys = ids.Select(id => (RedisKey)ExecKey(id!)).ToArray();
-            var values = await db.StringGetAsync(keys);
-
-            foreach (var v in values)
+            // For small N, sequential HGETALLs are fine. If this becomes a hot path,
+            // batch them via CreateBatch.
+            foreach (var id in ids)
             {
-                if (v.IsNullOrEmpty) continue;
-                var state = JsonSerializer.Deserialize<ExecutionState>((string)v!, JsonOptions);
+                var entries = await db.HashGetAllAsync(ExecKey((string)id!));
+                if (entries.Length == 0) continue;
+                var state = DeserializeFromHash(entries);
                 if (state is not null) results.Add(state);
             }
             return results;
@@ -126,16 +142,14 @@ return 1
         var server = GetAnyServer();
         var allKeys = server.Keys(database: db.Database, pattern: "exec:*", pageSize: 250)
             .Where(k => !((string)k!).StartsWith("exec:by-pipeline:"))
-            .Take(limit * 4) // overshoot — we need to dedupe and sort by startedAt
+            .Take(limit * 4) // overshoot — we need to sort by startedAt and take top N
             .ToArray();
 
-        if (allKeys.Length == 0) return results;
-
-        var allValues = await db.StringGetAsync(allKeys);
-        foreach (var v in allValues)
+        foreach (var k in allKeys)
         {
-            if (v.IsNullOrEmpty) continue;
-            var state = JsonSerializer.Deserialize<ExecutionState>((string)v!, JsonOptions);
+            var entries = await db.HashGetAllAsync(k);
+            if (entries.Length == 0) continue;
+            var state = DeserializeFromHash(entries);
             if (state is not null) results.Add(state);
         }
 
@@ -145,25 +159,91 @@ return 1
     public async Task UpdateSourceStepAsync(string executionId, string sourceName, SourceStepState step)
     {
         var db = _redis.GetDatabase();
-        var key = ExecKey(executionId);
-        var stepJson = JsonSerializer.Serialize(step, JsonOptions);
-
-        await db.ScriptEvaluateAsync(
-            UpdateSourceStepScript,
-            keys: [key],
-            values: [sourceName, stepJson]);
+        var json = JsonSerializer.Serialize(step, JsonOptions);
+        // Single HSET — atomic, native, no race possible. Existing TTL is preserved
+        // by Redis automatically when HSET targets an existing key.
+        await db.HashSetAsync(ExecKey(executionId), SourcePrefix + sourceName, json);
     }
 
     public async Task UpdateOutputStepAsync(string executionId, string outputName, OutputStepState step)
     {
         var db = _redis.GetDatabase();
-        var key = ExecKey(executionId);
-        var stepJson = JsonSerializer.Serialize(step, JsonOptions);
+        var json = JsonSerializer.Serialize(step, JsonOptions);
+        await db.HashSetAsync(ExecKey(executionId), OutputPrefix + outputName, json);
+    }
 
-        await db.ScriptEvaluateAsync(
-            UpdateOutputStepScript,
-            keys: [key],
-            values: [outputName, stepJson]);
+    // ── helpers ──
+
+    /// <summary>
+    /// The "header" of an ExecutionState — top-level fields excluding Sources/Outputs
+    /// (which are stored in their own hash fields).
+    /// </summary>
+    private sealed class ExecutionHeader
+    {
+        public string ExecutionId { get; set; } = "";
+        public string PipelineName { get; set; } = "";
+        public ExecutionStatus Status { get; set; } = ExecutionStatus.Pending;
+        public DateTime StartedAt { get; set; }
+        public DateTime? CompletedAt { get; set; }
+        public string? IdmRef { get; set; }
+        public List<string> Errors { get; set; } = [];
+    }
+
+    private static ExecutionHeader BuildHeader(ExecutionState state) => new()
+    {
+        ExecutionId = state.ExecutionId,
+        PipelineName = state.PipelineName,
+        Status = state.Status,
+        StartedAt = state.StartedAt,
+        CompletedAt = state.CompletedAt,
+        IdmRef = state.IdmRef,
+        Errors = state.Errors,
+    };
+
+    private static ExecutionState? DeserializeFromHash(HashEntry[] entries)
+    {
+        ExecutionHeader? header = null;
+        var sources = new Dictionary<string, SourceStepState>();
+        var outputs = new Dictionary<string, OutputStepState>();
+
+        foreach (var entry in entries)
+        {
+            var name = (string)entry.Name!;
+            var value = (string?)entry.Value;
+            if (string.IsNullOrEmpty(value)) continue;
+
+            if (name == HeaderField)
+            {
+                header = JsonSerializer.Deserialize<ExecutionHeader>(value, JsonOptions);
+            }
+            else if (name.StartsWith(SourcePrefix, StringComparison.Ordinal))
+            {
+                var sourceName = name.Substring(SourcePrefix.Length);
+                var step = JsonSerializer.Deserialize<SourceStepState>(value, JsonOptions);
+                if (step is not null) sources[sourceName] = step;
+            }
+            else if (name.StartsWith(OutputPrefix, StringComparison.Ordinal))
+            {
+                var outputName = name.Substring(OutputPrefix.Length);
+                var step = JsonSerializer.Deserialize<OutputStepState>(value, JsonOptions);
+                if (step is not null) outputs[outputName] = step;
+            }
+        }
+
+        if (header is null) return null;
+
+        return new ExecutionState
+        {
+            ExecutionId = header.ExecutionId,
+            PipelineName = header.PipelineName,
+            Status = header.Status,
+            StartedAt = header.StartedAt,
+            CompletedAt = header.CompletedAt,
+            IdmRef = header.IdmRef,
+            Errors = header.Errors ?? [],
+            Sources = sources,
+            Outputs = outputs,
+        };
     }
 
     private static string ExecKey(string executionId) => $"exec:{executionId}";

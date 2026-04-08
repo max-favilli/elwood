@@ -23,18 +23,28 @@ public sealed class AzuriteFixture : IAsyncLifetime
     // shipped a newer Azurite — this is a chronic SDK-vs-emulator lag the
     // flag exists to bridge.
     //
-    // We have to override the entire WithCommand because AzuriteBuilder
-    // does not expose a setter for additional args. The default CMD from
-    // Microsoft's Azurite Docker image is:
-    //   azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0
+    // Critical detail when overriding WithCommand on AzuriteBuilder:
+    //
+    //   1. "azurite" is the ENTRYPOINT, not part of the command. We must NOT
+    //      include it as the first arg, or Docker passes it twice as
+    //      "azurite azurite ..." which crashes.
+    //
+    //   2. AzuriteBuilder's default WithCommand sets explicit --blobPort,
+    //      --queuePort, --tablePort matching Testcontainers' port mappings
+    //      (10000, 10001, 10002). If we omit these, Azurite may bind to
+    //      different ports than Testcontainers expects, making the container
+    //      unreachable from the SDK.
+    //
+    //   3. The default does NOT include "-l /data" — Azurite uses its
+    //      working directory (/opt/azurite by default) for storage.
+    //
+    // So the override is just the default command's args plus the skip flag.
     private readonly AzuriteContainer _container = new AzuriteBuilder()
         .WithImage("mcr.microsoft.com/azure-storage/azurite:3.35.0")
         .WithCommand(
-            "azurite",
-            "-l", "/data",
-            "--blobHost", "0.0.0.0",
-            "--queueHost", "0.0.0.0",
-            "--tableHost", "0.0.0.0",
+            "--blobHost", "0.0.0.0", "--blobPort", "10000",
+            "--queueHost", "0.0.0.0", "--queuePort", "10001",
+            "--tableHost", "0.0.0.0", "--tablePort", "10002",
             "--skipApiVersionCheck")
         .Build();
 
