@@ -15,6 +15,20 @@
     <PackageReference Include="Testcontainers" Version="3.*" />
     <PackageReference Include="Testcontainers.Redis" Version="3.*" />
     <PackageReference Include="Testcontainers.Azurite" Version="3.*" />
+    <!--
+      Pin Azure.Storage.Blobs to 12.20.x for the test project ONLY.
+      Azure.Storage.Blobs 12.25+ sends requests in API version 2026-02-06
+      format, which no released version of Azurite can parse: the emulator
+      accepts the connection then resets mid-request. The skipApiVersionCheck
+      flag only bypasses the version HEADER check; it doesn't make Azurite
+      understand newer request shapes.
+      12.20.x uses API version 2024-05-04, which Azurite 3.28.0 (the
+      Testcontainers.Azurite default) supports. Production users of
+      Elwood.Pipeline.Azure still get 12.* (latest) — the pin is local
+      to this test project and overrides the transitive resolution.
+      Drop this pin once Microsoft ships an Azurite that supports 2026-02-06.
+    -->
+    <PackageReference Include="Azure.Storage.Blobs" Version="[12.20.0,12.21.0)" />
   </ItemGroup>
 
   <ItemGroup>
