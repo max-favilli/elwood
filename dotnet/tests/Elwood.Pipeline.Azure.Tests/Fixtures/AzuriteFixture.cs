@@ -14,37 +14,34 @@ namespace Elwood.Pipeline.Azure.Tests.Fixtures;
 /// </summary>
 public sealed class AzuriteFixture : IAsyncLifetime
 {
-    // Pinned image + --skipApiVersionCheck.
+    // We keep AzuriteBuilder's default image (mcr.microsoft.com/azure-storage/azurite:3.28.0
+    // as of Testcontainers.Azurite 3.10.0) and only override the command to add
+    // --skipApiVersionCheck on top of the default args.
     //
-    // Azure.Storage.Blobs 12.x sends x-ms-version: 2026-02-06 headers, but
-    // Azurite 3.35.0 (the latest as of 2026-04) only recognizes API versions
-    // up to ~2025-x. Without --skipApiVersionCheck the emulator returns
-    // 400 InvalidHeaderValue on every blob operation. Microsoft has not yet
-    // shipped a newer Azurite — this is a chronic SDK-vs-emulator lag the
-    // flag exists to bridge.
+    // Why --skipApiVersionCheck:
+    //   Azure.Storage.Blobs 12.x sends x-ms-version: 2026-02-06 headers, but
+    //   Azurite (any version) only recognizes API versions current at the time
+    //   of its release. Without the skip flag, the emulator returns
+    //   400 InvalidHeaderValue on every blob operation. The flag tells Azurite
+    //   to accept any version header.
     //
-    // Critical detail when overriding WithCommand on AzuriteBuilder:
+    // Why NOT pin the image:
+    //   AzuriteBuilder is tested against its bundled image version. Pinning to
+    //   a newer image may introduce incompatibilities with the builder's
+    //   wait-strategy log-message matchers, port handling, etc. Stick with the
+    //   default unless we have a concrete reason to override.
     //
-    //   1. "azurite" is the ENTRYPOINT, not part of the command. We must NOT
-    //      include it as the first arg, or Docker passes it twice as
-    //      "azurite azurite ..." which crashes.
-    //
-    //   2. AzuriteBuilder's default WithCommand sets explicit --blobPort,
-    //      --queuePort, --tablePort matching Testcontainers' port mappings
-    //      (10000, 10001, 10002). If we omit these, Azurite may bind to
-    //      different ports than Testcontainers expects, making the container
-    //      unreachable from the SDK.
-    //
-    //   3. The default does NOT include "-l /data" — Azurite uses its
-    //      working directory (/opt/azurite by default) for storage.
-    //
-    // So the override is just the default command's args plus the skip flag.
+    // Critical details when overriding WithCommand:
+    //   1. "azurite" is the ENTRYPOINT (not part of WithCommand). Don't include it
+    //      as an arg or Docker calls "azurite azurite ..." which fails.
+    //   2. The default args are exactly:
+    //        --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0
+    //      No "-l /data", no explicit port flags. Match those exactly + the skip flag.
     private readonly AzuriteContainer _container = new AzuriteBuilder()
-        .WithImage("mcr.microsoft.com/azure-storage/azurite:3.35.0")
         .WithCommand(
-            "--blobHost", "0.0.0.0", "--blobPort", "10000",
-            "--queueHost", "0.0.0.0", "--queuePort", "10001",
-            "--tableHost", "0.0.0.0", "--tablePort", "10002",
+            "--blobHost", "0.0.0.0",
+            "--queueHost", "0.0.0.0",
+            "--tableHost", "0.0.0.0",
             "--skipApiVersionCheck")
         .Build();
 
