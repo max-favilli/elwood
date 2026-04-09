@@ -17,6 +17,15 @@ public sealed class PipelineConfig
     [YamlMember(Alias = "description")]
     public string? Description { get; set; }
 
+    /// <summary>
+    /// Execution mode for cloud runtime dispatch.
+    /// "sync" (default) — runs in-process inside the HTTP function lifetime,
+    ///   returns the output marked response:true to the caller.
+    /// "async" — fans out via queue, returns 202 + execution ID immediately.
+    /// </summary>
+    [YamlMember(Alias = "mode")]
+    public string Mode { get; set; } = "sync";
+
     [YamlMember(Alias = "sources")]
     public List<SourceConfig> Sources { get; set; } = [];
 
@@ -25,6 +34,14 @@ public sealed class PipelineConfig
 
     [YamlMember(Alias = "outputs")]
     public List<OutputConfig> Outputs { get; set; } = [];
+
+    /// <summary>True if mode is "sync" (case-insensitive). Default when omitted.</summary>
+    [YamlIgnore]
+    public bool IsSyncMode => string.Equals(Mode, "sync", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The output marked response:true (sync mode only). Null otherwise.</summary>
+    [YamlIgnore]
+    public OutputConfig? ResponseOutput => Outputs.FirstOrDefault(o => o.Response);
 }
 
 /// <summary>
@@ -198,6 +215,14 @@ public sealed class OutputConfig
     /// </summary>
     [YamlMember(Alias = "destinations")]
     public DestinationsConfig? Destinations { get; set; }
+
+    /// <summary>
+    /// Sync mode only: marks this output as the HTTP response returned to the caller.
+    /// Exactly one output must set this when pipeline mode is "sync".
+    /// Forbidden when pipeline mode is "async".
+    /// </summary>
+    [YamlMember(Alias = "response")]
+    public bool Response { get; set; } = false;
 }
 
 /// <summary>

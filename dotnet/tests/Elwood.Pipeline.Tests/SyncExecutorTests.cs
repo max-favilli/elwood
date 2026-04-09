@@ -30,6 +30,7 @@ public class SyncExecutorTests
             outputs:
               - name: result
                 path: $.orders[*]
+                response: true
             """);
 
         try
@@ -69,6 +70,7 @@ public class SyncExecutorTests
             outputs:
               - name: result
                 path: $.products[*]
+                response: true
             """);
 
         try
@@ -109,6 +111,7 @@ public class SyncExecutorTests
             outputs:
               - name: result
                 path: $.transformed[*]
+                response: true
             """,
             scripts: new() { ["transform.elwood"] = "return { transformed: $.items[*] | select i => { id: i.code, amount: i.value } }" });
 
@@ -146,6 +149,7 @@ public class SyncExecutorTests
               - name: result
                 path: $.items[*]
                 contentType: json
+                response: true
                 destinations:
                   http:
                     - url: https://target.example.com/import
@@ -182,6 +186,7 @@ public class SyncExecutorTests
             outputs:
               - name: result
                 contentType: json
+                response: true
                 destinations:
                   fileShare:
                     - filename: {outputFile.Replace("\\", "/")}
@@ -217,6 +222,7 @@ public class SyncExecutorTests
                 trigger: http
             outputs:
               - name: result
+                response: true
             """);
 
         try
@@ -258,6 +264,7 @@ public class SyncExecutorTests
             outputs:
               - name: result
                 map: merge.elwood
+                response: true
             """,
             scripts: new()
             {

@@ -53,7 +53,46 @@ public sealed class PipelineParser
             }
         }
 
+        // Validate mode + response output rules
+        errors.AddRange(ValidateConfig(config));
+
         return new ParsedPipeline(config, baseDir, scripts, errors);
+    }
+
+    /// <summary>
+    /// Validates pipeline config rules that don't depend on file resolution.
+    /// Currently checks: mode is valid, response output count matches mode.
+    /// </summary>
+    public static List<string> ValidateConfig(PipelineConfig config)
+    {
+        var errors = new List<string>();
+        var mode = (config.Mode ?? "sync").ToLowerInvariant();
+
+        if (mode != "sync" && mode != "async")
+        {
+            errors.Add($"Invalid mode '{config.Mode}'. Must be 'sync' or 'async'.");
+            return errors; // mode-dependent rules below need a valid mode
+        }
+
+        var responseOutputs = config.Outputs.Where(o => o.Response).ToList();
+
+        if (mode == "sync")
+        {
+            if (responseOutputs.Count == 0)
+                errors.Add("Sync mode requires exactly one output with 'response: true'.");
+            else if (responseOutputs.Count > 1)
+                errors.Add("Sync mode allows only one response output, found " +
+                           $"{responseOutputs.Count}: " +
+                           string.Join(", ", responseOutputs.Select(o => o.Name)));
+        }
+        else // async
+        {
+            if (responseOutputs.Count > 0)
+                errors.Add("Async mode does not support 'response: true' on outputs " +
+                           $"(found on: {string.Join(", ", responseOutputs.Select(o => o.Name))}).");
+        }
+
+        return errors;
     }
 
     /// <summary>

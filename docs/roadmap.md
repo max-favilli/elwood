@@ -557,9 +557,60 @@ The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`.
 - [ ] Auth: JWT bearer tokens (MSAL / Azure AD integration) — deferred to portal phase
 
 **Step 6 — Cloud Executors (separate packages):**
-- [ ] Azure Executor (Functions + ASB + Storage)
-- [ ] AWS Executor (Lambda + SQS + S3) — later
-- [ ] Infrastructure provisioned once, runs all pipelines
+
+Broken into seven sub-steps. The cloud runtime supports two execution modes via a `mode:` field in pipeline YAML — `sync` (HTTP function runs end-to-end and returns one designated output) and `async` (HTTP function returns 202 + executionId, fan-out via Service Bus).
+
+**Step 6a — Schema additions + Azure storage adapters: ✅**
+- [x] `mode: sync | async` in pipeline YAML (default: sync)
+- [x] `response: true` on outputs — sync mode requires exactly one, async forbids
+- [x] Validation in `PipelineParser.ValidateConfig()` — wired into `Parse()`
+- [x] `Elwood.Pipeline.Azure` opt-in NuGet package (net8.0;net10.0)
+  - [x] `RedisStateStore` — Lua-script-atomic per-step updates, KEEPTTL preserved, 3-day default TTL
+  - [x] `BlobDocumentStore` — Azure Blob with auto-create container, lifecycle delegated to blob lifecycle policies
+  - [x] `RedisPipelineRegistry` — read-only and writable constructors, content cache + literal route matching + search
+  - [x] `AddElwoodAzureStorage(...)` DI helper + writable variant for the API server
+- [x] 24 integration tests via Testcontainers (Redis 7-alpine + Azurite)
+  - [x] Concurrent-writers test proves Lua atomicity (20 parallel updates, no lost data)
+  - [x] KEEPTTL test proves TTL preservation across updates
+- [x] CI fix — `dotnet test` now runs the entire solution (was: only Core.Tests)
+- [x] All 6 .NET packages + 2 npm packages bumped to 0.4.0
+
+**Step 6b — GitPipelineStore:**
+- [ ] `GitPipelineStore` wraps libgit2sharp — every save = git commit, GetRevisions = git log, RestoreRevision = checkout + commit
+- [ ] Backed by any git remote (Azure DevOps, GitHub, GitLab, local bare repo)
+
+**Step 6c — AsyncExecutor (step-at-a-time, queue-driven):**
+- [ ] Used only when `mode: async`
+- [ ] Step-at-a-time execution: each invocation processes one logical step (one source pull, one fan-out item, one output)
+- [ ] Persists state, queues next step messages
+- [ ] `IStepQueue` interface (Service Bus impl ships in 6d)
+
+**Step 6d — `Elwood.Runtime.Azure` Functions project:**
+- [ ] HTTP trigger (catch-all): matches route via `IPipelineRegistry`, dispatches to `SyncExecutor` (sync) or starts execution + queues first step (async)
+- [ ] Service Bus queue trigger: invokes `AsyncExecutor.ExecuteStepAsync(...)`
+- [ ] DI wiring: `AddElwoodAzureStorage(...)` + Functions startup
+- [ ] HTTP method support added to `SourceConfig` schema
+- [ ] Route pattern matching with parameter extraction (e.g. `/api/{category}`)
+
+**Step 6e — Git sync + deploy:**
+- [ ] Webhook endpoint on the API server: git push → `git pull` → read changed pipelines → `IPipelineRegistry.UpdatePipelineAsync(id)`
+- [ ] `elwood deploy <yaml>` CLI command — writes to git (or directly to FileSystemPipelineStore for dev)
+- [ ] Closes deferred Step 5 items: revisions/restore, deploy endpoint
+
+**Step 6f — Terraform module (separate repo: `elwood-infra`):**
+- [ ] `modules/azure/main.tf` — Function App + ASB + Storage Account + Cache for Redis + Application Insights
+- [ ] Blob lifecycle policies for document cleanup
+- [ ] `examples/azure-minimal` — smallest viable setup
+- [ ] `examples/azure-production` — scaled-out with monitoring
+
+**Step 6g — End-to-end integration test:**
+- [ ] docker-compose: Azurite + Redis + Service Bus emulator
+- [ ] Run a real pipeline through the Functions runtime locally
+- [ ] Verify state, documents, fan-out, route matching all work end-to-end
+
+**Step 6 — AWS Executor (later):**
+- [ ] Lambda + SQS + DynamoDB + S3 adapters (separate package: `Elwood.Pipeline.Aws`)
+- [ ] AWS executor Functions equivalent (Lambda functions package)
 
 **Infrastructure (separate repo: `elwood-infra`):**
 - [ ] Terraform module: Azure (Function App + ASB + Storage + App Insights)
