@@ -581,11 +581,16 @@ Broken into seven sub-steps. The cloud runtime supports two execution modes via 
 - [x] Backed by any git remote (Azure DevOps, GitHub, GitLab, local bare repo) — the store manages commits, the API server manages push/pull
 - [x] 11 tests: CRUD, revision history with limits, restore (including script add/removal), author tracking, empty repo safety
 
-**Step 6c — AsyncExecutor (step-at-a-time, queue-driven):**
-- [ ] Used only when `mode: async`
-- [ ] Step-at-a-time execution: each invocation processes one logical step (one source pull, one fan-out item, one output)
-- [ ] Persists state, queues next step messages
-- [ ] `IStepQueue` interface (Service Bus impl ships in 6d)
+**Step 6c — AsyncExecutor (step-at-a-time, queue-driven): ✅**
+- [x] `AsyncExecutor` — step-at-a-time execution engine for `mode: async` pipelines
+  - `StartAsync(pipeline, payload)` — creates state, stores trigger payload + pipeline content in IDocumentStore, queues stage 0 sources
+  - `ExecuteStepAsync(message)` — processes one source or output step per invocation
+- [x] `IStepQueue` interface + `InMemoryStepQueue` for tests (Service Bus impl ships in 6d)
+- [x] `StepMessage` model (ExecutionId, PipelineId, StepType, StepName, StageIndex)
+- [x] Fan-in via idempotent steps: after completing a source, checks all sources in stage; duplicates are no-ops
+- [x] Stage plan stored in IDocumentStore so queue workers can reload independently
+- [x] Pipeline content stored in IDocumentStore — workers are stateless, no local git clone
+- [x] 8 tests: start + state creation, source processing, output processing, multi-stage ordering, concurrent sources, idempotency, failure handling, end-to-end
 
 **Step 6d — `Elwood.Runtime.Azure` Functions project:**
 - [ ] HTTP trigger (catch-all): matches route via `IPipelineRegistry`, dispatches to `SyncExecutor` (sync) or starts execution + queues first step (async)

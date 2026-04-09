@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-04-09 — Phase 3 Step 6c: AsyncExecutor
+
+Step-at-a-time executor for `mode: async` pipelines, designed for queue-triggered Functions where each invocation is short-lived.
+
+### What's new
+- **`AsyncExecutor`** — `StartAsync` creates state + stores payload/pipeline in IDocumentStore + queues stage 0 sources. `ExecuteStepAsync` processes one source or output per invocation, advances the pipeline when stage/execution completes.
+- **`IStepQueue`** interface + `InMemoryStepQueue` for tests. Service Bus impl ships in 6d.
+- **`StepMessage`** — ExecutionId, PipelineId, StepType (Source/Output), StepName, StageIndex
+- **Fan-in via idempotent steps** — after completing a source, checks all sources in stage. If multiple workers see "all done" and queue the next stage, the duplicate messages are caught by the idempotency check (completed steps are no-ops). Standard at-least-once pattern.
+- **8 tests** — start + state, source processing, output completion, multi-stage ordering, concurrent sources queued together, idempotent duplicate handling, failed source halts pipeline, end-to-end drive-the-queue loop
+
+### Design decisions
+- **Stateless workers:** pipeline content, trigger payload, IDM, and stage plan are ALL stored in IDocumentStore. Queue workers load everything from storage — no local git clone, no in-memory state between invocations.
+- **No atomic counters:** fan-in uses state-based checking + idempotency instead of Redis HINCRBY counters. Simpler, no IStateStore interface changes. At-most-one-extra duplicate message per stage transition.
+- **Shared helpers with SyncExecutor:** MergeIntoIdm, EvaluateReference, SerializeValue, DeliverToDestinations are duplicated (not extracted to a shared class) to keep each executor self-contained. Can refactor later if needed.
+
+### Files
+- `dotnet/src/Elwood.Pipeline/Async/AsyncExecutor.cs` (NEW)
+- `dotnet/src/Elwood.Pipeline/Async/IStepQueue.cs` (NEW)
+- `dotnet/src/Elwood.Pipeline/Async/InMemoryStepQueue.cs` (NEW)
+- `dotnet/tests/Elwood.Pipeline.Tests/AsyncExecutorTests.cs` (NEW — 8 tests)
+- `docs/roadmap.md`, `docs/changelog.md`
+
 ## 2026-04-09 — Phase 3 Step 6b: GitPipelineStore
 
 Git-backed pipeline store. Every save is a git commit, revision history comes from `git log`, restore checks out files at a previous revision and commits the result.
