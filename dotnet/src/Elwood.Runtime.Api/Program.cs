@@ -19,7 +19,16 @@ builder.Services.AddSingleton<IStateStore>(new FileSystemStateStore(stateDir));
 builder.Services.AddSingleton<InMemoryDocumentStore>();
 builder.Services.AddSingleton<JsonNodeValueFactory>(_ => JsonNodeValueFactory.Instance);
 
+// CORS — allow the Elwood Portal (localhost:3000) to call the API
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+        policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
+});
+
 var app = builder.Build();
+
+app.UseCors();
 
 var jsonOpts = new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
