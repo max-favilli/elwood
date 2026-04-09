@@ -52,6 +52,11 @@ app.MapGet("/api/pipelines/{id}", async (string id, IPipelineStore store) =>
 
 app.MapPost("/api/pipelines/{id}", async (string id, PipelineContent content, IPipelineStore store) =>
 {
+    // POST = create only. Reject if the pipeline already exists.
+    var existing = await store.GetPipelineAsync(id);
+    if (existing is not null)
+        return Results.Conflict(new { error = $"Pipeline '{id}' already exists. Use PUT to update." });
+
     await store.SavePipelineAsync(id, content);
     return Results.Created($"/api/pipelines/{id}", new { id });
 });
