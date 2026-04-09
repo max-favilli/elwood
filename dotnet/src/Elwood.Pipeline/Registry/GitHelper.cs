@@ -24,6 +24,10 @@ public sealed class GitHelper
         if (Directory.Exists(Path.Combine(_repoDir, ".git"))) return;
         Directory.CreateDirectory(_repoDir);
         await RunAsync("init");
+        // Set local identity so commits work on machines without global git config
+        // (CI runners, fresh containers, etc.). This is repo-local — no global side effects.
+        await RunAsync("config", "user.email", "elwood@pipeline.local");
+        await RunAsync("config", "user.name", "Elwood Pipeline");
     }
 
     /// <summary>Stage specific files.</summary>
