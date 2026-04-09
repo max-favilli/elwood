@@ -80,12 +80,13 @@ public sealed class RedisStateStore : IStateStore
         foreach (var (name, output) in state.Outputs)
             fields.Add(new HashEntry(OutputPrefix + name, JsonSerializer.Serialize(output, JsonOptions)));
 
-        // Save: replace the entire hash and refresh the TTL.
-        // KeyDelete + HashSet is "almost atomic" — between the two ops, a reader could
-        // observe an empty key. For our usage (callers don't read partial state mid-save)
-        // this is acceptable. The alternative would be Lua, which we explicitly avoided.
+        // HSET is additive — it adds/overwrites fields without removing others.
+        // No KeyDelete: concurrent workers may have written Source/Output fields
+        // between our load and this save. Deleting would wipe their writes.
+        // Orphan fields (from a hypothetical source removal) are not a concern
+        // because execution IDs are GUIDs (no reuse) and sources are never
+        // removed mid-execution.
         var batch = db.CreateBatch();
-        var deleteTask = batch.KeyDeleteAsync(key);
         var hashSetTask = batch.HashSetAsync(key, fields.ToArray());
         var ttlTask = batch.KeyExpireAsync(key, _ttl);
         var indexTask = batch.SortedSetAddAsync(
@@ -95,7 +96,7 @@ public sealed class RedisStateStore : IStateStore
         var indexTtlTask = batch.KeyExpireAsync(ByPipelineKey(state.PipelineName), _ttl);
         batch.Execute();
 
-        await Task.WhenAll(deleteTask, hashSetTask, ttlTask, indexTask, indexTtlTask);
+        await Task.WhenAll(hashSetTask, ttlTask, indexTask, indexTtlTask);
     }
 
     public async Task<ExecutionState?> GetExecutionAsync(string executionId)
