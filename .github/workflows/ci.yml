@@ -18,13 +18,13 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Build
         run: dotnet build dotnet/Elwood.slnx
-      - name: Test (all projects)
+      - name: Test (non-integration)
         # Runs Core, Json, Pipeline, CLI, Parquet, and Pipeline.Azure tests.
         # Pipeline.Azure.Tests are integration tests using Testcontainers — they spin
         # real Redis + Azurite containers. Docker is pre-installed on ubuntu-latest,
         # so they "just work" here. Locally, devs without Docker should run with
         # --filter "Category!=Integration" to skip them.
-        run: dotnet test dotnet/Elwood.slnx --verbosity normal
+        run: dotnet test dotnet/Elwood.slnx --filter "Category!=Integration" --verbosity normal
 
   typescript:
     name: TypeScript
