@@ -28,18 +28,20 @@ jobs:
           dotnet pack dotnet/src/Elwood.Core/Elwood.Core.csproj -c Release
           dotnet pack dotnet/src/Elwood.Json/Elwood.Json.csproj -c Release
           dotnet pack dotnet/src/Elwood.Pipeline/Elwood.Pipeline.csproj -c Release
+          dotnet pack dotnet/src/Elwood.Pipeline.Azure/Elwood.Pipeline.Azure.csproj -c Release
           dotnet pack dotnet/src/Elwood.Cli/Elwood.Cli.csproj -c Release
           dotnet pack dotnet/src/Elwood.Xlsx/Elwood.Xlsx.csproj -c Release
           dotnet pack dotnet/src/Elwood.Parquet/Elwood.Parquet.csproj -c Release
       - name: Push to NuGet
         if: ${{ env.NUGET_API_KEY != '' }}
         run: |
-          dotnet nuget push dotnet/src/Elwood.Core/bin/Release/*.nupkg     --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
-          dotnet nuget push dotnet/src/Elwood.Json/bin/Release/*.nupkg     --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
-          dotnet nuget push dotnet/src/Elwood.Pipeline/bin/Release/*.nupkg --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
-          dotnet nuget push dotnet/src/Elwood.Cli/bin/Release/*.nupkg      --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
-          dotnet nuget push dotnet/src/Elwood.Xlsx/bin/Release/*.nupkg     --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
-          dotnet nuget push dotnet/src/Elwood.Parquet/bin/Release/*.nupkg  --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push dotnet/src/Elwood.Core/bin/Release/*.nupkg            --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push dotnet/src/Elwood.Json/bin/Release/*.nupkg            --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push dotnet/src/Elwood.Pipeline/bin/Release/*.nupkg        --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push dotnet/src/Elwood.Pipeline.Azure/bin/Release/*.nupkg  --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push dotnet/src/Elwood.Cli/bin/Release/*.nupkg             --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push dotnet/src/Elwood.Xlsx/bin/Release/*.nupkg            --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push dotnet/src/Elwood.Parquet/bin/Release/*.nupkg         --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
 
   npm:
     name: Publish npm

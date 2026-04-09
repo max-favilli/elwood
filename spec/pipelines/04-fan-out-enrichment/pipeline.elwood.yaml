@@ -16,3 +16,4 @@ sources:
 outputs:
   - name: enriched-orders
     path: $.details[*]
+    response: true

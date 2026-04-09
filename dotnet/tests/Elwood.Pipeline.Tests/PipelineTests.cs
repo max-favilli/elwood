@@ -262,7 +262,8 @@ sources:
     map: enrich.elwood
 outputs:
   - name: result
-    path: $.enrichment[*]";
+    path: $.enrichment[*]
+    response: true";
 
         var tempDir = Path.Combine(Path.GetTempPath(), "elwood-fanout-" + Guid.NewGuid().ToString()[..8]);
         Directory.CreateDirectory(tempDir);

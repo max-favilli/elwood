@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!-- NuGet package metadata -->
+    <PackageId>Elwood.Pipeline.Azure</PackageId>
+    <Version>0.4.0</Version>
+    <Authors>Massimiliano Favilli</Authors>
+    <Description>Azure storage adapters for the Elwood pipeline runtime — Redis state store, Azure Blob document store, and Redis-backed pipeline registry. Optional adapter package for cloud deployments.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/max-favilli/elwood</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/max-favilli/elwood</RepositoryUrl>
+    <PackageTags>elwood;pipeline;azure;redis;blob;integration;etl</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="StackExchange.Redis" Version="2.*" />
+    <!--
+      Pinned to 12.20.x because Azure.Storage.Blobs 12.25+ uses API version
+      2026-02-06, which no released Azurite emulator can parse — integration
+      tests in CI fail with "Connection reset by peer" against any Azurite
+      version when the SDK is at 12.25+. 12.20.x uses API 2024-05-04 which
+      Azurite 3.28.0 (the Testcontainers default) supports cleanly.
+      Production users targeting real Azure can override this in their own
+      consuming project — NuGet will resolve to whatever they declare.
+      Drop this pin once Microsoft ships an Azurite that supports 2026-02-06.
+    -->
+    <PackageReference Include="Azure.Storage.Blobs" Version="[12.20.0,12.21.0)" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.*" />
+    <ProjectReference Include="..\Elwood.Pipeline\Elwood.Pipeline.csproj" />
+  </ItemGroup>
+
+</Project>
