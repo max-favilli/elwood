@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-04-09 — Phase 3 Step 6b: GitPipelineStore
+
+Git-backed pipeline store. Every save is a git commit, revision history comes from `git log`, restore checks out files at a previous revision and commits the result.
+
+### What's new
+- **`GitPipelineStore`** — implements `IPipelineStore`, wraps `FileSystemPipelineStore` for file I/O and adds git operations via `GitHelper`
+- **`GitHelper`** — thin wrapper around the git CLI. Uses `Process.Start("git", ...)` rather than LibGit2Sharp to avoid native binary compatibility issues on newer .NET versions. The same approach used by Azure DevOps Pipelines, GitHub Actions, and Terraform.
+- **11 tests** exercising: save/get round-trip, list with filter, delete + commit, revision history ordering + limits, restore to older revision (including script add/removal), author recording in commits, invalid revision handling, empty repo safety
+
+### Design decisions
+- **Git CLI over LibGit2Sharp:** LibGit2Sharp has chronic native binary issues on .NET 8+/10+ and arm64. The git CLI is always available on servers and CI runners.
+- **Store doesn't manage remotes/push/pull:** The API server (6e) handles webhook-triggered `git pull` and optional `git push`. The store is concerned only with local commits.
+- **Wraps FileSystemPipelineStore:** Read operations (List, Get) are delegated directly. Write operations (Save, Delete) write files via the FS store, then stage + commit.
+
+### Files modified
+- `dotnet/src/Elwood.Pipeline/Registry/GitPipelineStore.cs` (NEW)
+- `dotnet/src/Elwood.Pipeline/Registry/GitHelper.cs` (NEW)
+- `dotnet/tests/Elwood.Pipeline.Tests/GitPipelineStoreTests.cs` (NEW — 11 tests)
+- `docs/roadmap.md` (mark Step 6b complete)
+- `docs/changelog.md`
+
 ## 2026-04-08 — Phase 3 Step 6a: pipeline modes + Azure storage adapters (v0.4.0)
 
 First slice of Phase 3 Step 6 (Cloud Executors). Lays the foundation for production cloud deployment by adding:

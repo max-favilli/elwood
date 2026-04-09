@@ -575,9 +575,11 @@ Broken into seven sub-steps. The cloud runtime supports two execution modes via 
 - [x] CI fix — `dotnet test` now runs the entire solution (was: only Core.Tests)
 - [x] All 6 .NET packages + 2 npm packages bumped to 0.4.0
 
-**Step 6b — GitPipelineStore:**
-- [ ] `GitPipelineStore` wraps libgit2sharp — every save = git commit, GetRevisions = git log, RestoreRevision = checkout + commit
-- [ ] Backed by any git remote (Azure DevOps, GitHub, GitLab, local bare repo)
+**Step 6b — GitPipelineStore: ✅**
+- [x] `GitPipelineStore` wraps the git CLI — every save = git commit, GetRevisions = git log, RestoreRevision = git show + commit
+- [x] `GitHelper` utility: thin wrapper around the git CLI (no LibGit2Sharp — avoids native binary issues on newer .NET)
+- [x] Backed by any git remote (Azure DevOps, GitHub, GitLab, local bare repo) — the store manages commits, the API server manages push/pull
+- [x] 11 tests: CRUD, revision history with limits, restore (including script add/removal), author tracking, empty repo safety
 
 **Step 6c — AsyncExecutor (step-at-a-time, queue-driven):**
 - [ ] Used only when `mode: async`
