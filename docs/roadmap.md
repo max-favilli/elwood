@@ -665,11 +665,21 @@ Broken into seven sub-steps. The cloud runtime supports two execution modes via 
 - [ ] Authentication (Azure AD / MSAL)
 - [ ] Multi-environment support (dev, staging, production)
 
+### Playground & Examples
+- [x] Integrated Playground — run Elwood expressions in the browser via `@elwood-lang/core` npm package
+- [x] 86 official examples bundled from `spec/test-cases/` (static JSON, build-time)
+- [x] Example sidebar with search, categories, click-to-load
+- [ ] **API-backed examples (refinement):** replace static bundle with `GET /api/examples` endpoint. Official examples embedded as assembly resources in `Elwood.Pipeline` (read-only, updated on NuGet upgrade). Organization examples stored server-side via `POST/PUT/DELETE /api/examples/{id}` (same CRUD pattern as pipelines). Portal shows two sections: "Elwood" (official) and "Organization" (user-managed). Enables each adopting organization to maintain their own shared example library alongside the official ones.
+
 ### Tasks (detailed WBS to be defined later)
-- [ ] Project setup (Next.js + Tailwind + Monaco)
-- [ ] API layer consuming `Elwood.Runtime.Api` endpoints
-- [ ] Core pages: pipeline list, pipeline editor, execution dashboard, execution detail
-- [ ] Testing/preview panel
+- [x] Project setup (Next.js + Tailwind + Monaco)
+- [x] API layer consuming `Elwood.Runtime.Api` endpoints (real API, not mocks)
+- [x] Pipeline list page with search
+- [x] Pipeline editor with Monaco + Elwood syntax highlighting + script tabs
+- [x] New pipeline creation with uniqueness check (409 Conflict)
+- [ ] Core pages: execution dashboard, execution detail
+- [ ] Testing/preview panel (run pipeline against input from the editor)
+- [ ] Version history with diff view (connects to GitPipelineStore revisions API)
 - [ ] Authentication + role-based access
 - [ ] Deployment integration
 
