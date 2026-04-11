@@ -40,3 +40,4 @@ BenchmarkDotNet.Artifacts/
 .claude/
 CLAUDE.md
 docs/prompts/
+secrets.json

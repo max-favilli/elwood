@@ -16,7 +16,9 @@ public sealed class StringResolver
 {
     private static readonly Regex InlineExprPattern = new(@"\{(\$[^}]+)\}", RegexOptions.Compiled);
     private static readonly Regex SecretPattern = new(@"\$secrets\.([a-zA-Z0-9_.]+)", RegexOptions.Compiled);
-    private static readonly Regex EnvVarPattern = new(@"\$\{([A-Z_][A-Z0-9_]*)\}", RegexOptions.Compiled);
+    // Matches ${KEY} where KEY can contain letters, digits, underscores, dashes, and dots.
+    // Resolves from: secret provider first (supports dashes), then env var (dashes → underscores).
+    private static readonly Regex ConfigPattern = new(@"\$\{([A-Za-z_][A-Za-z0-9_.\-]*)\}", RegexOptions.Compiled);
 
     private readonly ElwoodEngine _engine;
     private readonly JsonNodeValueFactory _factory;
@@ -46,10 +48,19 @@ public sealed class StringResolver
             return _secretProvider?.GetSecret(path) ?? match.Value;
         });
 
-        // 2. Resolve ${ENV_VAR} references
-        result = EnvVarPattern.Replace(result, match =>
+        // 2. Resolve ${KEY} references — try secret provider first, then env var.
+        // Keys can use dashes (CRM-API-BASE-URL) which map to secrets.json keys directly.
+        // For env var fallback, dashes are replaced with underscores (CRM_API_BASE_URL).
+        result = ConfigPattern.Replace(result, match =>
         {
-            var envName = match.Groups[1].Value;
+            var key = match.Groups[1].Value;
+
+            // Try secret provider (supports any key format including dashes)
+            var fromSecret = _secretProvider?.GetSecret(key);
+            if (fromSecret is not null) return fromSecret;
+
+            // Fall back to environment variable (dashes → underscores)
+            var envName = key.Replace("-", "_").Replace(".", "_").ToUpperInvariant();
             return Environment.GetEnvironmentVariable(envName) ?? match.Value;
         });
 
