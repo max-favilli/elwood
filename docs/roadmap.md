@@ -425,6 +425,41 @@ Scripts that don't need metadata work identically in the playground and in a pip
 
 **Full schema reference:** [`docs/pipeline-yaml-reference.md`](pipeline-yaml-reference.md)
 
+### Design consideration: staged execution (deferred)
+
+The current model is strictly **sources → IDM → outputs**: all sources complete before any output runs. This works well for most integrations, but some real-world flows need to deliver data mid-pipeline — for example, archiving the raw payload to blob storage before enrichment, or calling an API and delivering its response to a file THEN using that result to call a second API.
+
+Today, these cases require splitting into multiple chained pipelines (pipeline A outputs to a queue, pipeline B triggers from the queue). This works but spreads a single logical flow across multiple configs, making it harder to reason about, test, and monitor end-to-end.
+
+A **staged execution** model would allow interleaving sources and outputs within a single pipeline:
+
+```yaml
+stages:
+  - sources:
+      - name: trigger
+        trigger: http
+    outputs:
+      - name: archive-raw
+        destinations:
+          blob:
+            - container: raw-payloads
+
+  - sources:
+      - name: enrich
+        trigger: pull
+        from:
+          http:
+            url: https://api.example.com/enrich
+            body: $.request
+    outputs:
+      - name: api-response
+        response: true
+```
+
+Each stage runs in order. Within a stage, sources build the IDM, then outputs consume it. The IDM accumulates across stages. The key distinction between sources and outputs is preserved: a source fetches from ONE place and writes to the IDM; an output delivers from the IDM to ONE OR MORE destinations (fan-out on the delivery side).
+
+**Status:** deferred. The current sources→outputs model handles the common case. If real-world integrations repeatedly require chaining multiple pipelines for what is logically one flow, this design will be revisited. Evidence from actual pipeline authoring will inform the decision.
+
 ### Executor model — three levels
 
 | Executor | Purpose | Sources | Destinations |
