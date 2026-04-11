@@ -19,14 +19,16 @@ public sealed class SourceFetchResult
 {
     public string Content { get; }
     public string ContentType { get; }
+    public int? StatusCode { get; }
     public Dictionary<string, string>? Headers { get; }
 
     public SourceFetchResult(string content, string contentType = "json",
-        Dictionary<string, string>? headers = null)
+        Dictionary<string, string>? headers = null, int? statusCode = null)
     {
         Content = content;
         ContentType = contentType;
         Headers = headers;
+        StatusCode = statusCode;
     }
 }
 
