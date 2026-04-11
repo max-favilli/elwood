@@ -30,7 +30,7 @@
       Drop this pin once Microsoft ships an Azurite that supports 2026-02-06.
     -->
     <PackageReference Include="Azure.Storage.Blobs" Version="[12.20.0,12.21.0)" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.*" />
+    <PackageReference Include="Azure.Data.AppConfiguration" Version="1.*" />
     <ProjectReference Include="..\Elwood.Pipeline\Elwood.Pipeline.csproj" />
   </ItemGroup>
 

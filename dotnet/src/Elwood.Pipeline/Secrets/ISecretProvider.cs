@@ -50,6 +50,30 @@ public sealed class DictionarySecretProvider : ISecretProvider
 }
 
 /// <summary>
+/// Chains multiple secret providers. Tries each in order, returns the first non-null result.
+/// Typical chain: secrets.json (local overrides) → App Configuration → env vars.
+/// </summary>
+public sealed class CompositeSecretProvider : ISecretProvider
+{
+    private readonly ISecretProvider[] _providers;
+
+    public CompositeSecretProvider(params ISecretProvider[] providers)
+    {
+        _providers = providers;
+    }
+
+    public string? GetSecret(string path)
+    {
+        foreach (var provider in _providers)
+        {
+            var value = provider.GetSecret(path);
+            if (value is not null) return value;
+        }
+        return null;
+    }
+}
+
+/// <summary>
 /// Resolves secrets from a JSON file. Keys are used as-is (case-insensitive),
 /// supporting any naming convention (dashes, dots, camelCase).
 /// </summary>
