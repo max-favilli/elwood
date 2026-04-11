@@ -108,6 +108,19 @@ public sealed class SyncExecutor
                             continue;
                         }
 
+                        // Evaluate POST/PUT body expression against the IDM if present
+                        if (source.From.Http is not null && !string.IsNullOrWhiteSpace(source.From.Http.Body))
+                        {
+                            var bodyBindings = new Dictionary<string, IElwoodValue> { ["$idm"] = idm };
+                            var bodyResult = EvaluateReference(source.From.Http.Body, idm, bodyBindings, pipeline);
+                            if (bodyResult is not null)
+                                source.From.Http.BodyContent = SerializeOutput(bodyResult, "json");
+                        }
+
+                        // Resolve inline expressions in the URL (e.g., {$idm.field})
+                        if (source.From.Http is not null)
+                            source.From.Http.Url = _stringResolver.Resolve(source.From.Http.Url, idm);
+
                         var fetchResult = await connector.FetchAsync(source.From, idm);
                         payload = fetchResult.ContentType is "csv" or "txt" or "xml" or "text"
                             ? _factory.CreateString(fetchResult.Content)
@@ -186,9 +199,22 @@ public sealed class SyncExecutor
             await _stateStore.SaveExecutionAsync(execState);
         }
 
+        // Resolve dynamic response status code (sync mode)
+        int? responseStatusCode = null;
+        var responseOutput = pipeline.Config.ResponseOutput;
+        if (responseOutput?.ResponseStatusCode is not null)
+        {
+            var statusResult = EvaluateReference(responseOutput.ResponseStatusCode, idm,
+                new Dictionary<string, IElwoodValue> { ["$idm"] = idm }, pipeline);
+            if (statusResult is not null && statusResult.Kind == ElwoodValueKind.Number)
+            {
+                responseStatusCode = (int)statusResult.GetNumberValue();
+            }
+        }
+
         return errors.Count > 0
             ? PipelineResult.Failed(errors, executionId)
-            : PipelineResult.Success(outputs, executionId);
+            : PipelineResult.Success(outputs, executionId, responseStatusCode);
     }
 
     private async Task DeliverToDestinationsAsync(OutputConfig output, string content,
@@ -298,6 +324,16 @@ public sealed class SyncExecutor
             new("timestamp", _factory.CreateString(DateTime.UtcNow.ToString("o"))),
             new("contentType", _factory.CreateString(fetchResult.ContentType)),
         };
+
+        // Expose HTTP status code in $source.http.statusCode for source map scripts
+        if (fetchResult.StatusCode is not null)
+        {
+            var httpMeta = _factory.CreateObject([
+                new("statusCode", _factory.CreateNumber(fetchResult.StatusCode.Value)),
+            ]);
+            props.Add(new("http", httpMeta));
+        }
+
         return _factory.CreateObject(props);
     }
 }

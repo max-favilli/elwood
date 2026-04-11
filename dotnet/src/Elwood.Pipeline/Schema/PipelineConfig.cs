@@ -104,6 +104,13 @@ public sealed class SourceConfig
     public PullSourceConfig? From { get; set; }
 
     /// <summary>
+    /// Optional authentication for HTTP trigger sources. The runtime validates
+    /// the Authorization header against these credentials. Omit for no auth.
+    /// </summary>
+    [YamlMember(Alias = "auth")]
+    public SourceAuthConfig? Auth { get; set; }
+
+    /// <summary>
     /// Get dependency names as a list (handles both string and list YAML formats).
     /// </summary>
     public List<string> GetDependencies()
@@ -140,6 +147,55 @@ public sealed class HttpSourceConfig
 
     [YamlMember(Alias = "headers")]
     public Dictionary<string, string>? Headers { get; set; }
+
+    /// <summary>
+    /// POST/PUT request body — an inline Elwood expression or .elwood script reference
+    /// evaluated against the IDM. The result is serialized as JSON and sent as the
+    /// request body. Only used when method is POST or PUT.
+    /// Example: <c>$idm.request</c> or <c>build-body.elwood</c>
+    /// </summary>
+    [YamlMember(Alias = "body")]
+    public string? Body { get; set; }
+
+    /// <summary>
+    /// HTTP status codes that should NOT cause failure. When set, the connector
+    /// captures the response on non-2xx status codes instead of throwing.
+    /// Format: comma-separated, supports wildcards — e.g., "2xx,4xx,5xx".
+    /// The actual status code is available via $source.http.statusCode in source map scripts.
+    /// </summary>
+    [YamlMember(Alias = "acceptedStatusCodes")]
+    public string? AcceptedStatusCodes { get; set; }
+
+    // ── Runtime fields (set by the executor, not from YAML) ──
+
+    /// <summary>
+    /// Pre-serialized POST/PUT body content. Set by the executor after evaluating
+    /// the <see cref="Body"/> expression against the IDM. Not deserialized from YAML.
+    /// </summary>
+    [YamlIgnore]
+    public string? BodyContent { get; set; }
+
+    /// <summary>Content type for the body. Defaults to application/json.</summary>
+    [YamlIgnore]
+    public string? BodyContentType { get; set; }
+}
+
+/// <summary>
+/// Authentication configuration for HTTP trigger sources.
+/// </summary>
+public sealed class SourceAuthConfig
+{
+    /// <summary>Auth type: "basic" (more types can be added later).</summary>
+    [YamlMember(Alias = "type")]
+    public string Type { get; set; } = "basic";
+
+    /// <summary>Username (supports $secrets references).</summary>
+    [YamlMember(Alias = "user")]
+    public string? User { get; set; }
+
+    /// <summary>Password (supports $secrets references).</summary>
+    [YamlMember(Alias = "password")]
+    public string? Password { get; set; }
 }
 
 public sealed class FileShareConfig
@@ -223,6 +279,14 @@ public sealed class OutputConfig
     /// </summary>
     [YamlMember(Alias = "response")]
     public bool Response { get; set; } = false;
+
+    /// <summary>
+    /// Sync mode only: expression evaluated against the IDM to set the HTTP response
+    /// status code dynamically. E.g., <c>$.crmStatusCode</c> returns whatever the CRM
+    /// API responded with. If omitted or null, defaults to 200.
+    /// </summary>
+    [YamlMember(Alias = "responseStatusCode")]
+    public string? ResponseStatusCode { get; set; }
 }
 
 /// <summary>
