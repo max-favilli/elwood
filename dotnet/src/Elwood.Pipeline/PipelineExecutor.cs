@@ -395,6 +395,12 @@ public sealed class PipelineResult
     public IReadOnlyDictionary<string, IElwoodValue> Outputs { get; }
     public IReadOnlyList<string> Errors { get; }
 
+    /// <summary>
+    /// Dynamic HTTP response status code for sync mode. Evaluated from the
+    /// <c>responseStatusCode</c> expression on the response output. Null = 200.
+    /// </summary>
+    public int? ResponseStatusCode { get; init; }
+
     private PipelineResult(bool success, Dictionary<string, IElwoodValue>? outputs, List<string>? errors, string? executionId = null)
     {
         IsSuccess = success;
@@ -403,8 +409,8 @@ public sealed class PipelineResult
         Errors = errors ?? [];
     }
 
-    public static PipelineResult Success(Dictionary<string, IElwoodValue> outputs, string? executionId = null)
-        => new(true, outputs, null, executionId);
+    public static PipelineResult Success(Dictionary<string, IElwoodValue> outputs, string? executionId = null, int? responseStatusCode = null)
+        => new(true, outputs, null, executionId) { ResponseStatusCode = responseStatusCode };
     public static PipelineResult Failed(List<string> errors, string? executionId = null)
         => new(false, null, errors, executionId);
 }
