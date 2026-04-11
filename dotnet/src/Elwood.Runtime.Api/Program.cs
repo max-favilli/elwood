@@ -19,21 +19,47 @@ builder.Services.AddSingleton<IPipelineStore>(new FileSystemPipelineStore(pipeli
 builder.Services.AddSingleton<IStateStore>(new FileSystemStateStore(stateDir));
 builder.Services.AddSingleton<InMemoryDocumentStore>();
 builder.Services.AddSingleton<JsonNodeValueFactory>(_ => JsonNodeValueFactory.Instance);
-// Secrets: try secrets.json first (supports dashed key names like CRM-API-BASE-URL),
-// fall back to environment variables (ELWOOD_SECRET_ prefix).
+// Secrets resolution chain: secrets.json → Azure App Configuration → env vars.
+// Each layer is optional. First non-null value wins.
+var secretProviders = new List<ISecretProvider>();
+
+// 1. Local overrides (secrets.json next to the API — gitignored)
 var secretsFile = builder.Configuration["Elwood:SecretsFile"]
     ?? Path.Combine(Directory.GetCurrentDirectory(), "secrets.json");
 if (File.Exists(secretsFile))
 {
     var jsonProvider = new JsonFileSecretProvider(secretsFile);
-    builder.Services.AddSingleton<ISecretProvider>(jsonProvider);
-    Console.WriteLine($"Loaded secrets from {secretsFile} ({jsonProvider.Keys.Count()} keys)");
+    secretProviders.Add(jsonProvider);
+    Console.WriteLine($"Secrets: loaded {jsonProvider.Keys.Count()} keys from {secretsFile}");
 }
-else
+
+// 2. Azure App Configuration (if connection string is configured)
+var appConfigConn = builder.Configuration["Elwood:AppConfiguration"]
+    ?? Environment.GetEnvironmentVariable("ELWOOD_APP_CONFIGURATION");
+var appConfigLabel = builder.Configuration["Elwood:AppConfigurationLabel"]
+    ?? Environment.GetEnvironmentVariable("ELWOOD_APP_CONFIGURATION_LABEL");
+if (!string.IsNullOrEmpty(appConfigConn))
 {
-    builder.Services.AddSingleton<ISecretProvider>(new EnvironmentSecretProvider());
-    Console.WriteLine("Using environment variables for secrets (ELWOOD_SECRET_ prefix)");
+    // Azure.Data.AppConfiguration is in Elwood.Pipeline.Azure — load dynamically
+    // to avoid a hard dependency on the Azure package in the API project.
+    try
+    {
+        var azureProvider = new Elwood.Pipeline.Azure.AppConfigurationSecretProvider(
+            appConfigConn, appConfigLabel);
+        secretProviders.Add(azureProvider);
+        Console.WriteLine($"Secrets: Azure App Configuration connected (label: {appConfigLabel ?? "(none)"})");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Secrets: Azure App Configuration failed — {ex.Message}");
+    }
 }
+
+// 3. Environment variables (fallback)
+secretProviders.Add(new EnvironmentSecretProvider());
+
+builder.Services.AddSingleton<ISecretProvider>(new CompositeSecretProvider(secretProviders.ToArray()));
+Console.WriteLine($"Secrets: {secretProviders.Count} provider(s) in chain");
 
 // CORS — allow the Elwood Portal (localhost:3000) to call the API
 builder.Services.AddCors(options =>

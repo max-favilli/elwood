@@ -9,5 +9,6 @@
     <ProjectReference Include="..\Elwood.Core\Elwood.Core.csproj" />
     <ProjectReference Include="..\Elwood.Json\Elwood.Json.csproj" />
     <ProjectReference Include="..\Elwood.Pipeline\Elwood.Pipeline.csproj" />
+    <ProjectReference Include="..\Elwood.Pipeline.Azure\Elwood.Pipeline.Azure.csproj" />
   </ItemGroup>
 </Project>
