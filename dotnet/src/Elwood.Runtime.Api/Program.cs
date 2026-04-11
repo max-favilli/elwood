@@ -3,6 +3,7 @@ using Elwood.Core;
 using Elwood.Json;
 using Elwood.Pipeline;
 using Elwood.Pipeline.Registry;
+using Elwood.Pipeline.Secrets;
 using Elwood.Pipeline.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -18,6 +19,7 @@ builder.Services.AddSingleton<IPipelineStore>(new FileSystemPipelineStore(pipeli
 builder.Services.AddSingleton<IStateStore>(new FileSystemStateStore(stateDir));
 builder.Services.AddSingleton<InMemoryDocumentStore>();
 builder.Services.AddSingleton<JsonNodeValueFactory>(_ => JsonNodeValueFactory.Instance);
+builder.Services.AddSingleton<ISecretProvider>(new EnvironmentSecretProvider());
 
 // CORS — allow the Elwood Portal (localhost:3000) to call the API
 builder.Services.AddCors(options =>
@@ -232,7 +234,8 @@ app.MapPost("/api/executions", async (HttpRequest req, IPipelineStore pipelineSt
             ? payloadEl.GetRawText() : "{}";
         var payload = factory.Parse(payloadJson);
 
-        var executor = new SyncExecutor(stateStore: stateStore);
+        var secretProvider = req.HttpContext.RequestServices.GetRequiredService<ISecretProvider>();
+        var executor = new SyncExecutor(secretProvider: secretProvider, stateStore: stateStore);
         var result = await executor.ExecuteAsync(parsed, payload);
 
         if (!result.IsSuccess)
