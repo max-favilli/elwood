@@ -499,7 +499,7 @@ The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`.
 - [x] `elwood pipeline status [state-dir]` — shows recent executions with step details
 - [x] `--output-dir` persists state to `.state/` subdirectory
 
-**Step 4 — Sync Executor: ✅**
+**Step 4 — Sync Executor: ⚠️ partial**
 - [x] `ISourceConnector` + `IDestinationConnector` interfaces
 - [x] `HttpSourceConnector` — fetch from REST APIs
 - [x] `FileSourceConnector` — read from local/network paths
@@ -508,6 +508,10 @@ The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`.
 - [x] `SyncExecutor` — end-to-end execution: trigger + pull sources, maps, IDM, outputs, destinations
 - [x] 7 SyncExecutor tests with mock HTTP (no real network calls)
 - [ ] `elwood pipeline serve <yaml>` — start HTTP listener for trigger sources (deferred)
+- [ ] **POST body from script** — `HttpSourceConnector` supports `body` field on `from.http` config: an inline expression or `.elwood` script reference evaluated against the IDM, serialized as the POST/PUT request body
+- [ ] **Accepted status codes** — `HttpSourceConnector` supports `acceptedStatusCodes` field (e.g., `"2xx,4xx,5xx"`): captures the response on non-2xx instead of throwing. Status code exposed via `$source.http.statusCode` in source map scripts
+- [ ] **Dynamic response status code** — `OutputConfig` supports `responseStatusCode` field: expression evaluated against the IDM that sets the HTTP response status code (e.g., `$.crmStatusCode`). `PipelineResult` carries the resolved status code for the HTTP trigger to use
+- [ ] **HTTP trigger auth** — optional `auth` section on HTTP trigger sources (`type: basic`, `user`/`password` from `$secrets`). Runtime validates the Authorization header; omit for no auth
 
 **Step 5 — Deployment + Runtime API: ⚠️ partial**
 - [x] `IPipelineStore` interface — source of truth for pipeline YAMLs + .elwood scripts
