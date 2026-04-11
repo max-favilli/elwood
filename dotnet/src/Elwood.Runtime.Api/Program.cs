@@ -19,7 +19,21 @@ builder.Services.AddSingleton<IPipelineStore>(new FileSystemPipelineStore(pipeli
 builder.Services.AddSingleton<IStateStore>(new FileSystemStateStore(stateDir));
 builder.Services.AddSingleton<InMemoryDocumentStore>();
 builder.Services.AddSingleton<JsonNodeValueFactory>(_ => JsonNodeValueFactory.Instance);
-builder.Services.AddSingleton<ISecretProvider>(new EnvironmentSecretProvider());
+// Secrets: try secrets.json first (supports dashed key names like CRM-API-BASE-URL),
+// fall back to environment variables (ELWOOD_SECRET_ prefix).
+var secretsFile = builder.Configuration["Elwood:SecretsFile"]
+    ?? Path.Combine(Directory.GetCurrentDirectory(), "secrets.json");
+if (File.Exists(secretsFile))
+{
+    var jsonProvider = new JsonFileSecretProvider(secretsFile);
+    builder.Services.AddSingleton<ISecretProvider>(jsonProvider);
+    Console.WriteLine($"Loaded secrets from {secretsFile} ({jsonProvider.Keys.Count()} keys)");
+}
+else
+{
+    builder.Services.AddSingleton<ISecretProvider>(new EnvironmentSecretProvider());
+    Console.WriteLine("Using environment variables for secrets (ELWOOD_SECRET_ prefix)");
+}
 
 // CORS — allow the Elwood Portal (localhost:3000) to call the API
 builder.Services.AddCors(options =>
