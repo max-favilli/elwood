@@ -46,7 +46,11 @@ public sealed class HttpSourceConnector : ISourceConnector
                 http.BodyContentType ?? "application/json");
         }
 
-        var response = await _httpClient.SendAsync(request);
+        // Apply per-request timeout if configured
+        using var cts = http.ConnectionTimeout is > 0
+            ? new CancellationTokenSource(TimeSpan.FromMilliseconds(http.ConnectionTimeout.Value))
+            : null;
+        var response = await _httpClient.SendAsync(request, cts?.Token ?? default);
         var statusCode = (int)response.StatusCode;
 
         // Check if the status code is accepted
