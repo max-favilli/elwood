@@ -157,6 +157,19 @@ public sealed class HttpSourceConfig
     public Dictionary<string, string>? Headers { get; set; }
 
     /// <summary>
+    /// Basic auth username for the HTTP request. Supports ${KEY} and $secrets references.
+    /// When both user and password are set, the connector adds an Authorization: Basic header.
+    /// </summary>
+    [YamlMember(Alias = "user")]
+    public string? User { get; set; }
+
+    /// <summary>
+    /// Basic auth password for the HTTP request. Supports ${KEY} and $secrets references.
+    /// </summary>
+    [YamlMember(Alias = "password")]
+    public string? Password { get; set; }
+
+    /// <summary>
     /// POST/PUT request body — an inline Elwood expression or .elwood script reference
     /// evaluated against the IDM. The result is serialized as JSON and sent as the
     /// request body. Only used when method is POST or PUT.

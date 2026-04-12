@@ -1,0 +1,35 @@
+version: 2
+name: crm-newsletter
+description: CRM newsletter actions (subscribe, doubleoptin, unsubscribe) — forwards request to CRM API and returns the response
+mode: sync
+ttlSeconds: 2592000
+
+sources:
+  - name: trigger
+    trigger: http
+    endpoint: /crm/newsletter
+    contentType: json
+    map: trigger-map.elwood
+    auth:
+      type: basic
+      user: $secrets.triggerUser
+      password: $secrets.triggerPassword
+
+  - name: crm-call
+    trigger: pull
+    depends: trigger
+    contentType: json
+    from:
+      http:
+        url: ${CRM-API-BASE-URL}/rest/import/SnapLogic/{$.request.action}
+        method: POST
+        body: $.request
+        acceptedStatusCodes: "2xx,4xx,5xx"
+        connectionTimeout: 100000
+    map: crm-response.elwood
+
+outputs:
+  - name: api-response
+    response: true
+    responseStatusCode: $.crmStatusCode
+    map: output.elwood

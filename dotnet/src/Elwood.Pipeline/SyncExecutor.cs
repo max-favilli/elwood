@@ -146,10 +146,14 @@ public sealed class SyncExecutor
                                 source.From.Http.BodyContent = SerializeOutput(bodyResult, "json");
                         }
 
-                        // Resolve inline expressions in the URL (e.g., {$idm.field})
+                        // Resolve inline expressions and secret references in HTTP config
                         if (source.From.Http is not null)
                         {
                             source.From.Http.Url = _stringResolver.Resolve(source.From.Http.Url, idm);
+                            if (!string.IsNullOrEmpty(source.From.Http.User))
+                                source.From.Http.User = _stringResolver.Resolve(source.From.Http.User, idm);
+                            if (!string.IsNullOrEmpty(source.From.Http.Password))
+                                source.From.Http.Password = _stringResolver.Resolve(source.From.Http.Password, idm);
                             _logger.LogDebug("Source {SourceName}: {Method} {Url}",
                                 source.Name, source.From.Http.Method, source.From.Http.Url);
                         }
