@@ -20,6 +20,7 @@ builder.Services.AddSingleton<IPipelineStore>(new FileSystemPipelineStore(pipeli
 builder.Services.AddSingleton<IStateStore>(new FileSystemStateStore(stateDir));
 builder.Services.AddSingleton<InMemoryDocumentStore>();
 builder.Services.AddSingleton<JsonNodeValueFactory>(_ => JsonNodeValueFactory.Instance);
+builder.Services.AddSingleton(sp => new EndpointRouteCache(sp.GetRequiredService<IPipelineStore>()));
 // Secrets resolution chain: secrets.json → Azure App Configuration → env vars.
 // Each layer is optional. First non-null value wins.
 var secretProviders = new List<ISecretProvider>();
@@ -105,7 +106,8 @@ app.MapGet("/api/pipelines/{id}", async (string id, IPipelineStore store) =>
     return pipeline is null ? Results.NotFound() : Results.Ok(pipeline);
 });
 
-app.MapPost("/api/pipelines/{id}", async (string id, PipelineContent content, IPipelineStore store) =>
+app.MapPost("/api/pipelines/{id}", async (string id, PipelineContent content,
+    IPipelineStore store, EndpointRouteCache routeCache) =>
 {
     // POST = create only. Reject if the pipeline already exists.
     var existing = await store.GetPipelineAsync(id);
@@ -113,20 +115,25 @@ app.MapPost("/api/pipelines/{id}", async (string id, PipelineContent content, IP
         return Results.Conflict(new { error = $"Pipeline '{id}' already exists. Use PUT to update." });
 
     await store.SavePipelineAsync(id, content);
+    await routeCache.UpdatePipelineAsync(id);
     return Results.Created($"/api/pipelines/{id}", new { id });
 });
 
-app.MapPut("/api/pipelines/{id}", async (string id, PipelineContent content, IPipelineStore store) =>
+app.MapPut("/api/pipelines/{id}", async (string id, PipelineContent content,
+    IPipelineStore store, EndpointRouteCache routeCache) =>
 {
     var existing = await store.GetPipelineAsync(id);
     if (existing is null) return Results.NotFound();
     await store.SavePipelineAsync(id, content);
+    await routeCache.UpdatePipelineAsync(id);
     return Results.Ok(new { id });
 });
 
-app.MapDelete("/api/pipelines/{id}", async (string id, IPipelineStore store) =>
+app.MapDelete("/api/pipelines/{id}", async (string id, IPipelineStore store,
+    EndpointRouteCache routeCache) =>
 {
     await store.DeletePipelineAsync(id);
+    routeCache.RemovePipeline(id);
     return Results.NoContent();
 });
 
@@ -319,42 +326,25 @@ app.MapPost("/api/executions", async (HttpRequest req, IPipelineStore pipelineSt
 // This simulates the production HTTP trigger function (Step 6d) for local development.
 
 app.MapPost("/api/v1/trigger/{**path}", async (string path, HttpRequest req,
-    IPipelineStore pipelineStore, IStateStore stateStore) =>
+    IPipelineStore pipelineStore, IStateStore stateStore, EndpointRouteCache routeCache) =>
 {
     var requestPath = "/" + path;
 
-    // Find pipeline with matching endpoint
-    var allPipelines = await pipelineStore.ListPipelinesAsync();
-    string? matchedPipelineId = null;
-    Elwood.Pipeline.Schema.PipelineConfig? matchedConfig = null;
-
-    var parser = new PipelineParser();
-    foreach (var summary in allPipelines)
-    {
-        var pipelineDef = await pipelineStore.GetPipelineAsync(summary.Id);
-        if (pipelineDef is null) continue;
-
-        try
-        {
-            var config = parser.ParseYaml(pipelineDef.Content.Yaml);
-            foreach (var source in config.Sources)
-            {
-                if (source.Trigger is "http" or "http-request" &&
-                    !string.IsNullOrEmpty(source.Endpoint) &&
-                    source.Endpoint.Equals(requestPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    matchedPipelineId = summary.Id;
-                    matchedConfig = config;
-                    break;
-                }
-            }
-        }
-        catch { /* skip unparseable pipelines */ }
-        if (matchedPipelineId is not null) break;
-    }
-
-    if (matchedPipelineId is null || matchedConfig is null)
+    // Look up pipeline from the in-memory route cache (built on first request, updated on save)
+    var match = await routeCache.MatchAsync(requestPath);
+    if (match is null)
         return Results.NotFound(new { error = $"No pipeline matches endpoint '{requestPath}'" });
+
+    var (matchedPipelineId, _) = match.Value;
+
+    // Parse the matched pipeline's config for auth validation
+    var parser = new PipelineParser();
+    var matchedDef = await pipelineStore.GetPipelineAsync(matchedPipelineId);
+    if (matchedDef is null) return Results.NotFound();
+
+    Elwood.Pipeline.Schema.PipelineConfig matchedConfig;
+    try { matchedConfig = parser.ParseYaml(matchedDef.Content.Yaml); }
+    catch { return Results.BadRequest(new { error = "Pipeline YAML is invalid" }); }
 
     // Validate trigger auth (basic auth)
     var triggerSource = matchedConfig.Sources.FirstOrDefault(s =>
@@ -384,16 +374,13 @@ app.MapPost("/api/v1/trigger/{**path}", async (string path, HttpRequest req,
         }
     }
 
-    // Read and parse the full pipeline
-    var fullDef = await pipelineStore.GetPipelineAsync(matchedPipelineId);
-    if (fullDef is null) return Results.NotFound();
-
+    // Parse the full pipeline (with scripts)
     var tempDir = Path.Combine(Path.GetTempPath(), "elwood-trigger-" + Guid.NewGuid().ToString()[..8]);
     Directory.CreateDirectory(tempDir);
     try
     {
-        File.WriteAllText(Path.Combine(tempDir, "pipeline.elwood.yaml"), fullDef.Content.Yaml);
-        foreach (var (name, script) in fullDef.Content.Scripts)
+        File.WriteAllText(Path.Combine(tempDir, "pipeline.elwood.yaml"), matchedDef.Content.Yaml);
+        foreach (var (name, script) in matchedDef.Content.Scripts)
             File.WriteAllText(Path.Combine(tempDir, name), script);
 
         var parsed = parser.Parse(Path.Combine(tempDir, "pipeline.elwood.yaml"));
