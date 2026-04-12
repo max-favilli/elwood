@@ -514,6 +514,11 @@ The executor splits it: `$` = `envelope.payload`, `$source` = `envelope.source`.
 - [x] `$`-prefixed identifiers in both .NET and TS lexers
 - [x] `$secrets` resolution from provider (EnvironmentSecretProvider, DictionarySecretProvider)
 - [x] StringResolver for inline expressions in YAML ({$.field}, $secrets.x, ${ENV_VAR})
+- [x] JsonFileSecretProvider — local development secrets from `secrets.json`
+- [x] AppConfigurationSecretProvider — Azure App Configuration with label-based environments
+- [x] CompositeSecretProvider — chained resolution: secrets.json → App Configuration → env vars
+- [ ] **Key Vault references** — App Configuration stores pointers to Azure Key Vault secrets instead of raw values. Key Vault provides fine-grained per-key access policies, enabling secret isolation between pipeline maintainers (e.g., maintainer A manages `crm-newsletter/*`, maintainer B manages `product-sync/*`). Elwood's ISecretProvider resolves Key Vault references transparently.
+- [ ] **Per-pipeline secret scopes** — each pipeline declares a `secrets.scope` in YAML (e.g., `crm-newsletter`). `$secrets.password` resolves as `{scope}/password` in the backing store. The runtime enforces the scope — a pipeline cannot read another pipeline's secrets. Cloud-agnostic (works with any store that supports key prefixes).
 - [ ] Full destination type schema (11 types — schema defined in docs, code deferred to Step 4)
 
 **Step 2 — CLI Executor: ✅**
