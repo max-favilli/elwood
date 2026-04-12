@@ -3,6 +3,10 @@ bin/
 obj/
 *.user
 *.suo
+
+# Local secrets and dev settings — never commit
+secrets.json
+appsettings.Development.json
 *.cache
 *.vs/
 .vs/
