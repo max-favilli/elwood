@@ -26,6 +26,12 @@ public sealed class ExecutionState
 
     /// <summary>Errors that occurred during execution.</summary>
     public List<string> Errors { get; set; } = [];
+
+    /// <summary>
+    /// True if this execution was triggered from the portal's Run panel (test mode).
+    /// False (default) for real executions via HTTP trigger or external callers.
+    /// </summary>
+    public bool IsTest { get; set; } = false;
 }
 
 public sealed class SourceStepState

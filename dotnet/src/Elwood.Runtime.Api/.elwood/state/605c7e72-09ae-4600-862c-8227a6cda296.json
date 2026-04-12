@@ -1,0 +1,12 @@
+{
+  "executionId": "605c7e72-09ae-4600-862c-8227a6cda296",
+  "pipelineName": "crm-newsletter",
+  "status": 2,
+  "startedAt": "2026-04-12T20:21:12.421584Z",
+  "completedAt": "2026-04-12T20:21:12.5302581Z",
+  "durationMs": 108,
+  "sources": {},
+  "outputs": {},
+  "idmRef": null,
+  "errors": []
+}
