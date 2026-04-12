@@ -637,22 +637,30 @@ Broken into seven sub-steps. The cloud runtime supports two execution modes via 
 - [x] 8 tests: start + state creation, source processing, output processing, multi-stage ordering, concurrent sources, idempotency, failure handling, end-to-end
 
 **Step 6d — `Elwood.Runtime.Azure` Functions project:**
-- [ ] HTTP trigger (catch-all): matches route via `IPipelineRegistry`, dispatches to `SyncExecutor` (sync) or starts execution + queues first step (async)
-- [ ] Service Bus queue trigger: invokes `AsyncExecutor.ExecuteStepAsync(...)`
+- [ ] `BlobPipelineStore` — implements `IPipelineStore` over Azure Blob Storage (folder-per-pipeline layout in a blob container). Replaces `FileSystemPipelineStore` for serverless environments where there is no persistent disk.
+- [ ] HTTP trigger (catch-all): matches route via `RedisPipelineRegistry`, dispatches to `SyncExecutor` (sync) or starts execution + queues first step (async)
+- [ ] Service Bus queue trigger: invokes `AsyncExecutor.ExecuteStepAsync(...)` (async mode only — not needed for sync-only pipelines)
 - [ ] DI wiring: `AddElwoodAzureStorage(...)` + Functions startup
 - [ ] HTTP method support added to `SourceConfig` schema
 - [ ] Route pattern matching with parameter extraction (e.g. `/api/{category}`)
 
-**Step 6e — Git sync + deploy:**
-- [ ] Webhook endpoint on the API server: git push → `git pull` → read changed pipelines → `IPipelineRegistry.UpdatePipelineAsync(id)`
-- [ ] `elwood deploy <yaml>` CLI command — writes to git (or directly to FileSystemPipelineStore for dev)
-- [ ] Closes deferred Step 5 items: revisions/restore, deploy endpoint
+**Step 6e — Pipeline deployment flow:**
 
-**Step 6f — Terraform module (separate repo: `elwood-infra`):**
-- [ ] `modules/azure/main.tf` — Function App + ASB + Storage Account + Cache for Redis + Application Insights
-- [ ] Blob lifecycle policies for document cleanup
-- [ ] `examples/azure-minimal` — smallest viable setup
-- [ ] `examples/azure-production` — scaled-out with monitoring
+How pipelines move from editing to live execution. Two modes, detailed in [`docs/pipeline-deployment-modes.md`](pipeline-deployment-modes.md):
+
+- [ ] **Mode 1 (save = live):** Portal saves → API writes to Blob Storage → updates Redis → pipeline is live immediately. Git commit as optional audit trail. Good for solo developers and dev/test environments.
+- [ ] **Mode 2 (save = draft, merge = live):** Portal saves to a git branch → submits PR → review + merge → webhook triggers API → updates Blob + Redis → pipeline goes live. Good for teams and production. Requires: portal branch awareness, PR creation, merge webhook handler.
+- [ ] `elwood deploy <yaml>` CLI command — uploads pipeline to blob + updates Redis
+- [ ] Git commit on save (Mode 1 audit trail) — optional, configured per environment
+- [ ] Merge webhook handler (Mode 2) — receives git merge events, updates blob + Redis
+
+**Step 6f — Terraform:**
+- [ ] `infra/azure/main.tf` — Storage Account (pipelines container + Functions runtime) + Redis + Function App
+- [ ] Support reusing existing resources via `data` blocks (resource group, App Service Plan, App Configuration, Application Insights)
+- [ ] `infra/azure/variables.tf` — resource names, region, SKU, existing resource references
+- [ ] `infra/azure/outputs.tf` — function URL, storage connection, Redis connection
+- [ ] `infra/azure/terraform.tfvars.example` — sample values (real tfvars gitignored)
+- [ ] Getting started documentation for `terraform apply` → deploy → test
 
 **Step 6g — End-to-end integration test:**
 - [ ] docker-compose: Azurite + Redis + Service Bus emulator

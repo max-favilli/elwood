@@ -559,17 +559,23 @@ elwood status run-abc-123           # detailed state for one execution
 
 ### What's stored where
 
+See [`docs/pipeline-deployment-modes.md`](pipeline-deployment-modes.md) for how pipelines move from editing to live execution (Mode 1: save = live, Mode 2: save = draft with PR review).
+
 ```
 ┌──────────────────────────────────────────────────┐
-│  Git (IPipelineStore) — source of truth           │
+│  Blob Storage (IPipelineStore) — source of truth  │
 │                                                    │
 │  Pipeline YAML + .elwood scripts                   │
-│  Versioned, diffable, collaborative               │
-│  GitPipelineStore wraps git operations             │
-│  API server has the local clone                    │
-│  Developers edit via portal or VS Code + git push  │
+│  Folder-per-pipeline layout in a blob container    │
+│  BlobPipelineStore for serverless environments     │
+│  No persistent disk needed                         │
+│                                                    │
+│  Git (optional, for audit + review):               │
+│  GitPipelineStore for local dev                    │
+│  Mode 2 uses git branches + PRs for review gates   │
+│  Developers can edit via VS Code + git push        │
 └──────────────────────────────────────────────────┘
-            ↓ webhook on push
+            ↓ on save (Mode 1) or merge (Mode 2)
 ┌──────────────────────────────────────────────────┐
 │  Redis (IPipelineRegistry + IStateStore)           │
 │                                                    │
@@ -608,7 +614,7 @@ elwood status run-abc-123           # detailed state for one execution
 └──────────────────────────────────────────────────┘
 ```
 
-**Git** is the source of truth — versioned, collaborative. **Redis** is the distribution cache — executors read pipeline content and state from Redis, never from disk. **Blob/S3** handles large payloads. The **API server** bridges git ↔ Redis: it has the local clone, reads files on webhook, and writes to Redis.
+**Blob Storage** is the source of truth for pipeline definitions — serverless, no persistent disk needed. **Redis** is the distribution cache — executors read pipeline content and state from Redis, never from blob directly. **Blob/S3** also handles large execution payloads (source data, IDM, outputs). **Git** is optional — provides version history, audit trail, and PR-based review for teams. The **API** (serverless) bridges blob ↔ Redis, and optionally commits to git.
 
 ### How pipeline content flows from git to executor
 
