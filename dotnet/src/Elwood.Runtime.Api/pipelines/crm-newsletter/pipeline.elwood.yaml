@@ -12,8 +12,8 @@ sources:
     map: trigger-map.elwood
     auth:
       type: basic
-      user: $secrets.triggerUser
-      password: $secrets.triggerPassword
+      user: "sfcc_dev"
+      password: "DpYKtkUHI8Y&w#3EUT&h6IGqMi4kNT&YJeW3"
 
   - name: crm-call
     trigger: pull
@@ -22,6 +22,8 @@ sources:
     from:
       http:
         url: ${CRM-API-BASE-URL}/rest/import/SnapLogic/{$.request.action}
+        user: $secrets.triggerUser
+        password: $secrets.triggerPassword
         method: POST
         body: $.request
         acceptedStatusCodes: "2xx,4xx,5xx"

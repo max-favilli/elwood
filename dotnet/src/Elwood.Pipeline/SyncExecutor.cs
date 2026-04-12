@@ -60,7 +60,7 @@ public sealed class SyncExecutor
     /// </summary>
     public async Task<PipelineResult> ExecuteAsync(ParsedPipeline pipeline,
         IElwoodValue triggerPayload, IElwoodValue? triggerMetadata = null,
-        string? triggerSourceName = null)
+        string? triggerSourceName = null, bool isTest = false)
     {
         if (!pipeline.IsValid)
             return PipelineResult.Failed(pipeline.Errors.ToList());
@@ -87,6 +87,7 @@ public sealed class SyncExecutor
             ExecutionId = executionId,
             PipelineName = pipelineName,
             Status = ExecutionStatus.Running,
+            IsTest = isTest,
         };
         if (_stateStore is not null)
             await _stateStore.SaveExecutionAsync(execState);

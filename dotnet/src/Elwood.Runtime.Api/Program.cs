@@ -294,12 +294,14 @@ app.MapPost("/api/executions", async (HttpRequest req, IPipelineStore pipelineSt
             ? payloadEl.GetRawText() : "{}";
         var payload = factory.Parse(payloadJson);
 
+        var isTest = doc.RootElement.TryGetProperty("isTest", out var testEl) && testEl.GetBoolean();
+
         var secretProvider = req.HttpContext.RequestServices.GetRequiredService<ISecretProvider>();
         var logger = req.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
             .CreateLogger<SyncExecutor>();
         var executor = new SyncExecutor(secretProvider: secretProvider, stateStore: stateStore,
             logger: logger);
-        var result = await executor.ExecuteAsync(parsed, payload);
+        var result = await executor.ExecuteAsync(parsed, payload, isTest: isTest);
 
         if (!result.IsSuccess)
             return Results.Ok(new { executionId = result.ExecutionId, success = false, errors = result.Errors });
