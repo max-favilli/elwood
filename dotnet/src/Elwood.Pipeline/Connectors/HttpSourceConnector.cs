@@ -7,6 +7,7 @@ namespace Elwood.Pipeline.Connectors;
 /// Fetches data from HTTP/REST APIs. Supports:
 /// - GET, POST, PUT, DELETE, PATCH
 /// - POST/PUT body from the <c>body</c> field (pre-serialized JSON string passed via context)
+/// - Basic auth via <c>user</c>/<c>password</c> fields
 /// - Custom headers
 /// - Accepted status codes (captures response on non-2xx instead of throwing)
 /// </summary>
@@ -29,6 +30,13 @@ public sealed class HttpSourceConnector : ISourceConnector
         var request = new HttpRequestMessage(
             new HttpMethod(http.Method ?? "GET"),
             http.Url);
+
+        // Basic auth — user/password → Authorization: Basic <base64(user:password)>
+        if (!string.IsNullOrEmpty(http.User) && !string.IsNullOrEmpty(http.Password))
+        {
+            var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{http.User}:{http.Password}"));
+            request.Headers.TryAddWithoutValidation("Authorization", $"Basic {credentials}");
+        }
 
         if (http.Headers is not null)
         {
