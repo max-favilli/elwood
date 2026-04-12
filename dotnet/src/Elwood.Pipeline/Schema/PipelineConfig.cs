@@ -26,6 +26,14 @@ public sealed class PipelineConfig
     [YamlMember(Alias = "mode")]
     public string Mode { get; set; } = "sync";
 
+    /// <summary>
+    /// Data retention in seconds. Controls how long execution state and documents
+    /// are kept in storage. Passed to IStateStore and IDocumentStore at execution time.
+    /// Default: 259200 (3 days). Can be refined to per-source/output later if needed.
+    /// </summary>
+    [YamlMember(Alias = "ttlSeconds")]
+    public int? TtlSeconds { get; set; }
+
     [YamlMember(Alias = "sources")]
     public List<SourceConfig> Sources { get; set; } = [];
 
@@ -165,6 +173,12 @@ public sealed class HttpSourceConfig
     /// </summary>
     [YamlMember(Alias = "acceptedStatusCodes")]
     public string? AcceptedStatusCodes { get; set; }
+
+    /// <summary>
+    /// HTTP request timeout in milliseconds. Default: 100000 (100 seconds).
+    /// </summary>
+    [YamlMember(Alias = "connectionTimeout")]
+    public int? ConnectionTimeout { get; set; }
 
     // ── Runtime fields (set by the executor, not from YAML) ──
 
