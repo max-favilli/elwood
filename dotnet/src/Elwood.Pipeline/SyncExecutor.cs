@@ -7,6 +7,8 @@ using Elwood.Pipeline.Schema;
 using Elwood.Pipeline.Secrets;
 using Elwood.Pipeline.State;
 using Elwood.Pipeline.Storage;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Elwood.Pipeline;
 
@@ -24,19 +26,22 @@ public sealed class SyncExecutor
     private readonly List<IDestinationConnector> _destinationConnectors;
     private readonly IStateStore? _stateStore;
     private readonly IDocumentStore? _documentStore;
+    private readonly ILogger _logger;
 
     public SyncExecutor(
         ISecretProvider? secretProvider = null,
         IStateStore? stateStore = null,
         IDocumentStore? documentStore = null,
         IEnumerable<ISourceConnector>? sourceConnectors = null,
-        IEnumerable<IDestinationConnector>? destinationConnectors = null)
+        IEnumerable<IDestinationConnector>? destinationConnectors = null,
+        ILogger<SyncExecutor>? logger = null)
     {
         _factory = JsonNodeValueFactory.Instance;
         _engine = new ElwoodEngine(_factory);
         _stringResolver = new StringResolver(secretProvider);
         _stateStore = stateStore;
         _documentStore = documentStore;
+        _logger = logger ?? NullLogger<SyncExecutor>.Instance;
         _sourceConnectors = sourceConnectors?.ToList() ??
         [
             new HttpSourceConnector(),
@@ -62,12 +67,25 @@ public sealed class SyncExecutor
 
         var errors = new List<string>();
         var executionId = Guid.NewGuid().ToString();
+        var pipelineName = pipeline.Config.Name ?? "unknown";
+
+        // ExecutionId scope — every log entry within this scope carries the ExecutionId
+        // as a custom property. In Application Insights this appears as a custom dimension,
+        // enabling "show me everything that happened in this execution" queries.
+        using var scope = _logger.BeginScope(new Dictionary<string, object>
+        {
+            ["ExecutionId"] = executionId,
+            ["PipelineName"] = pipelineName,
+        });
+
+        _logger.LogInformation("Pipeline execution started: {PipelineName} [{ExecutionId}]",
+            pipelineName, executionId);
 
         // Initialize state
         var execState = new ExecutionState
         {
             ExecutionId = executionId,
-            PipelineName = pipeline.Config.Name ?? "unknown",
+            PipelineName = pipelineName,
             Status = ExecutionStatus.Running,
         };
         if (_stateStore is not null)
@@ -77,18 +95,28 @@ public sealed class SyncExecutor
         List<List<SourceConfig>> stages;
         try { stages = DependencyResolver.ResolveStages(pipeline.Config.Sources); }
         catch (InvalidOperationException ex)
-        { return PipelineResult.Failed([ex.Message], executionId); }
+        {
+            _logger.LogError("Dependency resolution failed: {Error}", ex.Message);
+            return PipelineResult.Failed([ex.Message], executionId);
+        }
 
         var idm = _factory.CreateObject([]);
 
         // Process sources stage by stage
-        foreach (var stage in stages)
+        for (var stageIdx = 0; stageIdx < stages.Count; stageIdx++)
         {
+            var stage = stages[stageIdx];
+            _logger.LogDebug("Processing stage {StageIndex}/{StageCount} ({SourceCount} sources)",
+                stageIdx + 1, stages.Count, stage.Count);
+
             // TODO: run sources in same stage concurrently (Task.WhenAll)
             foreach (var source in stage)
             {
                 IElwoodValue payload;
                 IElwoodValue sourceMetadata;
+
+                _logger.LogInformation("Source {SourceName} ({Trigger}) processing",
+                    source.Name, source.Trigger);
 
                 if (source.Name == triggerSourceName || (triggerSourceName is null && source.Trigger is "http" or "http-request" or "queue"))
                 {
@@ -105,6 +133,7 @@ public sealed class SyncExecutor
                         if (connector is null)
                         {
                             errors.Add($"No connector available for source '{source.Name}'");
+                            _logger.LogError("Source {SourceName}: no connector available", source.Name);
                             continue;
                         }
 
@@ -119,9 +148,15 @@ public sealed class SyncExecutor
 
                         // Resolve inline expressions in the URL (e.g., {$idm.field})
                         if (source.From.Http is not null)
+                        {
                             source.From.Http.Url = _stringResolver.Resolve(source.From.Http.Url, idm);
+                            _logger.LogDebug("Source {SourceName}: {Method} {Url}",
+                                source.Name, source.From.Http.Method, source.From.Http.Url);
+                        }
 
                         var fetchResult = await connector.FetchAsync(source.From, idm);
+                        _logger.LogInformation("Source {SourceName}: fetched ({StatusCode}, {ContentType})",
+                            source.Name, fetchResult.StatusCode, fetchResult.ContentType);
                         payload = fetchResult.ContentType is "csv" or "txt" or "xml" or "text"
                             ? _factory.CreateString(fetchResult.Content)
                             : _factory.Parse(fetchResult.Content);
@@ -130,6 +165,7 @@ public sealed class SyncExecutor
                     catch (Exception ex)
                     {
                         errors.Add($"Failed to fetch source '{source.Name}': {ex.Message}");
+                        _logger.LogError(ex, "Source {SourceName}: fetch failed", source.Name);
                         continue;
                     }
                 }
@@ -156,12 +192,19 @@ public sealed class SyncExecutor
         }
 
         if (errors.Count > 0)
+        {
+            _logger.LogError("Pipeline execution failed after sources: {ErrorCount} error(s)", errors.Count);
             return PipelineResult.Failed(errors, executionId);
+        }
+
+        _logger.LogInformation("All sources complete, processing {OutputCount} output(s)",
+            pipeline.Config.Outputs.Count);
 
         // Process outputs
         var outputs = new Dictionary<string, IElwoodValue>();
         foreach (var output in pipeline.Config.Outputs)
         {
+            _logger.LogInformation("Output {OutputName} processing", output.Name);
             IElwoodValue data = idm;
             IElwoodValue? outputArray = null;
 
@@ -212,9 +255,18 @@ public sealed class SyncExecutor
             }
         }
 
-        return errors.Count > 0
-            ? PipelineResult.Failed(errors, executionId)
-            : PipelineResult.Success(outputs, executionId, responseStatusCode);
+        if (errors.Count > 0)
+        {
+            _logger.LogError("Pipeline execution failed: {ErrorCount} error(s)", errors.Count);
+            return PipelineResult.Failed(errors, executionId);
+        }
+
+        var durationMs = (DateTime.UtcNow - execState.StartedAt).TotalMilliseconds;
+        _logger.LogInformation(
+            "Pipeline execution completed: {PipelineName} [{ExecutionId}] in {DurationMs}ms (status: {ResponseStatusCode})",
+            pipelineName, executionId, (int)durationMs, responseStatusCode ?? 200);
+
+        return PipelineResult.Success(outputs, executionId, responseStatusCode);
     }
 
     private async Task DeliverToDestinationsAsync(OutputConfig output, string content,

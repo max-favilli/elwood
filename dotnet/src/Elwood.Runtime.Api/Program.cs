@@ -5,6 +5,7 @@ using Elwood.Pipeline;
 using Elwood.Pipeline.Registry;
 using Elwood.Pipeline.Secrets;
 using Elwood.Pipeline.Storage;
+using Microsoft.Extensions.Logging;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -60,6 +61,18 @@ secretProviders.Add(new EnvironmentSecretProvider());
 
 builder.Services.AddSingleton<ISecretProvider>(new CompositeSecretProvider(secretProviders.ToArray()));
 Console.WriteLine($"Secrets: {secretProviders.Count} provider(s) in chain");
+
+// Application Insights — if connection string is configured, logs flow to AI.
+// If not configured, logging still works via the default console provider.
+// Cloud-agnostic: swap this for CloudWatch/Stackdriver in non-Azure environments.
+var aiConnectionString = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]
+    ?? Environment.GetEnvironmentVariable("APPLICATIONINSIGHTS_CONNECTION_STRING");
+if (!string.IsNullOrEmpty(aiConnectionString))
+{
+    builder.Services.AddApplicationInsightsTelemetry(options =>
+        options.ConnectionString = aiConnectionString);
+    Console.WriteLine("Telemetry: Application Insights connected");
+}
 
 // CORS — allow the Elwood Portal (localhost:3000) to call the API
 builder.Services.AddCors(options =>
@@ -275,7 +288,10 @@ app.MapPost("/api/executions", async (HttpRequest req, IPipelineStore pipelineSt
         var payload = factory.Parse(payloadJson);
 
         var secretProvider = req.HttpContext.RequestServices.GetRequiredService<ISecretProvider>();
-        var executor = new SyncExecutor(secretProvider: secretProvider, stateStore: stateStore);
+        var logger = req.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger<SyncExecutor>();
+        var executor = new SyncExecutor(secretProvider: secretProvider, stateStore: stateStore,
+            logger: logger);
         var result = await executor.ExecuteAsync(parsed, payload);
 
         if (!result.IsSuccess)
