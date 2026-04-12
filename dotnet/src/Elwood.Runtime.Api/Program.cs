@@ -312,6 +312,136 @@ app.MapPost("/api/executions", async (HttpRequest req, IPipelineStore pipelineSt
     finally { Directory.Delete(tempDir, true); }
 });
 
+// ── HTTP Trigger (catch-all) ──
+// Matches incoming requests against pipeline endpoint fields.
+// POST /api/v1/trigger/crm/newsletter → finds pipeline with endpoint: /crm/newsletter
+// Validates trigger auth, executes pipeline, returns response output with dynamic status code.
+// This simulates the production HTTP trigger function (Step 6d) for local development.
+
+app.MapPost("/api/v1/trigger/{**path}", async (string path, HttpRequest req,
+    IPipelineStore pipelineStore, IStateStore stateStore) =>
+{
+    var requestPath = "/" + path;
+
+    // Find pipeline with matching endpoint
+    var allPipelines = await pipelineStore.ListPipelinesAsync();
+    string? matchedPipelineId = null;
+    Elwood.Pipeline.Schema.PipelineConfig? matchedConfig = null;
+
+    var parser = new PipelineParser();
+    foreach (var summary in allPipelines)
+    {
+        var pipelineDef = await pipelineStore.GetPipelineAsync(summary.Id);
+        if (pipelineDef is null) continue;
+
+        try
+        {
+            var config = parser.ParseYaml(pipelineDef.Content.Yaml);
+            foreach (var source in config.Sources)
+            {
+                if (source.Trigger is "http" or "http-request" &&
+                    !string.IsNullOrEmpty(source.Endpoint) &&
+                    source.Endpoint.Equals(requestPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    matchedPipelineId = summary.Id;
+                    matchedConfig = config;
+                    break;
+                }
+            }
+        }
+        catch { /* skip unparseable pipelines */ }
+        if (matchedPipelineId is not null) break;
+    }
+
+    if (matchedPipelineId is null || matchedConfig is null)
+        return Results.NotFound(new { error = $"No pipeline matches endpoint '{requestPath}'" });
+
+    // Validate trigger auth (basic auth)
+    var triggerSource = matchedConfig.Sources.FirstOrDefault(s =>
+        s.Trigger is "http" or "http-request" && s.Auth is not null);
+    if (triggerSource?.Auth is not null && triggerSource.Auth.Type == "basic")
+    {
+        var authHeader = req.Headers.Authorization.FirstOrDefault();
+        if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Basic "))
+            return Results.Json(new { error = "Authentication required" }, statusCode: 401);
+
+        var secretProvider = req.HttpContext.RequestServices.GetRequiredService<ISecretProvider>();
+        var resolver = new Elwood.Pipeline.StringResolver(secretProvider);
+        var expectedUser = resolver.Resolve(triggerSource.Auth.User ?? "");
+        var expectedPass = resolver.Resolve(triggerSource.Auth.Password ?? "");
+
+        try
+        {
+            var credBytes = Convert.FromBase64String(authHeader["Basic ".Length..]);
+            var cred = System.Text.Encoding.UTF8.GetString(credBytes);
+            var parts = cred.Split(':', 2);
+            if (parts.Length != 2 || parts[0] != expectedUser || parts[1] != expectedPass)
+                return Results.Json(new { error = "Invalid credentials" }, statusCode: 401);
+        }
+        catch
+        {
+            return Results.Json(new { error = "Invalid Authorization header" }, statusCode: 401);
+        }
+    }
+
+    // Read and parse the full pipeline
+    var fullDef = await pipelineStore.GetPipelineAsync(matchedPipelineId);
+    if (fullDef is null) return Results.NotFound();
+
+    var tempDir = Path.Combine(Path.GetTempPath(), "elwood-trigger-" + Guid.NewGuid().ToString()[..8]);
+    Directory.CreateDirectory(tempDir);
+    try
+    {
+        File.WriteAllText(Path.Combine(tempDir, "pipeline.elwood.yaml"), fullDef.Content.Yaml);
+        foreach (var (name, script) in fullDef.Content.Scripts)
+            File.WriteAllText(Path.Combine(tempDir, name), script);
+
+        var parsed = parser.Parse(Path.Combine(tempDir, "pipeline.elwood.yaml"));
+        if (!parsed.IsValid)
+            return Results.BadRequest(new { errors = parsed.Errors });
+
+        // Read request body as payload
+        var factory = JsonNodeValueFactory.Instance;
+        using var reader = new StreamReader(req.Body);
+        var bodyJson = await reader.ReadToEndAsync();
+        var payload = string.IsNullOrWhiteSpace(bodyJson) ? factory.CreateObject([]) : factory.Parse(bodyJson);
+
+        var secretProv = req.HttpContext.RequestServices.GetRequiredService<ISecretProvider>();
+        var logger = req.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger<SyncExecutor>();
+        var executor = new SyncExecutor(secretProvider: secretProv, stateStore: stateStore, logger: logger);
+        var result = await executor.ExecuteAsync(parsed, payload);
+
+        if (!result.IsSuccess)
+            return Results.Json(new { errors = result.Errors }, statusCode: 500);
+
+        // Return the response output with dynamic status code
+        var responseOutput = parsed.Config.ResponseOutput;
+        if (responseOutput is not null && result.Outputs.TryGetValue(responseOutput.Name, out var responseData))
+        {
+            var statusCode = result.ResponseStatusCode ?? 200;
+            if (responseData is JsonNodeValue jnv)
+            {
+                var json = jnv.Node?.ToJsonString(jsonOpts) ?? "null";
+                return Results.Text(json, "application/json", statusCode: statusCode);
+            }
+            return Results.Text(responseData.GetStringValue() ?? "null", "application/json", statusCode: statusCode);
+        }
+
+        // No response output — return all outputs
+        var outputs = new Dictionary<string, object?>();
+        foreach (var (name, value) in result.Outputs)
+        {
+            if (value is JsonNodeValue jnv2)
+                outputs[name] = JsonSerializer.Deserialize<object>(jnv2.Node?.ToJsonString() ?? "null");
+            else
+                outputs[name] = value.GetStringValue();
+        }
+        return Results.Ok(new { executionId = result.ExecutionId, outputs });
+    }
+    finally { Directory.Delete(tempDir, true); }
+});
+
 // ── Metrics ──
 
 app.MapGet("/api/metrics", async (IStateStore stateStore) =>
