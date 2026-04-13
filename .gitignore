@@ -7,6 +7,12 @@ obj/
 # Local secrets and dev settings — never commit
 secrets.json
 appsettings.Development.json
+
+# Terraform
+*.tfstate
+*.tfstate.backup
+.terraform/
+terraform.tfvars
 *.cache
 *.vs/
 .vs/
