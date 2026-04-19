@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-04-19 — `.omitNulls()` method
+
+New built-in method that removes null-valued properties from objects. Designed for Eagle map migration where `nullValueHandling: "Ignore"` (the default on 98% of production maps) automatically strips nulls from output.
+
+```elwood
+{ name: $.name, email: $.email, phone: $.phone }.omitNulls()
+// If phone is null → { "name": "Alice", "email": "alice@example.com" }
+```
+
+- Works on objects (returns new object without null properties) and arrays (maps over elements)
+- Shallow: only strips top-level null properties, not nested nulls
+- Implemented in both .NET and TypeScript engines
+
+### Files
+- `ts/src/evaluator.ts` — `omitNulls` case in callBuiltin
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — `EvaluateOmitNulls` method
+- `spec/test-cases/88-omit-nulls/` (NEW — 4 files)
+- `docs/syntax-reference.md` — added to object manipulation table
+- `docs/changelog.md`
+
 ## 2026-04-18 — Fix CI warnings: bump GitHub Actions to v5, resolve C# nullable/unused warnings
 
 Addressed Node.js 20 deprecation warnings by bumping all GitHub Actions to v5, and fixed C# compiler warnings for nullable dereferences and unused fields.
