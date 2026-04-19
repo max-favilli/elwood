@@ -115,6 +115,8 @@ const CATEGORIES: Record<string, string> = {
   '84-toxml': 'Format I/O',
   '85-fromxml-file': 'Format I/O',
   '86-bracket-property-access': 'Basics',
+  '87-groupby-memo-bracket': 'Grouping',
+  '88-omit-nulls': 'Objects',
 };
 
 function titleFromId(id: string): string {
