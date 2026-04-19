@@ -36,7 +36,6 @@ public class FileBasedTests
     private static readonly string TimingLogDir = FindTimingLogDir();
     private static readonly string TimingLogPath = Path.Combine(TimingLogDir, "timing.log");
     private static readonly object LogLock = new();
-    private static bool _headerWritten;
     private static readonly List<(string name, long ms)> _currentRunEntries = [];
     private static bool _flushRegistered;
 

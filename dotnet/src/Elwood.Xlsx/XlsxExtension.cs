@@ -52,7 +52,7 @@ public static class XlsxExtension
         if (workbookPart is null) return factory.CreateArray([]);
 
         // Find the target sheet
-        var sheets = workbookPart.Workbook.Sheets?.Elements<Sheet>().ToList() ?? [];
+        var sheets = workbookPart.Workbook?.Sheets?.Elements<Sheet>().ToList() ?? new List<Sheet>();
         Sheet? sheet = null;
 
         if (sheetName is not null)
@@ -62,8 +62,8 @@ public static class XlsxExtension
 
         if (sheet?.Id?.Value is null) return factory.CreateArray([]);
 
-        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id.Value);
-        var sheetData = worksheetPart.Worksheet.GetFirstChild<SheetData>();
+        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id.Value!);
+        var sheetData = worksheetPart.Worksheet?.GetFirstChild<SheetData>();
         if (sheetData is null) return factory.CreateArray([]);
 
         var sst = workbookPart.SharedStringTablePart?.SharedStringTable;
@@ -161,10 +161,10 @@ public static class XlsxExtension
             var sheetData = new SheetData();
             worksheetPart.Worksheet = new Worksheet(sheetData);
 
-            var sheets = doc.WorkbookPart!.Workbook.AppendChild(new Sheets());
+            var sheets = workbookPart.Workbook.AppendChild(new Sheets());
             sheets.Append(new Sheet
             {
-                Id = doc.WorkbookPart.GetIdOfPart(worksheetPart),
+                Id = doc.WorkbookPart!.GetIdOfPart(worksheetPart),
                 SheetId = 1,
                 Name = sheetNameOpt
             });

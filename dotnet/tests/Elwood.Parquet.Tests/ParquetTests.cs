@@ -78,7 +78,7 @@ public class ParquetTests
         var row = parsed.RootElement[0];
         Assert.Equal("Alice", row.GetProperty("name").GetString());
         Assert.Equal(95.5, row.GetProperty("score").GetDouble());
-        Assert.Equal(true, row.GetProperty("active").GetBoolean());
+        Assert.True(row.GetProperty("active").GetBoolean());
     }
 
     [Fact]
