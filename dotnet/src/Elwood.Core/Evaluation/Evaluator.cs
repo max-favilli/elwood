@@ -824,6 +824,7 @@ public sealed class Evaluator
             "clone" => target.DeepClone(),
             "keep" => EvaluateKeep(target, args),
             "remove" => EvaluateRemove(target, args),
+            "omitNulls" or "omitnulls" => EvaluateOmitNulls(target),
 
             // Generators
             "newGuid" or "newguid" => _factory.CreateString(Guid.NewGuid().ToString()),
@@ -1702,6 +1703,20 @@ public sealed class Evaluator
         // Auto-map over arrays
         if (target.Kind == ElwoodValueKind.Array)
             return _factory.CreateArray(target.EnumerateArray().Select(item => EvaluateRemove(item, args)));
+        return target;
+    }
+
+    private IElwoodValue EvaluateOmitNulls(IElwoodValue target)
+    {
+        if (target.Kind == ElwoodValueKind.Object)
+        {
+            var props = target.GetPropertyNames()
+                .Where(n => target.GetProperty(n) is { Kind: not ElwoodValueKind.Null })
+                .Select(n => new KeyValuePair<string, IElwoodValue>(n, target.GetProperty(n)!));
+            return _factory.CreateObject(props);
+        }
+        if (target.Kind == ElwoodValueKind.Array)
+            return _factory.CreateArray(target.EnumerateArray().Select(item => EvaluateOmitNulls(item)));
         return target;
     }
 

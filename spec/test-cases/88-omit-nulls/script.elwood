@@ -1,0 +1,6 @@
+$[*] | select item => {
+  name: item.name,
+  email: item.email,
+  phone: item.phone,
+  city: item.city
+}.omitNulls()
