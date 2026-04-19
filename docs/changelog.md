@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-04-18 — Fix CI warnings: bump GitHub Actions to v5, resolve C# nullable/unused warnings
+
+Addressed Node.js 20 deprecation warnings by bumping all GitHub Actions to v5, and fixed C# compiler warnings for nullable dereferences and unused fields.
+
+### Files modified
+- `.github/workflows/ci.yml` — bump checkout, setup-dotnet, setup-node to v5
+- `.github/workflows/docker.yml` — bump checkout to v5
+- `.github/workflows/release.yml` — bump checkout, setup-dotnet, setup-node, upload-artifact, download-artifact to v5
+- `.github/workflows/deploy-playground.yml` — bump checkout, setup-node to v5; upload-pages-artifact to v4; deploy-pages to v5
+- `dotnet/src/Elwood.Xlsx/XlsxExtension.cs` — fix CS8602 null dereference warnings (Workbook, Worksheet, WorkbookPart)
+- `dotnet/tests/Elwood.Core.Tests/FileBasedTests.cs` — remove unused field `_headerWritten`
+- `dotnet/tests/Elwood.Parquet.Tests/ParquetTests.cs` — replace `Assert.Equal(true, ...)` with `Assert.True(...)`
+
+---
+
 ## 2026-04-19 — Evaluator fix: property access on arrays + playground enhancements
 
 ### Bug fix: misleading "Undefined variable" error
