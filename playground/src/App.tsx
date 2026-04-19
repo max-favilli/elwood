@@ -1,13 +1,15 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import Editor, { loader } from '@monaco-editor/react';
 import { Toolbar } from './components/Toolbar';
 import { PanelHeader, PanelButton } from './components/PanelHeader';
 import { StatusBar } from './components/StatusBar';
 import { ErrorPanel } from './components/ErrorPanel';
+import { LargeFileConfirmModal } from './components/LargeFileConfirmModal';
 import { useElwood } from './hooks/useElwood';
 import { GallerySidebar, type InputFormat } from './components/GallerySidebar';
 import { ShareModal } from './components/ShareModal';
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from 'lz-string';
+import { createShare, loadShare } from './lib/share-api';
 import { registerElwoodLanguage, ELWOOD_LANGUAGE_ID } from './editor/elwood-language';
 
 // Register Elwood language when Monaco loads
@@ -55,6 +57,15 @@ const MONACO_LANGUAGES: Record<string, string> = {
   xml: 'xml',
 };
 
+const LARGE_FILE_THRESHOLD = 1 * 1024 * 1024; // 1 MB
+
+function formatSize(bytes: number): string {
+  if (bytes === 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function App() {
   const [expression, setExpression] = useState(DEFAULT_EXPRESSION);
   const [input, setInput] = useState(DEFAULT_INPUT);
@@ -63,8 +74,17 @@ function App() {
   const { result, isRunning, run, debouncedRun } = useElwood();
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [shareUrl, setShareUrl] = useState('');
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [largeFileModeOverride, setLargeFileModeOverride] = useState<boolean | null>(null);
+  const [showLargeFileConfirm, setShowLargeFileConfirm] = useState(false);
   const resizing = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const inputSizeBytes = useMemo(() => new TextEncoder().encode(input).length, [input]);
+  const outputSizeBytes = useMemo(() => new TextEncoder().encode(result.output).length, [result.output]);
+  const isLargeFile = inputSizeBytes > LARGE_FILE_THRESHOLD;
+  const largeFileMode = largeFileModeOverride ?? isLargeFile;
 
   // Run on expression or input change
   const handleExprChange = useCallback((value: string | undefined) => {
@@ -177,16 +197,37 @@ function App() {
     navigator.clipboard.writeText(result.output);
   }, [result.output]);
 
-  const handleShare = useCallback(() => {
+  const handleShare = useCallback(async () => {
     const payload = JSON.stringify({ e: expression, i: input, f: inputFormat });
     const compressed = compressToEncodedURIComponent(payload);
-    const url = `${window.location.origin}${window.location.pathname}#data=${compressed}`;
-    setShareUrl(url);
+    const lzUrl = `${window.location.origin}${window.location.pathname}#data=${compressed}`;
+
+    // If the LZ-compressed URL is short enough, use it directly (no server needed)
+    if (lzUrl.length <= 8000) {
+      setShareError(null);
+      setShareUrl(lzUrl);
+      return;
+    }
+
+    // Large payload — upload to worker, get a short ID
+    setShareLoading(true);
+    setShareError(null);
+    try {
+      const id = await createShare({ e: expression, i: input, f: inputFormat });
+      const url = `${window.location.origin}${window.location.pathname}#s=${id}`;
+      setShareUrl(url);
+    } catch (err: any) {
+      setShareError(err?.message || 'Failed to create share link');
+    } finally {
+      setShareLoading(false);
+    }
   }, [expression, input, inputFormat]);
 
-  // Load from URL on mount
-  useState(() => {
+  // Load from URL on mount — supports both #data= (LZ inline) and #s= (server-stored)
+  const [loadingShare, setLoadingShare] = useState(false);
+  useEffect(() => {
     const hash = window.location.hash;
+
     if (hash.startsWith('#data=')) {
       const data = decompressFromEncodedURIComponent(hash.slice(6));
       if (data) {
@@ -198,8 +239,21 @@ function App() {
           setTimeout(() => run(e, i, f || 'json'), 100);
         } catch { /* ignore */ }
       }
+    } else if (hash.startsWith('#s=')) {
+      const id = hash.slice(3);
+      setLoadingShare(true);
+      loadShare(id)
+        .then(({ e, i, f }) => {
+          if (e) setExpression(e);
+          if (i) setInput(i);
+          if (f) setInputFormat(f as InputFormat);
+          setTimeout(() => run(e, i, (f as InputFormat) || 'json'), 100);
+        })
+        .catch(() => { /* share expired or not found */ })
+        .finally(() => setLoadingShare(false));
     }
-  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const monacoOptions = {
     fontSize: 13,
@@ -217,6 +271,13 @@ function App() {
 
   return (
     <div className="h-full flex flex-col" onKeyDown={handleKeyDown}>
+      {loadingShare && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
+          <div className="bg-bg-secondary border border-border rounded-lg px-6 py-4 text-sm text-text-primary">
+            Loading shared playground…
+          </div>
+        </div>
+      )}
       <Toolbar
         onRun={handleRun}
         onExamples={() => setGalleryOpen(true)}
@@ -260,6 +321,31 @@ function App() {
             title={FORMAT_LABELS[inputFormat] || 'Input'}
             right={
               <>
+                {inputSizeBytes > 0 && (
+                  <span className="text-[10px] text-text-secondary tabular-nums">{formatSize(inputSizeBytes)}</span>
+                )}
+                {isLargeFile && (
+                  <button
+                    onClick={() => {
+                      if (largeFileMode) {
+                        setShowLargeFileConfirm(true);
+                      } else {
+                        setLargeFileModeOverride(null);
+                      }
+                    }}
+                    className={`flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium rounded-full cursor-pointer transition-colors border ${
+                      largeFileMode
+                        ? 'bg-amber-900/30 text-amber-300 border-amber-700 hover:bg-amber-900/50'
+                        : 'bg-red-900/30 text-red-300 border-red-700 hover:bg-red-900/50'
+                    }`}
+                    title={largeFileMode
+                      ? 'Syntax highlighting disabled for performance. Click to enable at your own risk.'
+                      : 'Full syntax highlighting is ON — editor may be slow. Click to re-enable Large File Mode.'}
+                  >
+                    {largeFileMode ? '\u26A1' : '\u26A0'}
+                    {largeFileMode ? 'Large File Mode' : 'Full Highlighting'}
+                  </button>
+                )}
                 <PanelButton onClick={handleLoadFile}>Load File</PanelButton>
                 {(inputFormat === 'json' || inputFormat === 'xml') && (
                   <PanelButton onClick={handleFormat}>Format</PanelButton>
@@ -269,11 +355,22 @@ function App() {
           />
           <div className="flex-1 min-h-0">
             <Editor
-              language={MONACO_LANGUAGES[inputFormat] || 'json'}
+              language={largeFileMode ? 'plaintext' : (MONACO_LANGUAGES[inputFormat] || 'json')}
               theme="vs-dark"
               value={input}
               onChange={handleInputChange}
-              options={monacoOptions}
+              options={{
+                ...monacoOptions,
+                ...(largeFileMode ? {
+                  wordWrap: 'off' as const,
+                  formatOnPaste: false,
+                  formatOnType: false,
+                  folding: false,
+                  links: false,
+                  occurrencesHighlight: 'off' as const,
+                  renderValidationDecorations: 'off' as const,
+                } : {}),
+              }}
             />
           </div>
           <input ref={fileInputRef} type="file" accept=".json,.csv,.txt,.xml" className="hidden" onChange={handleFileChange} />
@@ -285,8 +382,11 @@ function App() {
             title="Output"
             right={
               <>
+                {outputSizeBytes > 0 && (
+                  <span className="text-[10px] text-text-secondary tabular-nums">{formatSize(outputSizeBytes)}</span>
+                )}
                 {result.timeMs > 0 && (
-                  <span className="text-[10px] text-success mr-1">✓ {result.timeMs.toFixed(1)}ms</span>
+                  <span className="text-[10px] text-success">✓ {result.timeMs.toFixed(1)}ms</span>
                 )}
                 <PanelButton onClick={handleCopy}>Copy</PanelButton>
               </>
@@ -306,8 +406,8 @@ function App() {
 
       <StatusBar
         success={result.success}
-        inputSize={new TextEncoder().encode(input).length}
-        outputSize={new TextEncoder().encode(result.output).length}
+        inputSize={inputSizeBytes}
+        outputSize={outputSizeBytes}
         timeMs={result.timeMs}
         error={result.error}
       />
@@ -319,9 +419,21 @@ function App() {
       />
 
       <ShareModal
-        open={shareUrl !== ''}
+        open={shareUrl !== '' || shareLoading || shareError !== null}
         url={shareUrl}
-        onClose={() => setShareUrl('')}
+        loading={shareLoading}
+        error={shareError}
+        onClose={() => { setShareUrl(''); setShareError(null); }}
+      />
+
+      <LargeFileConfirmModal
+        open={showLargeFileConfirm}
+        sizeMB={inputSizeBytes / (1024 * 1024)}
+        onConfirm={() => {
+          setLargeFileModeOverride(false);
+          setShowLargeFileConfirm(false);
+        }}
+        onCancel={() => setShowLargeFileConfirm(false)}
       />
     </div>
   );

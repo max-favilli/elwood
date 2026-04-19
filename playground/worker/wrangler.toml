@@ -1,0 +1,14 @@
+name = "elwood-share"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[[kv_namespaces]]
+binding = "SHARES"
+id = "a62ea6cbf53c4fedb2196bdf59419c4c"
+
+[vars]
+ALLOWED_ORIGIN = "https://max-favilli.github.io"
+# Max payload size: 25MB (after JSON stringification)
+MAX_PAYLOAD_BYTES = "26214400"
+# TTL: 90 days
+TTL_SECONDS = "7776000"

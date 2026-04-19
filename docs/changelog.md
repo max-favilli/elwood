@@ -1,5 +1,111 @@
 # Changelog
 
+## 2026-04-19 — Evaluator fix: property access on arrays + playground enhancements
+
+### Bug fix: misleading "Undefined variable" error
+
+When accessing a non-existent property on an array (e.g., `$.users[*]` where the root is an array of objects with no `users` property), the evaluator produced the misleading error "Undefined variable 'u'" instead of identifying the real issue.
+
+**Root cause:** In `evalPath`, the filter `.filter(v => v !== null)` used strict equality, allowing `undefined` (from missing properties) to pass through as array items. These `undefined` values eventually reached lambda binding, where `scope.get('u')` returned `undefined` — indistinguishable from "variable not declared".
+
+**Fix:**
+- Changed filter to `.filter(v => v != null)` (loose equality catches both null and undefined)
+- When all items in the array lack the requested property, throw a helpful error with suggestions:
+  - **Before:** `Undefined variable 'u'.`
+  - **After:** `Property 'users' not found on any item in the Array. Available properties: code, label-en_US`
+
+All 143 existing tests pass (86 conformance + 25 unit + 2 benchmark + 28 lexer + 27 parser - some shared across suites).
+
+### Files modified
+- `ts/src/evaluator.ts` — property access on arrays: filter fix + helpful error message
+
+---
+
+## 2026-04-19 — Playground: large file mode + size display
+
+Ported three features from the Eagle Frontend's Elwood Playground to the standalone playground.
+
+### Large File Mode
+- Threshold: 1 MB (`LARGE_FILE_THRESHOLD`)
+- When input exceeds the threshold, automatically switches the input editor to `plaintext` (disabling syntax highlighting, word wrap, folding, and validation decorations) for performance
+- Badge/button in input panel header lets the user toggle: clicking in large file mode shows a confirmation modal warning about potential slowness; clicking in full highlighting mode re-enables large file mode immediately
+- State: `largeFileModeOverride` (null = auto-detect, false = user forced full highlighting)
+
+### Input size display
+- Formatted file size (B / KB / MB) shown in the input panel header
+
+### Output size display
+- Formatted output size shown in the output panel header, next to execution time
+
+### Files
+- `playground/src/App.tsx` — large file mode state, threshold, formatSize helper, input/output size in panel headers, editor props for large file mode
+- `playground/src/components/LargeFileConfirmModal.tsx` (NEW) — confirmation dialog when disabling large file mode
+
+---
+
+## 2026-04-18 — Playground: server-side share for large files
+
+The share feature previously encoded everything (expression + input + format) into the URL hash using lz-string compression. This produced unusable URLs for large input files (e.g., 50MB JSON).
+
+### Hybrid share approach
+- **Small payloads** (compressed URL <= 8000 chars): LZ-string inline in `#data=...` — same as before, no server needed
+- **Large payloads** (compressed URL > 8000 chars): uploaded to a Cloudflare Worker + KV, URL becomes `#s=<shortId>`
+
+### Cloudflare Worker (`elwood-share`)
+- Deployed at `https://elwood-share.max-favilli.workers.dev`
+- `POST /share` — stores `{e, i, f}` in Cloudflare KV, returns `{id}` (8-char random ID)
+- `GET /share/:id` — retrieves stored payload
+- Max payload: 25 MB, TTL: 90 days, CORS restricted to GitHub Pages origin + localhost
+
+### Files
+- `playground/worker/src/index.ts` (NEW) — Cloudflare Worker
+- `playground/worker/wrangler.toml` (NEW) — Worker config with KV binding
+- `playground/worker/package.json` (NEW)
+- `playground/worker/tsconfig.json` (NEW)
+- `playground/worker/README.md` (NEW) — setup/deploy instructions
+- `playground/src/lib/share-api.ts` (NEW) — `createShare()` and `loadShare()` client helpers
+- `playground/src/App.tsx` — hybrid share logic, `#s=` loading on mount, loading overlay
+- `playground/src/components/ShareModal.tsx` — loading spinner, error state, expiry note
+- `.github/workflows/deploy-playground.yml` — `VITE_SHARE_API` env var in build step
+
+---
+
+## 2026-04-18 — Test case 87: groupBy with memo + bracket property access
+
+New conformance test case combining several features in a real-world product image grouping scenario.
+
+### Features tested
+1. Bracket property access — `item["label-en_US"]` for hyphenated property names
+2. Memoized function — `memo label => ...` caches colorway extraction
+3. String split + interpolation — splits on `_`, recombines via template string
+4. groupBy with computed key — groups items by extracted colorway
+5. Nested select — `g.items | select i => i.external_url` inside outer select
+
+### Files
+- `spec/test-cases/87-groupby-memo-bracket/script.elwood` (NEW)
+- `spec/test-cases/87-groupby-memo-bracket/input.json` (NEW)
+- `spec/test-cases/87-groupby-memo-bracket/expected.json` (NEW)
+- `spec/test-cases/87-groupby-memo-bracket/explanation.md` (NEW)
+
+---
+
+## 2026-04-18 — Documentation: .NET integration guide + editor integration guide
+
+Two new docs to help other coding agents integrate Elwood into projects.
+
+### .NET Integration Guide (`docs/dotnet-integration-guide.md`)
+- How to add Elwood.Core + Elwood.Json NuGet packages to a .NET 10 project
+- ElwoodEngine API: `Evaluate()` vs `Execute()`, IElwoodValue, variable bindings, custom methods via `RegisterMethod`
+- DI registration, error handling, thread safety, complete working example
+
+### Editor Integration Guide (`docs/editor-integration-guide.md`)
+- 6-step guide for implementing a Monaco-based Elwood editor in Next.js/React
+- Full Monarch tokenizer source, dark theme, React component, context-aware autocomplete provider, real-time error reporting via `@elwood-lang/core` diagnostics
+
+### Files
+- `docs/dotnet-integration-guide.md` (NEW)
+- `docs/editor-integration-guide.md` (NEW)
+
 ## 2026-04-09 — Phase 3 Step 6c: AsyncExecutor
 
 Step-at-a-time executor for `mode: async` pipelines, designed for queue-triggered Functions where each invocation is short-lived.

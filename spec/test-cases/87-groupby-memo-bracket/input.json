@@ -1,0 +1,32 @@
+[
+  {
+    "code": "aaa111",
+    "label-en_US": "A65576_E0272_9-f800-omf-hike-2-texapore-mid-m-green-zinnia",
+    "external_url": "https://images.example.com/A65576_E0272_9-f800.png"
+  },
+  {
+    "code": "aaa222",
+    "label-en_US": "A65576_E0272_1-f100-omf-hike-2-texapore-mid-m-green-zinnia",
+    "external_url": "https://images.example.com/A65576_E0272_1-f100.png"
+  },
+  {
+    "code": "bbb111",
+    "label-en_US": "A65073_C0413_1-ma100-high-curl-jkt-w-dark-navy",
+    "external_url": "https://images.example.com/A65073_C0413_1-ma100.png"
+  },
+  {
+    "code": "bbb222",
+    "label-en_US": "A65073_C0413_3-ma110-high-curl-jkt-w-dark-navy",
+    "external_url": "https://images.example.com/A65073_C0413_3-ma110.png"
+  },
+  {
+    "code": "ccc111",
+    "label-en_US": "1711391_C0412_4-ma125-taunus-fz-w-midnight-sky",
+    "external_url": "https://images.example.com/1711391_C0412_4-ma125.png"
+  },
+  {
+    "code": "ccc222",
+    "label-en_US": "1711391_C0412_1-ma100-taunus-fz-w-midnight-sky",
+    "external_url": "https://images.example.com/1711391_C0412_1-ma100.png"
+  }
+]

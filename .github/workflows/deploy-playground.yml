@@ -47,6 +47,8 @@ jobs:
       - name: Build playground
         working-directory: playground
         run: npm run build
+        env:
+          VITE_SHARE_API: https://elwood-share.max-favilli.workers.dev
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

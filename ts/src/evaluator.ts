@@ -162,7 +162,16 @@ function evalPath(expr: import('./ast.js').PathExpression, current: unknown, sco
     switch (seg.type) {
       case 'Property':
         if (isArray(value)) {
-          value = value.map(item => isObject(item) ? (item as any)[seg.name] : null).filter(v => v !== null);
+          const arr = value as unknown[];
+          const mapped = arr.map(item => isObject(item) ? (item as any)[seg.name] : undefined);
+          const filtered = mapped.filter(v => v != null);
+          value = filtered;
+          // If every item in the array lacked this property, report a helpful error
+          if (filtered.length === 0 && arr.length > 0 && mapped.every(v => v === undefined)) {
+            const sample = arr.find(item => isObject(item));
+            const suggestion = sample ? suggestProperty(seg.name, sample) : undefined;
+            throw new Error(`Property '${seg.name}' not found on any item in the Array.${suggestion ? ' ' + suggestion : ''}`);
+          }
         } else if (isObject(value)) {
           const prop = (value as any)[seg.name];
           if (prop === undefined) {
