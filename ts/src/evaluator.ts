@@ -608,6 +608,11 @@ function callBuiltin(name: string, target: unknown, args: unknown[], _scope?: Sc
       if (isArray(target)) return target.map(item => isObject(item) ? Object.fromEntries(Object.entries(item).filter(([k]) => !names.has(k))) : item);
       return target;
     }
+    case 'omitNulls': case 'omitnulls': {
+      if (isObject(target)) return Object.fromEntries(Object.entries(target).filter(([, v]) => v !== null && v !== undefined));
+      if (isArray(target)) return target.map(item => isObject(item) ? Object.fromEntries(Object.entries(item).filter(([, v]) => v !== null && v !== undefined)) : item);
+      return target;
+    }
 
     // Collection
     case 'count': return isArray(target) ? target.length : 1;

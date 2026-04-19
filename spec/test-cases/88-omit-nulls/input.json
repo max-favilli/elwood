@@ -1,0 +1,20 @@
+[
+  {
+    "name": "Alice",
+    "email": "alice@example.com",
+    "phone": null,
+    "city": "Berlin"
+  },
+  {
+    "name": "Bob",
+    "email": null,
+    "phone": "+49 123 456",
+    "city": null
+  },
+  {
+    "name": "Charlie",
+    "email": "charlie@example.com",
+    "phone": "+49 789 012",
+    "city": "Munich"
+  }
+]

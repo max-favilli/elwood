@@ -291,6 +291,7 @@ Methods are called with dot notation on values. Most also work as pipe operators
 | `.skip(n)` | Skip n items |
 | `.keep(prop1, prop2, ...)` | Keep only named properties |
 | `.remove(prop1, prop2, ...)` | Remove named properties |
+| `.omitNulls()` | Remove properties whose value is null (shallow) |
 | `.clone()` | Deep copy |
 
 ### DateTime Methods
