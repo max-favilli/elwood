@@ -1,0 +1,8 @@
+let colorway = memo label => `{label.split("_")[0]}_{label.split("_")[1]}`
+
+return $[*]
+  | groupBy item => colorway(item["label-en_US"])
+  | select g => {
+      colorway: g.key,
+      urls: g.items | select i => i.external_url
+    }

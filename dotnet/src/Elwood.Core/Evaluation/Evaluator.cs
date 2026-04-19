@@ -112,11 +112,23 @@ public sealed class Evaluator
         // Auto-map over arrays: $.items[*].name → select each item's .name
         if (value.Kind == ElwoodValueKind.Array)
         {
-            var mapped = value.EnumerateArray()
+            var items = value.EnumerateArray().ToList();
+            var mapped = items
                 .Select(item => item.GetProperty(prop.Name))
-                .Where(p => p is not null)
-                .Cast<IElwoodValue>();
-            return _factory.CreateArray(mapped);
+                .ToList();
+            var filtered = mapped.Where(p => p is not null).Cast<IElwoodValue>().ToList();
+
+            // If every item in the array lacked this property, report a helpful error
+            if (filtered.Count == 0 && items.Count > 0 && mapped.All(p => p is null))
+            {
+                var sample = items.FirstOrDefault(i => i.Kind == ElwoodValueKind.Object);
+                throw new ElwoodEvaluationException(
+                    $"Property '{prop.Name}' not found on any item in the Array.",
+                    prop.Span,
+                    sample is not null ? SuggestProperty(prop.Name, sample) : null);
+            }
+
+            return _factory.CreateArray(filtered);
         }
 
         throw new ElwoodEvaluationException(
