@@ -10,6 +10,7 @@
     <Project Path="src/Elwood.Pipeline/Elwood.Pipeline.csproj" />
     <Project Path="src/Elwood.Pipeline.Azure/Elwood.Pipeline.Azure.csproj" />
     <Project Path="src/Elwood.Runtime.Api/Elwood.Runtime.Api.csproj" />
+    <Project Path="src/Elwood.Runtime.Azure.Functions/Elwood.Runtime.Azure.Functions.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Elwood.Core.Tests/Elwood.Core.Tests.csproj" />

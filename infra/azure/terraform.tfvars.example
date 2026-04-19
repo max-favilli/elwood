@@ -1,0 +1,14 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored — never commit real values.
+
+# Existing resources to reuse
+resource_group_name       = "rg-eagle-dev-westeurope"
+app_service_plan_name     = "asp-eagle-dev-westeurope"
+app_configuration_name    = "appconfig-eagle-dev"
+application_insights_name = "appi-eagle-dev"
+
+# New resources
+project_name = "elwood"
+environment  = "dev"
+location     = "westeurope"
+redis_sku    = "Basic_C0"
