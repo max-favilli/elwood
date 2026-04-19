@@ -1030,5 +1030,29 @@
     "description": "",
     "explanation": "# Bracket property access\n\nDemonstrates `obj[\"propertyName\"]` syntax for accessing properties with names that aren't valid identifiers.\n\nThis is essential for working with XML attributes parsed by `fromXml()`, which creates `@`-prefixed property names like `@id` and `@lang`. Since `@` isn't a valid identifier character, `b.@id` won't work — but `b[\"@id\"]` does.\n\nAlso useful for:\n- Properties with spaces, hyphens, or other special characters\n- Dynamic property access with computed keys: `obj[variableName]`",
     "isBenchmark": false
+  },
+  {
+    "id": "87-groupby-memo-bracket",
+    "title": "Groupby Memo Bracket",
+    "category": "Grouping",
+    "script": "let colorway = memo label => `{label.split(\"_\")[0]}_{label.split(\"_\")[1]}`\r\n\r\nreturn $[*]\r\n  | groupBy item => colorway(item[\"label-en_US\"])\r\n  | select g => {\r\n      colorway: g.key,\r\n      urls: g.items | select i => i.external_url\r\n    }\r\n",
+    "input": "[\r\n  {\r\n    \"code\": \"aaa111\",\r\n    \"label-en_US\": \"A65576_E0272_9-f800-omf-hike-2-texapore-mid-m-green-zinnia\",\r\n    \"external_url\": \"https://images.example.com/A65576_E0272_9-f800.png\"\r\n  },\r\n  {\r\n    \"code\": \"aaa222\",\r\n    \"label-en_US\": \"A65576_E0272_1-f100-omf-hike-2-texapore-mid-m-green-zinnia\",\r\n    \"external_url\": \"https://images.example.com/A65576_E0272_1-f100.png\"\r\n  },\r\n  {\r\n    \"code\": \"bbb111\",\r\n    \"label-en_US\": \"A65073_C0413_1-ma100-high-curl-jkt-w-dark-navy\",\r\n    \"external_url\": \"https://images.example.com/A65073_C0413_1-ma100.png\"\r\n  },\r\n  {\r\n    \"code\": \"bbb222\",\r\n    \"label-en_US\": \"A65073_C0413_3-ma110-high-curl-jkt-w-dark-navy\",\r\n    \"external_url\": \"https://images.example.com/A65073_C0413_3-ma110.png\"\r\n  },\r\n  {\r\n    \"code\": \"ccc111\",\r\n    \"label-en_US\": \"1711391_C0412_4-ma125-taunus-fz-w-midnight-sky\",\r\n    \"external_url\": \"https://images.example.com/1711391_C0412_4-ma125.png\"\r\n  },\r\n  {\r\n    \"code\": \"ccc222\",\r\n    \"label-en_US\": \"1711391_C0412_1-ma100-taunus-fz-w-midnight-sky\",\r\n    \"external_url\": \"https://images.example.com/1711391_C0412_1-ma100.png\"\r\n  }\r\n]\r\n",
+    "inputFormat": "json",
+    "expected": "[\r\n  {\r\n    \"colorway\": \"A65576_E0272\",\r\n    \"urls\": [\r\n      \"https://images.example.com/A65576_E0272_9-f800.png\",\r\n      \"https://images.example.com/A65576_E0272_1-f100.png\"\r\n    ]\r\n  },\r\n  {\r\n    \"colorway\": \"A65073_C0413\",\r\n    \"urls\": [\r\n      \"https://images.example.com/A65073_C0413_1-ma100.png\",\r\n      \"https://images.example.com/A65073_C0413_3-ma110.png\"\r\n    ]\r\n  },\r\n  {\r\n    \"colorway\": \"1711391_C0412\",\r\n    \"urls\": [\r\n      \"https://images.example.com/1711391_C0412_4-ma125.png\",\r\n      \"https://images.example.com/1711391_C0412_1-ma100.png\"\r\n    ]\r\n  }\r\n]\r\n",
+    "description": "",
+    "explanation": "# GroupBy with memo function and bracket property access\r\n\r\nCombines several features in a real-world product image grouping scenario:\r\n\r\n1. **Bracket property access** — `item[\"label-en_US\"]` accesses a property whose name contains a hyphen, which isn't valid with dot notation\r\n2. **Memoized function** — `memo label => ...` caches the colorway extraction so repeated calls with the same label value are not recomputed\r\n3. **String split + interpolation** — splits `\"A65576_E0272_9-f800-...\"` on `_`, then recombines the first two parts via `` `{...}_{...}` `` to produce `\"A65576_E0272\"`\r\n4. **groupBy with computed key** — groups items by the extracted colorway, producing `.key` and `.items` per group\r\n5. **Nested select** — inside the outer `select`, a nested `g.items | select i => i.external_url` collects all URLs for each colorway group\r\n",
+    "isBenchmark": false
+  },
+  {
+    "id": "88-omit-nulls",
+    "title": "Omit Nulls",
+    "category": "Objects",
+    "script": "$[*] | select item => {\n  name: item.name,\n  email: item.email,\n  phone: item.phone,\n  city: item.city\n}.omitNulls()\n",
+    "input": "[\n  {\n    \"name\": \"Alice\",\n    \"email\": \"alice@example.com\",\n    \"phone\": null,\n    \"city\": \"Berlin\"\n  },\n  {\n    \"name\": \"Bob\",\n    \"email\": null,\n    \"phone\": \"+49 123 456\",\n    \"city\": null\n  },\n  {\n    \"name\": \"Charlie\",\n    \"email\": \"charlie@example.com\",\n    \"phone\": \"+49 789 012\",\n    \"city\": \"Munich\"\n  }\n]\n",
+    "inputFormat": "json",
+    "expected": "[\n  {\n    \"name\": \"Alice\",\n    \"email\": \"alice@example.com\",\n    \"city\": \"Berlin\"\n  },\n  {\n    \"name\": \"Bob\",\n    \"phone\": \"+49 123 456\"\n  },\n  {\n    \"name\": \"Charlie\",\n    \"email\": \"charlie@example.com\",\n    \"phone\": \"+49 789 012\",\n    \"city\": \"Munich\"\n  }\n]\n",
+    "description": "",
+    "explanation": "# omitNulls — strip null properties from objects\n\nDemonstrates the `.omitNulls()` method for removing null-valued properties from objects, a common need when migrating from Eagle JSON maps (which have `nullValueHandling: \"Ignore\"` by default).\n\n1. **Object construction** — builds a new object with explicit property mapping\n2. **`.omitNulls()`** — removes any property whose value is `null`; properties with `false`, `0`, `\"\"`, or `[]` are kept\n3. **Auto-map over array** — when applied inside `select`, each element is processed independently\n4. **Varying null positions** — Alice has null phone, Bob has null email+city, Charlie has no nulls — verifies each case\n",
+    "isBenchmark": false
   }
 ]
