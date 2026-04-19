@@ -1,0 +1,23 @@
+[
+  {
+    "colorway": "A65576_E0272",
+    "urls": [
+      "https://images.example.com/A65576_E0272_9-f800.png",
+      "https://images.example.com/A65576_E0272_1-f100.png"
+    ]
+  },
+  {
+    "colorway": "A65073_C0413",
+    "urls": [
+      "https://images.example.com/A65073_C0413_1-ma100.png",
+      "https://images.example.com/A65073_C0413_3-ma110.png"
+    ]
+  },
+  {
+    "colorway": "1711391_C0412",
+    "urls": [
+      "https://images.example.com/1711391_C0412_4-ma125.png",
+      "https://images.example.com/1711391_C0412_1-ma100.png"
+    ]
+  }
+]
