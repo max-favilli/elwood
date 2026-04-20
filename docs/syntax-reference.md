@@ -13,6 +13,7 @@ $                         Root of the input document
 $.field                   Property access
 $.obj["@attr"]            Bracket property access (special characters)
 $.nested.field            Nested property access
+$.nullable?.child         Optional chaining — returns null if nullable is null
 $[0]                      Array index
 $[*]                      All array elements (wildcard)
 $[2:5]                    Array slice (elements 2,3,4)
@@ -23,6 +24,22 @@ $..field                  Recursive descent (find in all descendants)
 ```
 
 Property access auto-maps over arrays: `$.items[*].name` extracts `name` from each item.
+
+### Optional Chaining (`?.`)
+
+Use `?.` instead of `.` when a property might be null. Strict access (`.`) throws an error with full context when the target is null; optional access (`?.`) returns null silently.
+
+```
+$.variant.sku              Throws if $.variant is null (with expression, item index, fix suggestion)
+$.variant?.sku             Returns null if $.variant is null
+$.variant?.sku?.color      Chain multiple — short-circuits at first null
+```
+
+Combine with `.omitNulls()` for the common pattern of building objects from nullable fields:
+
+```
+{ name: $.name, sku: $.variant?.sku, size: $.variant?.title }.omitNulls()
+```
 
 ## Literals
 

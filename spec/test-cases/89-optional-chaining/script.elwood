@@ -1,0 +1,5 @@
+$[*] | select {
+  name: $.name,
+  sku: $.variant?.sku,
+  title: $.variant?.title
+}.omitNulls()
