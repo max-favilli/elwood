@@ -517,9 +517,26 @@ function evalMemberAccess(expr: import('./ast.js').MemberAccessExpression, curre
   return null;
 }
 
+// Methods that operate on the array as a whole — skip auto-mapping.
+// All other methods auto-map over array elements (consistent with property access).
+const ARRAY_NATIVE_METHODS = new Set([
+  // Collection / aggregation
+  'count', 'first', 'last', 'sum', 'min', 'max', 'index', 'take', 'skip',
+  'length', 'in', 'range', 'concat',
+  // Container checks
+  'isNull', 'isEmpty', 'isNullOrEmpty', 'isNullOrWhiteSpace',
+  // Format I/O that takes arrays as input
+  'toCsv', 'toText', 'toXml', 'toParquet', 'toXlsx',
+]);
+
 function evalMethodCall(expr: import('./ast.js').MethodCallExpression, current: unknown, scope: Scope): unknown {
   const target = evaluate(expr.target, current, scope);
   const args = expr.arguments.map(a => evaluate(a, current, scope));
+
+  if (isArray(target) && !ARRAY_NATIVE_METHODS.has(expr.methodName)) {
+    return (target as unknown[]).map(item => callBuiltin(expr.methodName, item, args, scope));
+  }
+
   return callBuiltin(expr.methodName, target, args, scope);
 }
 

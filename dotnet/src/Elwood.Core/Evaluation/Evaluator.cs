@@ -681,10 +681,32 @@ public sealed class Evaluator
         return target.GetProperty(member.MemberName) ?? _factory.CreateNull();
     }
 
+    // Methods that operate on the array as a whole — skip auto-mapping.
+    // All other methods auto-map over array elements (consistent with property access).
+    private static readonly HashSet<string> ArrayNativeMethods = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Collection / aggregation
+        "count", "first", "last", "sum", "min", "max", "index", "take", "skip",
+        "length", "in", "range", "concat",
+        // Container checks ($.arr.isNullOrEmpty() checks if the array is empty)
+        "isNull", "isEmpty", "isNullOrEmpty", "isNullOrWhiteSpace",
+        // Format I/O that takes arrays as input
+        "toCsv", "toText", "toXml", "toParquet", "toXlsx"
+    };
+
     private IElwoodValue EvaluateMethodCall(MethodCallExpression method, IElwoodValue current, ElwoodEnvironment env)
     {
         var target = Evaluate(method.Target, current, env);
         var args = method.Arguments.Select(a => Evaluate(a, current, env)).ToList();
+
+        if (target.Kind == ElwoodValueKind.Array && !ArrayNativeMethods.Contains(method.MethodName))
+        {
+            var mapped = target.EnumerateArray()
+                .Select(item => EvaluateBuiltinMethod(method.MethodName, item, args, method.Span))
+                .ToList();
+            return _factory.CreateArray(mapped);
+        }
+
         return EvaluateBuiltinMethod(method.MethodName, target, args, method.Span);
     }
 
@@ -1795,7 +1817,7 @@ public sealed class Evaluator
     private IElwoodValue EvaluateConvertTo(IElwoodValue target, List<IElwoodValue> args)
     {
         var typeName = args.Count > 0 ? args[0].GetStringValue()?.ToLower() ?? "" : "";
-        var str = target.GetStringValue() ?? "";
+        var str = ValueToString(target);
         return typeName switch
         {
             "int32" or "int" or "integer" =>
