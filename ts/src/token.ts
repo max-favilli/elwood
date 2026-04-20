@@ -11,6 +11,7 @@ export enum TokenKind {
   Dollar = 'Dollar',
   DollarDot = 'DollarDot',
   Dot = 'Dot',
+  QuestionDot = 'QuestionDot',
   DotDot = 'DotDot',
 
   // Brackets

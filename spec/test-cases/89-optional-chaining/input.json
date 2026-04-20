@@ -1,0 +1,5 @@
+[
+  { "name": "Order 1", "variant": { "sku": "JW-001", "title": "Large" } },
+  { "name": "Order 2", "variant": null },
+  { "name": "Order 3", "variant": { "sku": "JW-002", "title": "Small" } }
+]

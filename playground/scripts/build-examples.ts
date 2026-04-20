@@ -117,6 +117,7 @@ const CATEGORIES: Record<string, string> = {
   '86-bracket-property-access': 'Basics',
   '87-groupby-memo-bracket': 'Grouping',
   '88-omit-nulls': 'Objects',
+  '89-optional-chaining': 'Objects',
 };
 
 function titleFromId(id: string): string {

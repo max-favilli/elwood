@@ -163,6 +163,7 @@ export interface MemberAccessExpression {
   type: 'MemberAccess';
   target: ElwoodExpression;
   memberName: string;
+  optional?: boolean;
   span: SourceSpan;
 }
 
@@ -221,7 +222,7 @@ export type JoinMode = 'inner' | 'left' | 'right' | 'full';
 // ── Path Segments ──
 
 export type PathSegment =
-  | { type: 'Property'; name: string; span: SourceSpan }
+  | { type: 'Property'; name: string; optional?: boolean; span: SourceSpan }
   | { type: 'Index'; index: number | null; span: SourceSpan }  // null = wildcard [*]
   | { type: 'Slice'; start: number | null; end: number | null; span: SourceSpan }
   | { type: 'RecursiveDescent'; name: string; span: SourceSpan };

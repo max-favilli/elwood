@@ -1047,12 +1047,24 @@
     "id": "88-omit-nulls",
     "title": "Omit Nulls",
     "category": "Objects",
-    "script": "$[*] | select item => {\n  name: item.name,\n  email: item.email,\n  phone: item.phone,\n  city: item.city\n}.omitNulls()\n",
-    "input": "[\n  {\n    \"name\": \"Alice\",\n    \"email\": \"alice@example.com\",\n    \"phone\": null,\n    \"city\": \"Berlin\"\n  },\n  {\n    \"name\": \"Bob\",\n    \"email\": null,\n    \"phone\": \"+49 123 456\",\n    \"city\": null\n  },\n  {\n    \"name\": \"Charlie\",\n    \"email\": \"charlie@example.com\",\n    \"phone\": \"+49 789 012\",\n    \"city\": \"Munich\"\n  }\n]\n",
+    "script": "$[*] | select item => {\r\n  name: item.name,\r\n  email: item.email,\r\n  phone: item.phone,\r\n  city: item.city\r\n}.omitNulls()\r\n",
+    "input": "[\r\n  {\r\n    \"name\": \"Alice\",\r\n    \"email\": \"alice@example.com\",\r\n    \"phone\": null,\r\n    \"city\": \"Berlin\"\r\n  },\r\n  {\r\n    \"name\": \"Bob\",\r\n    \"email\": null,\r\n    \"phone\": \"+49 123 456\",\r\n    \"city\": null\r\n  },\r\n  {\r\n    \"name\": \"Charlie\",\r\n    \"email\": \"charlie@example.com\",\r\n    \"phone\": \"+49 789 012\",\r\n    \"city\": \"Munich\"\r\n  }\r\n]\r\n",
     "inputFormat": "json",
-    "expected": "[\n  {\n    \"name\": \"Alice\",\n    \"email\": \"alice@example.com\",\n    \"city\": \"Berlin\"\n  },\n  {\n    \"name\": \"Bob\",\n    \"phone\": \"+49 123 456\"\n  },\n  {\n    \"name\": \"Charlie\",\n    \"email\": \"charlie@example.com\",\n    \"phone\": \"+49 789 012\",\n    \"city\": \"Munich\"\n  }\n]\n",
+    "expected": "[\r\n  {\r\n    \"name\": \"Alice\",\r\n    \"email\": \"alice@example.com\",\r\n    \"city\": \"Berlin\"\r\n  },\r\n  {\r\n    \"name\": \"Bob\",\r\n    \"phone\": \"+49 123 456\"\r\n  },\r\n  {\r\n    \"name\": \"Charlie\",\r\n    \"email\": \"charlie@example.com\",\r\n    \"phone\": \"+49 789 012\",\r\n    \"city\": \"Munich\"\r\n  }\r\n]\r\n",
     "description": "",
-    "explanation": "# omitNulls — strip null properties from objects\n\nDemonstrates the `.omitNulls()` method for removing null-valued properties from objects, a common need when migrating from Eagle JSON maps (which have `nullValueHandling: \"Ignore\"` by default).\n\n1. **Object construction** — builds a new object with explicit property mapping\n2. **`.omitNulls()`** — removes any property whose value is `null`; properties with `false`, `0`, `\"\"`, or `[]` are kept\n3. **Auto-map over array** — when applied inside `select`, each element is processed independently\n4. **Varying null positions** — Alice has null phone, Bob has null email+city, Charlie has no nulls — verifies each case\n",
+    "explanation": "# omitNulls — strip null properties from objects\r\n\r\nDemonstrates the `.omitNulls()` method for removing null-valued properties from objects, a common need when migrating from Eagle JSON maps (which have `nullValueHandling: \"Ignore\"` by default).\r\n\r\n1. **Object construction** — builds a new object with explicit property mapping\r\n2. **`.omitNulls()`** — removes any property whose value is `null`; properties with `false`, `0`, `\"\"`, or `[]` are kept\r\n3. **Auto-map over array** — when applied inside `select`, each element is processed independently\r\n4. **Varying null positions** — Alice has null phone, Bob has null email+city, Charlie has no nulls — verifies each case\r\n",
+    "isBenchmark": false
+  },
+  {
+    "id": "89-optional-chaining",
+    "title": "Optional Chaining",
+    "category": "Objects",
+    "script": "$[*] | select {\n  name: $.name,\n  sku: $.variant?.sku,\n  title: $.variant?.title\n}.omitNulls()\n",
+    "input": "[\n  { \"name\": \"Order 1\", \"variant\": { \"sku\": \"JW-001\", \"title\": \"Large\" } },\n  { \"name\": \"Order 2\", \"variant\": null },\n  { \"name\": \"Order 3\", \"variant\": { \"sku\": \"JW-002\", \"title\": \"Small\" } }\n]\n",
+    "inputFormat": "json",
+    "expected": "[\n  { \"name\": \"Order 1\", \"sku\": \"JW-001\", \"title\": \"Large\" },\n  { \"name\": \"Order 2\" },\n  { \"name\": \"Order 3\", \"sku\": \"JW-002\", \"title\": \"Small\" }\n]\n",
+    "description": "",
+    "explanation": "# Optional chaining (`?.`) with omitNulls\n\nDemonstrates safe property access on nullable objects using `?.`, combined with `.omitNulls()` to strip null-valued properties.\n\n1. **`$.variant?.sku`** — returns the SKU when variant exists, null when variant is null (no error)\n2. **`.omitNulls()`** — removes the null sku/title properties from Order 2's output\n3. **Real-world pattern** — Shopify orders where some line items have `variant: null`\n4. **Contrast with strict access** — `$.variant.sku` (without `?`) would throw an enriched error identifying the null variant and suggesting `?.`\n",
     "isBenchmark": false
   }
 ]
