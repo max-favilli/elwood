@@ -1,0 +1,6 @@
+let edges = $.edges[*].node
+
+return {
+  names: edges[*].name,
+  skus: edges[*].variant?.sku
+}
