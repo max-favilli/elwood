@@ -664,6 +664,19 @@ public sealed class Evaluator
         // Optional chaining: if target is null and access is optional, short-circuit to null
         if (target.Kind == ElwoodValueKind.Null && member.Optional)
             return _factory.CreateNull();
+
+        // Auto-map over arrays: variable.items[*].name → select each item's .name
+        if (target.Kind == ElwoodValueKind.Array)
+        {
+            var items = target.EnumerateArray().ToList();
+            var mapped = items
+                .Select(item => item.GetProperty(member.MemberName))
+                .ToList();
+            var filtered = mapped.Where(p => p is not null).Cast<IElwoodValue>().ToList();
+            if (filtered.Count > 0 || items.Count == 0)
+                return _factory.CreateArray(filtered);
+        }
+
         // For member access on null (e.g., from left/right/full join results), return null safely
         return target.GetProperty(member.MemberName) ?? _factory.CreateNull();
     }

@@ -508,6 +508,10 @@ function evalMatchArms(arms: MatchArm[], input: unknown, scope: Scope): unknown 
 function evalMemberAccess(expr: import('./ast.js').MemberAccessExpression, current: unknown, scope: Scope): unknown {
   const target = evaluate(expr.target, current, scope);
   if (isObject(target)) return (target as any)[expr.memberName] ?? null;
+  // Auto-map over arrays: variable.items[*].name → select each item's .name
+  if (isArray(target)) {
+    return (target as unknown[]).map(item => isObject(item) ? (item as any)[expr.memberName] ?? null : null).filter(v => v !== null);
+  }
   // For member access on null: optional (?.) returns null, strict (.) also returns null
   // for backward compat with join results where unmatched sides are null
   return null;

@@ -1,0 +1,7 @@
+{
+  "edges": [
+    { "node": { "name": "Widget", "variant": { "sku": "W-001" } } },
+    { "node": { "name": "Gadget", "variant": null } },
+    { "node": { "name": "Doohickey", "variant": { "sku": "D-003" } } }
+  ]
+}
