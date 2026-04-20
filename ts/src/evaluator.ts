@@ -89,6 +89,24 @@ function suggestProperty(attempted: string, obj: unknown): string | undefined {
   return `Available properties: ${names.slice(0, 10).join(', ')}`;
 }
 
+// ── Pipe iteration context (for enriched error messages) ──
+// Only read when an error occurs — zero overhead on happy path.
+let _pipeContext: { op: string; index: number; total: number } | null = null;
+
+function buildPathString(segments: PathSegment[], upTo: number): string {
+  let path = '$';
+  for (let i = 0; i <= upTo; i++) {
+    const seg = segments[i];
+    switch (seg.type) {
+      case 'Property': path += '.' + seg.name; break;
+      case 'Index': path += seg.index === null ? '[*]' : `[${seg.index}]`; break;
+      case 'Slice': path += `[${seg.start ?? ''}:${seg.end ?? ''}]`; break;
+      case 'RecursiveDescent': path += '..' + seg.name; break;
+    }
+  }
+  return path;
+}
+
 // ── Memoized Function ──
 
 class MemoizedFunction {
@@ -158,7 +176,8 @@ function evaluate(expr: ElwoodExpression, current: unknown, scope: Scope): unkno
 
 function evalPath(expr: import('./ast.js').PathExpression, current: unknown, scope: Scope): unknown {
   let value = expr.isRooted ? (scope.get('$root') ?? current) : current;
-  for (const seg of expr.segments) {
+  for (let segIdx = 0; segIdx < expr.segments.length; segIdx++) {
+    const seg = expr.segments[segIdx];
     switch (seg.type) {
       case 'Property':
         if (isArray(value)) {
@@ -180,7 +199,15 @@ function evalPath(expr: import('./ast.js').PathExpression, current: unknown, sco
           }
           value = prop;
         } else {
-          return null;
+          // Accessing a property on null/undefined/primitive — throw with context
+          const fullPath = buildPathString(expr.segments, segIdx);
+          const resolvedPath = segIdx > 0 ? buildPathString(expr.segments, segIdx - 1) : '$';
+          let msg = `Cannot access property '${seg.name}' on null. Expression: ${fullPath} — ${resolvedPath} is null.`;
+          if (_pipeContext) {
+            msg += ` While processing item [${_pipeContext.index}] of ${_pipeContext.total} in | ${_pipeContext.op}.`;
+          }
+          const suggestion = `Did you mean: if ${resolvedPath} != null then ${fullPath} else null`;
+          throw new Error(`${msg} ${suggestion}`);
         }
         break;
       case 'Index':
@@ -300,8 +327,18 @@ function evalWithLambdaOrImplicit(expr: ElwoodExpression, item: unknown, scope: 
 function evalPipeOp(op: PipeOperation, input: unknown, scope: Scope): unknown {
   const items = toArray(input);
   switch (op.type) {
-    case 'Where': return items.filter(item => isTruthy(evalWithLambdaOrImplicit(op.predicate, item, scope)));
-    case 'Select': return items.map(item => evalWithLambdaOrImplicit(op.projection, item, scope));
+    case 'Where': return items.filter((item, idx) => {
+      _pipeContext = { op: 'where', index: idx, total: items.length };
+      const result = isTruthy(evalWithLambdaOrImplicit(op.predicate, item, scope));
+      _pipeContext = null;
+      return result;
+    });
+    case 'Select': return items.map((item, idx) => {
+      _pipeContext = { op: 'select', index: idx, total: items.length };
+      const result = evalWithLambdaOrImplicit(op.projection, item, scope);
+      _pipeContext = null;
+      return result;
+    });
     case 'SelectMany': return items.flatMap(item => {
       const r = evalWithLambdaOrImplicit(op.projection, item, scope);
       return isArray(r) ? r : [r];
@@ -469,6 +506,7 @@ function evalMatchArms(arms: MatchArm[], input: unknown, scope: Scope): unknown 
 function evalMemberAccess(expr: import('./ast.js').MemberAccessExpression, current: unknown, scope: Scope): unknown {
   const target = evaluate(expr.target, current, scope);
   if (isObject(target)) return (target as any)[expr.memberName] ?? null;
+  // For member access on null (e.g., from left/right/full join), return null safely
   return null;
 }
 
