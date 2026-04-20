@@ -363,6 +363,24 @@ public sealed class Parser
                     expr = new MemberAccessExpression(expr, name, Span(start));
                 }
             }
+            else if (Match(TokenKind.QuestionDot))
+            {
+                var start = Previous.Span;
+                var name = Expect(TokenKind.Identifier, "Expected property name after '?.'").Text;
+
+                // Check if it's a method call: ?.name(
+                if (Match(TokenKind.LeftParen))
+                {
+                    var args = ParseArgumentList();
+                    Expect(TokenKind.RightParen, "Expected ')' after arguments");
+                    // For optional method calls, we wrap with null-check at evaluation time
+                    expr = new MethodCallExpression(expr, name, args, Span(start));
+                }
+                else
+                {
+                    expr = new MemberAccessExpression(expr, name, Span(start), Optional: true);
+                }
+            }
             else if (Match(TokenKind.LeftBracket))
             {
                 var start = Previous.Span;
@@ -535,13 +553,31 @@ public sealed class Parser
             segments.Add(new PropertySegment(Advance().Text, Span(Current.Span)));
         }
 
-        // Continue with .prop or [index] or ..prop
+        // Continue with .prop or ?.prop or [index] or ..prop
         while (true)
         {
             if (Match(TokenKind.DotDot))
             {
                 var name = Expect(TokenKind.Identifier, "Expected property name after '..'").Text;
                 segments.Add(new RecursiveDescentSegment(name, Span(Current.Span)));
+            }
+            else if (Check(TokenKind.QuestionDot))
+            {
+                // Lookahead: if ?.identifier( then stop — it's a method call, not a path segment
+                if (PeekAt(1)?.Kind == TokenKind.Identifier && PeekAt(2)?.Kind == TokenKind.LeftParen)
+                {
+                    break; // let ParsePostfix() handle ?.method()
+                }
+
+                Advance(); // consume the ?.
+                if (Check(TokenKind.Identifier))
+                {
+                    segments.Add(new PropertySegment(Advance().Text, Span(Current.Span), Optional: true));
+                }
+                else
+                {
+                    break; // ?. not followed by identifier — let caller handle
+                }
             }
             else if (Check(TokenKind.Dot) && !Check(TokenKind.DotDot))
             {

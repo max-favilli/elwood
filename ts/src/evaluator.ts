@@ -98,7 +98,7 @@ function buildPathString(segments: PathSegment[], upTo: number): string {
   for (let i = 0; i <= upTo; i++) {
     const seg = segments[i];
     switch (seg.type) {
-      case 'Property': path += '.' + seg.name; break;
+      case 'Property': path += (seg.optional ? '?.' : '.') + seg.name; break;
       case 'Index': path += seg.index === null ? '[*]' : `[${seg.index}]`; break;
       case 'Slice': path += `[${seg.start ?? ''}:${seg.end ?? ''}]`; break;
       case 'RecursiveDescent': path += '..' + seg.name; break;
@@ -199,14 +199,16 @@ function evalPath(expr: import('./ast.js').PathExpression, current: unknown, sco
           }
           value = prop;
         } else {
-          // Accessing a property on null/undefined/primitive — throw with context
+          // Optional chaining (?.): return null silently
+          if (seg.optional) return null;
+          // Strict access (.): throw with enriched context
           const fullPath = buildPathString(expr.segments, segIdx);
           const resolvedPath = segIdx > 0 ? buildPathString(expr.segments, segIdx - 1) : '$';
           let msg = `Cannot access property '${seg.name}' on null. Expression: ${fullPath} — ${resolvedPath} is null.`;
           if (_pipeContext) {
             msg += ` While processing item [${_pipeContext.index}] of ${_pipeContext.total} in | ${_pipeContext.op}.`;
           }
-          const suggestion = `Did you mean: if ${resolvedPath} != null then ${fullPath} else null`;
+          const suggestion = `Did you mean: ${resolvedPath}?.${seg.name}`;
           throw new Error(`${msg} ${suggestion}`);
         }
         break;
@@ -506,7 +508,8 @@ function evalMatchArms(arms: MatchArm[], input: unknown, scope: Scope): unknown 
 function evalMemberAccess(expr: import('./ast.js').MemberAccessExpression, current: unknown, scope: Scope): unknown {
   const target = evaluate(expr.target, current, scope);
   if (isObject(target)) return (target as any)[expr.memberName] ?? null;
-  // For member access on null (e.g., from left/right/full join), return null safely
+  // For member access on null: optional (?.) returns null, strict (.) also returns null
+  // for backward compat with join results where unmatched sides are null
   return null;
 }
 

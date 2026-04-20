@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-04-20 — Optional chaining (`?.`) + enriched null-access errors
+
+### Optional chaining
+New `?.` operator for safe property access on nullable values, matching the pattern established by C#, Kotlin, Swift, and JavaScript:
+
+```elwood
+$.variant?.sku             // returns null if variant is null
+$.variant.sku              // throws with enriched error if variant is null
+```
+
+Combines naturally with `.omitNulls()` for the Eagle map migration pattern:
+```elwood
+{ name: $.name, sku: $.variant?.sku, size: $.variant?.title }.omitNulls()
+```
+
+Works in both path expressions (`$.a?.b`) and member access (`expr?.prop`).
+
+### Enriched null-access errors
+When strict access (`.`) hits null, the error now includes:
+- Full expression chain: `Expression: $.variant.sku — $.variant is null`
+- Pipe iteration context: `While processing item [1] of 3 in | select`
+- Fix suggestion: `Did you mean: $.variant?.sku`
+
+### C#/TS consistency
+Both engines now throw on strict null path access (previously TS silently returned null). Optional chaining (`?.`) provides the explicit opt-in for safe navigation.
+
+### Files
+- `ts/src/token.ts` — `QuestionDot` token
+- `ts/src/lexer.ts` — `?.` two-char token recognition
+- `ts/src/ast.ts` — `optional` flag on `Property` segment and `MemberAccessExpression`
+- `ts/src/parser.ts` — parse `?.` in path segments and postfix
+- `ts/src/evaluator.ts` — optional returns null, strict throws enriched error, pipe context tracking
+- `dotnet/src/Elwood.Core/Syntax/TokenKind.cs` — `QuestionDot`
+- `dotnet/src/Elwood.Core/Parsing/Lexer.cs` — `?.` recognition
+- `dotnet/src/Elwood.Core/Syntax/Ast.cs` — `Optional` on `PropertySegment` and `MemberAccessExpression`
+- `dotnet/src/Elwood.Core/Parsing/Parser.cs` — parse `?.` in path segments and postfix
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — optional returns null, enriched errors, `BuildPathString`, pipe context
+- `docs/syntax-reference.md` — optional chaining documentation
+- `docs/changelog.md`
+
 ## 2026-04-19 — `.omitNulls()` method
 
 New built-in method that removes null-valued properties from objects. Designed for Eagle map migration where `nullValueHandling: "Ignore"` (the default on 98% of production maps) automatically strips nulls from output.

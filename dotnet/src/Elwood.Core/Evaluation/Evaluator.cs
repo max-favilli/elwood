@@ -137,7 +137,11 @@ public sealed class Evaluator
             return _factory.CreateArray(filtered);
         }
 
-        // Accessing a property on Null — produce enriched error with full path + context
+        // Accessing a property on Null — if optional chaining, return null instead of throwing
+        if (prop.Optional)
+            return _factory.CreateNull();
+
+        // Produce enriched error with full path + context
         var fullPath = BuildPathString(segments, segIndex);
         var resolvedPath = segIndex > 0 ? BuildPathString(segments, segIndex - 1) : "$";
         var msg = $"Cannot access property '{prop.Name}' on Null. Expression: {fullPath} — {resolvedPath} is null.";
@@ -657,6 +661,9 @@ public sealed class Evaluator
     private IElwoodValue EvaluateMemberAccess(MemberAccessExpression member, IElwoodValue current, ElwoodEnvironment env)
     {
         var target = Evaluate(member.Target, current, env);
+        // Optional chaining: if target is null and access is optional, short-circuit to null
+        if (target.Kind == ElwoodValueKind.Null && member.Optional)
+            return _factory.CreateNull();
         // For member access on null (e.g., from left/right/full join results), return null safely
         return target.GetProperty(member.MemberName) ?? _factory.CreateNull();
     }
@@ -1919,7 +1926,7 @@ public sealed class Evaluator
         {
             switch (segments[i])
             {
-                case PropertySegment p: sb.Append('.').Append(p.Name); break;
+                case PropertySegment p: sb.Append(p.Optional ? "?." : ".").Append(p.Name); break;
                 case IndexSegment { Index: null }: sb.Append("[*]"); break;
                 case IndexSegment { Index: int idx }: sb.Append('[').Append(idx).Append(']'); break;
                 case SliceSegment s: sb.Append('[').Append(s.Start?.ToString() ?? "").Append(':').Append(s.End?.ToString() ?? "").Append(']'); break;
