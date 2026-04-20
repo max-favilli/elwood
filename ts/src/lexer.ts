@@ -56,6 +56,7 @@ const TWO_CHAR: Record<string, TokenKind> = {
   '&&': TokenKind.AmpersandAmpersand,
   '||': TokenKind.PipePipe,
   '..': TokenKind.DotDot,
+  '?.': TokenKind.QuestionDot,
 };
 
 function isDigit(c: string): boolean {

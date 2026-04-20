@@ -140,11 +140,12 @@ public sealed record FunctionCallExpression(
     SourceSpan Span
 ) : ElwoodExpression(Span);
 
-/// <summary>Property access on an expression: expr.property</summary>
+/// <summary>Property access on an expression: expr.property or expr?.property</summary>
 public sealed record MemberAccessExpression(
     ElwoodExpression Target,
     string MemberName,
-    SourceSpan Span
+    SourceSpan Span,
+    bool Optional = false
 ) : ElwoodExpression(Span);
 
 /// <summary>Index access: expr[index] or expr[*]</summary>
@@ -223,8 +224,8 @@ public sealed record MatchOperation(IReadOnlyList<MatchArm> Arms, SourceSpan Spa
 
 public abstract record PathSegment(SourceSpan Span);
 
-/// <summary>Simple property: .foo</summary>
-public sealed record PropertySegment(string Name, SourceSpan Span) : PathSegment(Span);
+/// <summary>Simple property: .foo or ?.foo (optional chaining)</summary>
+public sealed record PropertySegment(string Name, SourceSpan Span, bool Optional = false) : PathSegment(Span);
 
 /// <summary>Array index: [0] or wildcard: [*]</summary>
 public sealed record IndexSegment(int? Index, SourceSpan Span) : PathSegment(Span); // null = wildcard

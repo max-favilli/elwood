@@ -277,15 +277,16 @@ class Parser {
     let expr = this.parsePrimary();
 
     while (true) {
-      if (this.match(TokenKind.Dot)) {
+      if (this.match(TokenKind.Dot) || this.match(TokenKind.QuestionDot)) {
+        const optional = this.previous().kind === TokenKind.QuestionDot;
         const start = this.previous().span;
-        const name = this.expect(TokenKind.Identifier, "Expected property name after '.'").text;
+        const name = this.expect(TokenKind.Identifier, `Expected property name after '${optional ? '?.' : '.'}'`).text;
         if (this.match(TokenKind.LeftParen)) {
           const args = this.parseArgList();
           this.expect(TokenKind.RightParen, "Expected ')'");
           expr = { type: 'MethodCall', target: expr, methodName: name, arguments: args, span: this.span(start) };
         } else {
-          expr = { type: 'MemberAccess', target: expr, memberName: name, span: this.span(start) };
+          expr = { type: 'MemberAccess', target: expr, memberName: name, optional, span: this.span(start) };
         }
       } else if (this.match(TokenKind.LeftBracket)) {
         const start = this.previous().span;
@@ -421,6 +422,11 @@ class Parser {
       if (this.match(TokenKind.DotDot)) {
         const name = this.expect(TokenKind.Identifier, "Expected name after '..'").text;
         segments.push({ type: 'RecursiveDescent', name, span: this.span(this.current().span) });
+      } else if (this.check(TokenKind.QuestionDot)) {
+        this.advance();
+        if (this.check(TokenKind.Identifier)) {
+          segments.push({ type: 'Property', name: this.advance().text, optional: true, span: this.span(this.current().span) });
+        } else break;
       } else if (this.check(TokenKind.Dot) && !this.check(TokenKind.DotDot)) {
         // Stop if .identifier( — it's a method call
         if (this.peekAt(1)?.kind === TokenKind.Identifier && this.peekAt(2)?.kind === TokenKind.LeftParen) break;

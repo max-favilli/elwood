@@ -158,6 +158,7 @@ public sealed class Lexer
                 "&&" => TokenKind.AmpersandAmpersand,
                 "||" => TokenKind.PipePipe,
                 ".." => TokenKind.DotDot,
+                "?." => TokenKind.QuestionDot,
                 _ => (TokenKind?)null
             };
             if (kind2 is not null)

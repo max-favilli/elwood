@@ -15,6 +15,7 @@ public enum TokenKind
     DollarDot,          // $.
     Dot,                // .
     DotDot,             // ..  (recursive descent)
+    QuestionDot,        // ?.  (optional chaining)
 
     // Brackets
     LeftBracket,        // [
