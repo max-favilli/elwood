@@ -14,6 +14,11 @@ public sealed class Evaluator
     private readonly Extensions.ElwoodExtensionRegistry? _extensions;
     private readonly List<ElwoodDiagnostic> _diagnostics = [];
 
+    // Pipe iteration context for enriched error messages. Only read when an error occurs.
+    private string? _pipeOp;
+    private int _pipeIndex;
+    private int _pipeTotal;
+
     public IReadOnlyList<ElwoodDiagnostic> Diagnostics => _diagnostics;
 
     public Evaluator(IElwoodValueFactory factory, Extensions.ElwoodExtensionRegistry? extensions = null)
@@ -81,11 +86,12 @@ public sealed class Evaluator
     {
         var value = path.IsRooted ? (env.Get("$root") ?? current) : current;
 
-        foreach (var segment in path.Segments)
+        for (int i = 0; i < path.Segments.Count; i++)
         {
+            var segment = path.Segments[i];
             value = segment switch
             {
-                PropertySegment prop => ResolveProperty(value, prop),
+                PropertySegment prop => ResolveProperty(value, prop, path.Segments, i),
                 IndexSegment { Index: null } => new LazyArrayValue(value.EnumerateArray(), _factory),
                 IndexSegment { Index: int idx } => value.EnumerateArray().ElementAtOrDefault(idx) ??
                     throw new ElwoodEvaluationException($"Index {idx} out of range.", segment.Span),
@@ -98,7 +104,7 @@ public sealed class Evaluator
         return value;
     }
 
-    private IElwoodValue ResolveProperty(IElwoodValue value, PropertySegment prop)
+    private IElwoodValue ResolveProperty(IElwoodValue value, PropertySegment prop, IReadOnlyList<PathSegment> segments, int segIndex)
     {
         if (value.Kind == ElwoodValueKind.Object)
         {
@@ -131,9 +137,14 @@ public sealed class Evaluator
             return _factory.CreateArray(filtered);
         }
 
-        throw new ElwoodEvaluationException(
-            $"Cannot access property '{prop.Name}' on {value.Kind}.",
-            prop.Span);
+        // Accessing a property on Null — produce enriched error with full path + context
+        var fullPath = BuildPathString(segments, segIndex);
+        var resolvedPath = segIndex > 0 ? BuildPathString(segments, segIndex - 1) : "$";
+        var msg = $"Cannot access property '{prop.Name}' on Null. Expression: {fullPath} — {resolvedPath} is null.";
+        if (_pipeOp is not null)
+            msg += $" While processing item [{_pipeIndex}] of {_pipeTotal} in | {_pipeOp}.";
+        var suggestion = $"Did you mean: if {resolvedPath} != null then {fullPath} else null";
+        throw new ElwoodEvaluationException(msg, prop.Span, suggestion);
     }
 
     private IElwoodValue EvaluateSliceSegment(IElwoodValue value, SliceSegment slice)
@@ -310,10 +321,16 @@ public sealed class Evaluator
 
     private IElwoodValue EvaluateWhere(WhereOperation where, IElwoodValue input, ElwoodEnvironment env)
     {
+        // Only get total for concrete arrays — avoid materializing lazy arrays just for error context
+        var total = input is not LazyArrayValue && input.Kind == ElwoodValueKind.Array ? input.GetArrayLength() : -1;
+        var index = 0;
         var items = input.EnumerateArray()
             .Where(item =>
             {
+                _pipeOp = "where"; _pipeIndex = index; _pipeTotal = total;
                 var result = EvaluateWithLambdaOrImplicit(where.Predicate, item, env);
+                index++;
+                _pipeOp = null;
                 return IsTruthy(result);
             });
         return new LazyArrayValue(items, _factory);
@@ -321,8 +338,17 @@ public sealed class Evaluator
 
     private IElwoodValue EvaluateSelect(SelectOperation select, IElwoodValue input, ElwoodEnvironment env)
     {
+        var total = input is not LazyArrayValue && input.Kind == ElwoodValueKind.Array ? input.GetArrayLength() : -1;
+        var index = 0;
         var items = input.EnumerateArray()
-            .Select(item => EvaluateWithLambdaOrImplicit(select.Projection, item, env));
+            .Select(item =>
+            {
+                _pipeOp = "select"; _pipeIndex = index; _pipeTotal = total;
+                var result = EvaluateWithLambdaOrImplicit(select.Projection, item, env);
+                index++;
+                _pipeOp = null;
+                return result;
+            });
         return new LazyArrayValue(items, _factory);
     }
 
@@ -631,8 +657,7 @@ public sealed class Evaluator
     private IElwoodValue EvaluateMemberAccess(MemberAccessExpression member, IElwoodValue current, ElwoodEnvironment env)
     {
         var target = Evaluate(member.Target, current, env);
-        // Return null for missing properties (safe navigation)
-        // This enables left/right/full joins where some properties may not exist
+        // For member access on null (e.g., from left/right/full join results), return null safely
         return target.GetProperty(member.MemberName) ?? _factory.CreateNull();
     }
 
@@ -1885,6 +1910,23 @@ public sealed class Evaluator
             ElwoodValueKind.Object => $"{{{string.Join(",", value.GetPropertyNames().Select(n => $"\"{n}\":{Serialize(value.GetProperty(n)!)}"))}}}",
             _ => "?"
         };
+    }
+
+    private static string BuildPathString(IReadOnlyList<PathSegment> segments, int upTo)
+    {
+        var sb = new System.Text.StringBuilder("$");
+        for (int i = 0; i <= upTo && i < segments.Count; i++)
+        {
+            switch (segments[i])
+            {
+                case PropertySegment p: sb.Append('.').Append(p.Name); break;
+                case IndexSegment { Index: null }: sb.Append("[*]"); break;
+                case IndexSegment { Index: int idx }: sb.Append('[').Append(idx).Append(']'); break;
+                case SliceSegment s: sb.Append('[').Append(s.Start?.ToString() ?? "").Append(':').Append(s.End?.ToString() ?? "").Append(']'); break;
+                case RecursiveDescentSegment rd: sb.Append("..").Append(rd.Name); break;
+            }
+        }
+        return sb.ToString();
     }
 
     private static string? SuggestProperty(string attempted, IElwoodValue target)
