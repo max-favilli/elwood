@@ -1,0 +1,8 @@
+{
+  "inputName": "Slice A",
+  "inputValue": 10,
+  "rootName": "Full Document",
+  "rootValue": 99,
+  "rootExtra": "only-in-root",
+  "sourceEndpoint": "https://api.example.com"
+}

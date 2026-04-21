@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-04-21 — Fix `$root` binding collision with `$` path resolution + bindings API for TS
+
+### Bug fix
+Passing a `$root` binding (e.g. from Eagle to provide the full unsliced IDM) overwrote the internal scope key that `$` path resolution uses, making `$.field` resolve against the binding instead of the input. Now `$` path resolution uses a separate internal key (`"$"`) that bindings cannot collide with.
+
+After fix:
+- `$.field` always resolves from the **input** (first argument to `Execute`/`evaluate`)
+- `$root` as an identifier resolves from the **binding** when provided, or defaults to input
+- Other bindings (`$source`, `$event`, etc.) work as before
+
+### TS bindings API
+`evaluate()` and `execute()` in the TypeScript engine now accept an optional `bindings` parameter, matching the .NET API:
+```typescript
+execute(script, input, { $root: fullDoc, $source: sourceInfo })
+```
+
+### Files
+- `dotnet/src/Elwood.Core/ElwoodEngine.cs` — set `"$"` key before bindings loop
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — use `"$"` for path resolution, lambda context, join, memo
+- `ts/src/evaluator.ts` — mirror all `$root` → `$` changes, accept bindings in evaluateExpression/evaluateScript
+- `ts/src/index.ts` — add optional `bindings` parameter to public `evaluate()` and `execute()`
+- `ts/tests/conformance.test.ts` — load `bindings.json` when present
+- `dotnet/tests/Elwood.Core.Tests/FileBasedTests.cs` — load `bindings.json` when present
+- `spec/test-cases/91-root-binding/` — new test: `$root` binding vs `$` input resolution
+
 ## 2026-04-20 — Optional chaining (`?.`) + enriched null-access errors
 
 ### Optional chaining
