@@ -5,7 +5,7 @@
  * to the .NET reference engine.
  */
 
-import { parseExpression, parseScript } from './parser.js';
+import { parseExpression, parseScript, ParseError } from './parser.js';
 import { evaluateExpression, evaluateScript } from './evaluator.js';
 import type { Diagnostic } from './lexer.js';
 
@@ -43,11 +43,10 @@ export function evaluate(expression: string, input: unknown, bindings?: Record<s
     const value = evaluateExpression(ast, input, bindings);
     return { value, success: true, diagnostics: diagnostics.map(toDiag) };
   } catch (err: any) {
-    return {
-      value: null,
-      success: false,
-      diagnostics: [{ severity: 'error', message: err.message }],
-    };
+    const diag = err instanceof ParseError
+      ? toDiag(err.diagnostic)
+      : { severity: 'error' as const, message: err.message };
+    return { value: null, success: false, diagnostics: [diag] };
   }
 }
 
@@ -64,11 +63,10 @@ export function execute(script: string, input: unknown, bindings?: Record<string
     const value = evaluateScript(ast, input, bindings);
     return { value, success: true, diagnostics: diagnostics.map(toDiag) };
   } catch (err: any) {
-    return {
-      value: null,
-      success: false,
-      diagnostics: [{ severity: 'error', message: err.message }],
-    };
+    const diag = err instanceof ParseError
+      ? toDiag(err.diagnostic)
+      : { severity: 'error' as const, message: err.message };
+    return { value: null, success: false, diagnostics: [diag] };
   }
 }
 

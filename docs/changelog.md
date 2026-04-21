@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-21 — Preserve parse error position info in TS public API
+
+The `evaluate()` and `execute()` catch blocks in `ts/src/index.ts` discarded line/column info from `ParseError` exceptions, returning only the message. Now checks for `ParseError` and uses its `.diagnostic` span info.
+
+- `ts/src/index.ts` — import `ParseError`, use `toDiag(err.diagnostic)` in both catch blocks
+
 ## 2026-04-21 — Fix `$root` binding collision with `$` path resolution + bindings API for TS
 
 ### Bug fix
