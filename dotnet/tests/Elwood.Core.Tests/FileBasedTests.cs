@@ -75,14 +75,15 @@ public class FileBasedTests
 
             if (inputFile is not null)
             {
-                yield return [name, scriptFile, inputFile, expectedFile];
+                var bindingsFile = Path.Combine(dir, "bindings.json");
+                yield return [name, scriptFile, inputFile, expectedFile, bindingsFile];
             }
         }
     }
 
     [Theory]
     [MemberData(nameof(GetTestCases))]
-    public void TestCase(string name, string scriptFile, string inputFile, string expectedFile)
+    public void TestCase(string name, string scriptFile, string inputFile, string expectedFile, string bindingsFile)
     {
         var script = File.ReadAllText(scriptFile);
         var inputContent = File.ReadAllText(inputFile);
@@ -94,12 +95,21 @@ public class FileBasedTests
             ? Factory.Parse(inputContent)
             : Factory.CreateString(inputContent);
 
+        Dictionary<string, Abstractions.IElwoodValue>? bindings = null;
+        if (File.Exists(bindingsFile))
+        {
+            var bindingsJson = JsonNode.Parse(File.ReadAllText(bindingsFile))!.AsObject();
+            bindings = new Dictionary<string, Abstractions.IElwoodValue>();
+            foreach (var (key, value) in bindingsJson)
+                bindings[key] = Factory.Parse(value?.ToJsonString() ?? "null");
+        }
+
         var isScript = script.TrimStart().StartsWith("let ") || script.Contains("\nlet ") || script.Contains("return ");
 
         var sw = Stopwatch.StartNew();
         var result = isScript
-            ? Engine.Execute(script, input)
-            : Engine.Evaluate(script.Trim(), input);
+            ? Engine.Execute(script, input, bindings)
+            : Engine.Evaluate(script.Trim(), input, bindings);
         sw.Stop();
 
         Assert.True(result.Success,

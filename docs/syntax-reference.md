@@ -9,7 +9,7 @@ Elwood is a functional JSON transformation DSL combining JSONPath navigation, KQ
 ## Navigation (JSONPath)
 
 ```
-$                         Root of the input document
+$                         Root of the input document (always the Execute input parameter)
 $.field                   Property access
 $.obj["@attr"]            Bracket property access (special characters)
 $.nested.field            Nested property access
@@ -176,6 +176,33 @@ return { adults: adults, count: count }
 ```
 
 Variables are visible to all subsequent bindings and the return expression.
+
+## External Bindings
+
+The host application can inject named variables into the script's scope via the `bindings` parameter:
+
+```csharp
+// .NET
+engine.Execute(script, input, new Dictionary<string, IElwoodValue>
+{
+    ["$root"] = fullDocument,
+    ["$source"] = sourceInfo,
+});
+```
+
+```typescript
+// TypeScript
+execute(script, input, { $root: fullDocument, $source: sourceInfo });
+```
+
+Inside the script, these are accessed by name like any other variable:
+
+```
+$source.headers.Authorization
+$root.parentField
+```
+
+**Important**: `$` (rooted paths like `$.field`) always resolves to the **input** parameter, even when a `$root` binding is provided. The `$root` identifier resolves to the binding value. When no `$root` binding is passed, both `$` and `$root` point to the input.
 
 ## Memoized Functions
 

@@ -53,6 +53,7 @@ public sealed class ElwoodEngine
 
             var evaluator = new Evaluator(_factory, _extensions);
             var env = new ElwoodEnvironment();
+            env.Set("$", input);
             env.Set("$root", input);
             if (bindings is not null)
                 foreach (var (key, value) in bindings)

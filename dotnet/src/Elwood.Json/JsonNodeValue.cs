@@ -28,7 +28,7 @@ public sealed class JsonNodeValue : IElwoodValue
         _ => ElwoodValueKind.Null
     };
 
-    public string? GetStringValue() => _node?.GetValue<string>();
+    public string? GetStringValue() => _node is JsonValue v ? v.GetValue<string>() : null;
     public double GetNumberValue()
     {
         if (_node is JsonValue v)

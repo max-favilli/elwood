@@ -12,6 +12,7 @@ interface TestCase {
   script: string;
   input: unknown;
   expected: unknown;
+  bindings?: Record<string, unknown>;
 }
 
 // Collect timings during the run
@@ -52,7 +53,12 @@ function discoverTestCases(): TestCase[] {
     const input = inputExt === '.json' ? JSON.parse(inputContent) : inputContent;
     const expected = JSON.parse(readFileSync(expectedPath, 'utf-8'));
 
-    cases.push({ name: dir, script, input, expected });
+    const bindingsPath = join(specDir, dir, 'bindings.json');
+    const bindings = existsSync(bindingsPath)
+      ? JSON.parse(readFileSync(bindingsPath, 'utf-8')) as Record<string, unknown>
+      : undefined;
+
+    cases.push({ name: dir, script, input, expected, bindings });
   }
 
   return cases;
@@ -123,15 +129,15 @@ function flushTimingLog() {
 const testCases = discoverTestCases();
 
 describe('Conformance Tests', () => {
-  it.each(testCases)('$name', ({ name, script, input, expected }) => {
+  it.each(testCases)('$name', ({ name, script, input, expected, bindings }) => {
     const isScript = script.trimStart().startsWith('let ') ||
                      script.includes('\nlet ') ||
                      script.includes('return ');
 
     const start = performance.now();
     const result = isScript
-      ? execute(script, input)
-      : evaluate(script.trim(), input);
+      ? execute(script, input, bindings)
+      : evaluate(script.trim(), input, bindings);
     const ms = Math.round(performance.now() - start);
 
     timings.push({ name, ms });
