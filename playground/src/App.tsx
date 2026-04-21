@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import Editor, { loader } from '@monaco-editor/react';
+import Editor, { loader, type OnMount } from '@monaco-editor/react';
+import type * as Monaco from 'monaco-editor';
 import { Toolbar } from './components/Toolbar';
 import { PanelHeader, PanelButton } from './components/PanelHeader';
 import { StatusBar } from './components/StatusBar';
@@ -80,6 +81,9 @@ function App() {
   const [showLargeFileConfirm, setShowLargeFileConfirm] = useState(false);
   const resizing = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const exprEditorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const exprMonacoRef = useRef<typeof Monaco | null>(null);
+  const decorationsRef = useRef<string[]>([]);
 
   const inputSizeBytes = useMemo(() => new TextEncoder().encode(input).length, [input]);
   const outputSizeBytes = useMemo(() => new TextEncoder().encode(result.output).length, [result.output]);
@@ -255,6 +259,52 @@ function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const handleExprEditorMount: OnMount = useCallback((editor, monaco) => {
+    exprEditorRef.current = editor;
+    exprMonacoRef.current = monaco;
+  }, []);
+
+  const hasInlineDiag = result.diagnostics.length > 0;
+
+  useEffect(() => {
+    const editor = exprEditorRef.current;
+    const monaco = exprMonacoRef.current;
+    if (!editor || !monaco) return;
+
+    const model = editor.getModel();
+    if (!model) return;
+
+    if (result.diagnostics.length > 0) {
+      const markers: Monaco.editor.IMarkerData[] = result.diagnostics.map(d => {
+        const lineLength = model.getLineLength(d.line) || 1;
+        return {
+          severity: monaco.MarkerSeverity.Error,
+          message: d.message,
+          startLineNumber: d.line,
+          startColumn: d.column,
+          endLineNumber: d.line,
+          endColumn: lineLength + 1,
+        };
+      });
+      monaco.editor.setModelMarkers(model, 'elwood-runtime', markers);
+
+      const decos = result.diagnostics.map(d => ({
+        range: new monaco.Range(d.line, 1, d.line, 1),
+        options: {
+          isWholeLine: true,
+          className: 'runtime-error-line',
+          glyphMarginClassName: 'runtime-error-glyph',
+        },
+      }));
+      decorationsRef.current = editor.deltaDecorations(decorationsRef.current, decos);
+
+      editor.revealLineInCenter(result.diagnostics[0].line);
+    } else {
+      monaco.editor.setModelMarkers(model, 'elwood-runtime', []);
+      decorationsRef.current = editor.deltaDecorations(decorationsRef.current, []);
+    }
+  }, [result.diagnostics]);
+
   const monacoOptions = {
     fontSize: 13,
     lineNumbers: 'off' as const,
@@ -291,13 +341,19 @@ function App() {
           title="Expression"
           right={<PanelButton onClick={handleClear}>Clear</PanelButton>}
         />
-        <div className="h-[calc(100%-32px)]">
+        {hasInlineDiag && (
+          <div className="bg-[#3a1d1d] border-b border-red-900/50 px-3 py-1 text-xs text-red-300 font-mono">
+            Error at line {result.diagnostics[0].line}:{result.diagnostics[0].column} — {result.diagnostics[0].message}
+          </div>
+        )}
+        <div className={hasInlineDiag ? 'h-[calc(100%-32px-26px)]' : 'h-[calc(100%-32px)]'}>
           <Editor
             defaultLanguage={ELWOOD_LANGUAGE_ID}
             theme="vs-dark"
             value={expression}
             onChange={handleExprChange}
-            options={{ ...monacoOptions, lineNumbers: 'off' }}
+            onMount={handleExprEditorMount}
+            options={{ ...monacoOptions, glyphMargin: true }}
           />
         </div>
       </div>
@@ -400,7 +456,7 @@ function App() {
               options={{ ...monacoOptions, readOnly: true }}
             />
           </div>
-          {result.error && <ErrorPanel error={result.error} />}
+          {result.error && !hasInlineDiag && <ErrorPanel error={result.error} />}
         </div>
       </div>
 
