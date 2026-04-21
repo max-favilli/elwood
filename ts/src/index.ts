@@ -32,14 +32,15 @@ export interface ElwoodDiagnostic {
 
 /**
  * Evaluate a single Elwood expression against input data.
+ * Optional bindings inject named variables (e.g. $source, $root) into scope.
  */
-export function evaluate(expression: string, input: unknown): ElwoodResult {
+export function evaluate(expression: string, input: unknown, bindings?: Record<string, unknown>): ElwoodResult {
   try {
     const { ast, diagnostics } = parseExpression(expression);
     if (diagnostics.some(d => d.severity === 'error')) {
       return { value: null, success: false, diagnostics: diagnostics.map(toDiag) };
     }
-    const value = evaluateExpression(ast, input);
+    const value = evaluateExpression(ast, input, bindings);
     return { value, success: true, diagnostics: diagnostics.map(toDiag) };
   } catch (err: any) {
     return {
@@ -52,14 +53,15 @@ export function evaluate(expression: string, input: unknown): ElwoodResult {
 
 /**
  * Execute an Elwood script (with let bindings and return) against input data.
+ * Optional bindings inject named variables (e.g. $source, $root) into scope.
  */
-export function execute(script: string, input: unknown): ElwoodResult {
+export function execute(script: string, input: unknown, bindings?: Record<string, unknown>): ElwoodResult {
   try {
     const { ast, diagnostics } = parseScript(script);
     if (diagnostics.some(d => d.severity === 'error')) {
       return { value: null, success: false, diagnostics: diagnostics.map(toDiag) };
     }
-    const value = evaluateScript(ast, input);
+    const value = evaluateScript(ast, input, bindings);
     return { value, success: true, diagnostics: diagnostics.map(toDiag) };
   } catch (err: any) {
     return {

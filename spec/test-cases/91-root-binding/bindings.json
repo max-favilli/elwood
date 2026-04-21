@@ -1,0 +1,11 @@
+{
+  "$root": {
+    "name": "Full Document",
+    "value": 99,
+    "extra": "only-in-root"
+  },
+  "$source": {
+    "endpoint": "https://api.example.com",
+    "headers": { "Authorization": "Bearer token123" }
+  }
+}

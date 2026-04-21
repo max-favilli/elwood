@@ -123,7 +123,7 @@ class MemoizedFunction {
     const childScope = this.closure.child();
     for (let i = 0; i < this.lambda.parameters.length && i < args.length; i++)
       childScope.set(this.lambda.parameters[i], args[i]);
-    const root = this.closure.get('$root') ?? _current;
+    const root = this.closure.get('$') ?? _current;
     const result = this.evalFn(this.lambda.body, root, childScope);
     this.cache.set(key, result);
     return result;
@@ -132,15 +132,19 @@ class MemoizedFunction {
 
 // ── Main Evaluator ──
 
-export function evaluateExpression(expr: ElwoodExpression, input: unknown): unknown {
+export function evaluateExpression(expr: ElwoodExpression, input: unknown, bindings?: Record<string, unknown>): unknown {
   const scope = new Scope();
+  scope.set('$', input);
   scope.set('$root', input);
+  if (bindings) for (const [k, v] of Object.entries(bindings)) scope.set(k, v);
   return evaluate(expr, input, scope);
 }
 
-export function evaluateScript(script: ScriptNode, input: unknown): unknown {
+export function evaluateScript(script: ScriptNode, input: unknown, bindings?: Record<string, unknown>): unknown {
   const scope = new Scope();
+  scope.set('$', input);
   scope.set('$root', input);
+  if (bindings) for (const [k, v] of Object.entries(bindings)) scope.set(k, v);
   for (const binding of script.bindings) {
     scope.set(binding.name, evaluate(binding.value, input, scope));
   }
@@ -175,7 +179,7 @@ function evaluate(expr: ElwoodExpression, current: unknown, scope: Scope): unkno
 // ── Path evaluation ──
 
 function evalPath(expr: import('./ast.js').PathExpression, current: unknown, scope: Scope): unknown {
-  let value = expr.isRooted ? (scope.get('$root') ?? current) : current;
+  let value = expr.isRooted ? (scope.get('$') ?? current) : current;
   for (let segIdx = 0; segIdx < expr.segments.length; segIdx++) {
     const seg = expr.segments[segIdx];
     switch (seg.type) {
@@ -318,11 +322,11 @@ function evalWithLambdaOrImplicit(expr: ElwoodExpression, item: unknown, scope: 
   if (expr.type === 'Lambda') {
     const child = scope.child();
     if (expr.parameters.length >= 1) child.set(expr.parameters[0], item);
-    child.set('$root', item);
+    child.set('$', item);
     return evaluate(expr.body, item, child);
   }
   const child = scope.child();
-  child.set('$root', item);
+  child.set('$', item);
   return evaluate(expr, item, child);
 }
 
@@ -448,7 +452,7 @@ function evalReduce(op: import('./ast.js').ReduceOperation, items: unknown[], sc
 }
 
 function evalJoin(op: import('./ast.js').JoinOperation, leftItems: unknown[], scope: Scope): unknown[] {
-  const root = scope.get('$root');
+  const root = scope.get('$');
   const rightItems = toArray(evaluate(op.source, root, scope));
   const rightLookup = new Map<string, unknown[]>();
   for (const r of rightItems) {

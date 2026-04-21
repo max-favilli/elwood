@@ -31,6 +31,7 @@ public sealed class Evaluator
         Dictionary<string, Abstractions.IElwoodValue>? bindings = null)
     {
         var env = new ElwoodEnvironment();
+        env.Set("$", root);
         env.Set("$root", root);
         if (bindings is not null)
             foreach (var (key, value) in bindings)
@@ -84,7 +85,7 @@ public sealed class Evaluator
 
     private IElwoodValue EvaluatePath(PathExpression path, IElwoodValue current, ElwoodEnvironment env)
     {
-        var value = path.IsRooted ? (env.Get("$root") ?? current) : current;
+        var value = path.IsRooted ? (env.Get("$") ?? current) : current;
 
         for (int i = 0; i < path.Segments.Count; i++)
         {
@@ -512,7 +513,7 @@ public sealed class Evaluator
     private IElwoodValue EvaluateJoin(JoinOperation join, IElwoodValue input, ElwoodEnvironment env)
     {
         var leftItems = input.EnumerateArray().ToList();
-        var root = env.Get("$root") ?? input;
+        var root = env.Get("$") ?? input;
         var rightSource = Evaluate(join.Source, root, env);
         var rightItems = rightSource.EnumerateArray().ToList();
 
@@ -808,13 +809,13 @@ public sealed class Evaluator
             var childEnv = env.CreateChild();
             if (lambda.Parameters.Count >= 1)
                 childEnv.Set(lambda.Parameters[0], item);
-            childEnv.Set("$root", item); // $ in lambda context refers to the item
+            childEnv.Set("$", item);
             return Evaluate(lambda.Body, item, childEnv);
         }
 
         // Implicit $ context — evaluate with item as current
         var implicitEnv = env.CreateChild();
-        implicitEnv.Set("$root", item);
+        implicitEnv.Set("$", item);
         return Evaluate(expr, item, implicitEnv);
     }
 
@@ -2035,7 +2036,7 @@ internal sealed class MemoizedFunctionValue : IElwoodValue
 
         // Resolve $ paths against the root from the closure (where memo was defined),
         // not the caller's current item
-        var root = _closure.Get("$root") ?? current;
+        var root = _closure.Get("$") ?? current;
         var result = _evaluator.Evaluate(_lambda.Body, root, childEnv);
         _cache[key] = result;
         return result;
