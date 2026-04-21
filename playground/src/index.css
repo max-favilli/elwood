@@ -11,3 +11,15 @@ html, body, #root {
   color: #cccccc;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
+
+.runtime-error-line {
+  background: rgba(255, 0, 0, 0.15);
+}
+
+.runtime-error-glyph {
+  background: red;
+  border-radius: 50%;
+  margin-left: 5px;
+  width: 8px !important;
+  height: 8px !important;
+}
