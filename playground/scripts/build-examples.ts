@@ -121,6 +121,7 @@ const CATEGORIES: Record<string, string> = {
   '90-member-access-array-automap': 'Objects',
   '91-root-binding': 'Scripts',
   '92-lambda-dollar-scope': 'Scripts',
+  '93-dynamic-index': 'Basics',
 };
 
 function titleFromId(id: string): string {

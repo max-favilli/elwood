@@ -1,0 +1,5 @@
+{
+  "items": ["alpha", "beta", "gamma"],
+  "pick": 1,
+  "nested": { "idx": 2 }
+}

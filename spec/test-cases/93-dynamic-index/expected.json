@@ -1,0 +1,7 @@
+{
+  "byVariable": "gamma",
+  "byField": "beta",
+  "byNestedField": "gamma",
+  "byLetItems": "gamma",
+  "indices": ["alpha", "beta", "gamma"]
+}

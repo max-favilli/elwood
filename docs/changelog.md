@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-04-22 — Support dynamic index expressions in paths (`$.items[variable]`)
+
+The path parser only accepted literal integers, `[*]`, slices, and quoted strings inside brackets. When it encountered a variable or expression (e.g. `$.items[idx]`), it consumed the `[` token but couldn't parse the content, leaving the parser in a broken state and producing `Expected '}'` errors.
+
+Fix: the path parser now backtracks (restores position) when bracket content isn't a literal path construct, letting the postfix parser handle `[expr]` as a dynamic IndexExpression.
+
+- `ts/src/parser.ts` — save/restore `pos` in `parsePathSegments` bracket handling
+- `dotnet/src/Elwood.Core/Parsing/Parser.cs` — save/restore `_pos` in `ParsePathSegments` bracket handling
+- `spec/test-cases/93-dynamic-index/` — new test: variable, field, nested field, and lambda-variable indices
+
 ## 2026-04-22 — Fix `$` scope in explicit lambda parameters
 
 `evalWithLambdaOrImplicit` always rebound `$` to the current pipe element, even when the lambda had explicit parameters (`c => c.field == $.outerField`). This made `$` inside explicit lambdas resolve against the pipe item instead of the outer input, breaking patterns like `| first c => c.colorway == $.style`.

@@ -1,0 +1,10 @@
+let idx = 2
+let items = $.items
+
+return {
+  byVariable: $.items[idx],
+  byField: $.items[$.pick],
+  byNestedField: $.items[$.nested.idx],
+  byLetItems: items[idx],
+  indices: $.items[*] | index | select i => $.items[i]
+}
