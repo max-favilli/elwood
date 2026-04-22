@@ -434,7 +434,9 @@ class Parser {
         if (this.check(TokenKind.Identifier)) {
           segments.push({ type: 'Property', name: this.advance().text, span: this.span(this.current().span) });
         } else break;
-      } else if (this.match(TokenKind.LeftBracket)) {
+      } else if (this.check(TokenKind.LeftBracket)) {
+        const saved = this.pos;
+        this.advance(); // consume '['
         if (this.match(TokenKind.Star)) {
           this.expect(TokenKind.RightBracket, "Expected ']'");
           segments.push({ type: 'Index', index: null, span: this.span(this.current().span) });
@@ -447,8 +449,8 @@ class Parser {
           } else if (s !== null) {
             this.expect(TokenKind.RightBracket, "Expected ']'");
             segments.push({ type: 'Index', index: s, span: this.span(this.current().span) });
-          } else break;
-        } else break;
+          } else { this.pos = saved; break; }
+        } else { this.pos = saved; break; }
       } else break;
     }
 

@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PackageId>Elwood.Parquet</PackageId>
-    <Version>0.7.5</Version>
+    <Version>0.7.6</Version>
     <Authors>Massimiliano Favilli</Authors>
     <Description>Parquet format support for the Elwood JSON transformation DSL. Optional extension — install only if you need Parquet I/O.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

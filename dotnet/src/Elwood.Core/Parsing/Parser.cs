@@ -597,8 +597,10 @@ public sealed class Parser
                     break; // dot not followed by identifier — let caller handle
                 }
             }
-            else if (Match(TokenKind.LeftBracket))
+            else if (Check(TokenKind.LeftBracket))
             {
+                var saved = _pos;
+                Advance(); // consume '['
                 if (Match(TokenKind.Star))
                 {
                     Expect(TokenKind.RightBracket, "Expected ']' after '[*'");
@@ -622,11 +624,13 @@ public sealed class Parser
                     }
                     else
                     {
+                        _pos = saved;
                         break;
                     }
                 }
                 else
                 {
+                    _pos = saved;
                     break;
                 }
             }
