@@ -1,0 +1,5 @@
+return {
+  matched: $.colorways[*] | first c => c.colorway == $.style,
+  filtered: $.colorways[*] | where c => c.colorway != $.style | select c => c.sku,
+  implicit: [1, 2, 3] | where $ > 1
+}

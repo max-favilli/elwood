@@ -322,7 +322,7 @@ function evalWithLambdaOrImplicit(expr: ElwoodExpression, item: unknown, scope: 
   if (expr.type === 'Lambda') {
     const child = scope.child();
     if (expr.parameters.length >= 1) child.set(expr.parameters[0], item);
-    child.set('$', item);
+    if (expr.parameters.length === 0) child.set('$', item);
     return evaluate(expr.body, item, child);
   }
   const child = scope.child();

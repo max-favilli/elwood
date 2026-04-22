@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-04-22 — Fix `$` scope in explicit lambda parameters
+
+`evalWithLambdaOrImplicit` always rebound `$` to the current pipe element, even when the lambda had explicit parameters (`c => c.field == $.outerField`). This made `$` inside explicit lambdas resolve against the pipe item instead of the outer input, breaking patterns like `| first c => c.colorway == $.style`.
+
+Fix: only rebind `$` when there are no explicit lambda parameters (implicit `$` usage). When a lambda has named parameters, `$` retains its outer scope value.
+
+- `ts/src/evaluator.ts` — `evalWithLambdaOrImplicit`: conditional `$` rebind
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — `EvaluateWithLambdaOrImplicit`: same fix
+- `spec/test-cases/92-lambda-dollar-scope/` — new test: explicit lambda `$` vs implicit `$`
+
 ## 2026-04-21 — Preserve parse error position info in TS public API
 
 The `evaluate()` and `execute()` catch blocks in `ts/src/index.ts` discarded line/column info from `ParseError` exceptions, returning only the message. Now checks for `ParseError` and uses its `.diagnostic` span info.

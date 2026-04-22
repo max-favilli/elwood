@@ -1,0 +1,5 @@
+{
+  "matched": { "colorway": "Blue", "sku": "B-002" },
+  "filtered": ["R-001", "G-003"],
+  "implicit": [2, 3]
+}

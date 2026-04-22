@@ -1,6 +1,6 @@
 {
   "name": "@elwood-lang/xlsx",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "XLSX (Excel) format support for the Elwood JSON transformation DSL. Optional extension — install only if you need Excel I/O.",
   "type": "module",
   "main": "dist/index.cjs",

@@ -809,7 +809,8 @@ public sealed class Evaluator
             var childEnv = env.CreateChild();
             if (lambda.Parameters.Count >= 1)
                 childEnv.Set(lambda.Parameters[0], item);
-            childEnv.Set("$", item);
+            if (lambda.Parameters.Count == 0)
+                childEnv.Set("$", item);
             return Evaluate(lambda.Body, item, childEnv);
         }
 
