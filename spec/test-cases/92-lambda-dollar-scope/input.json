@@ -1,0 +1,8 @@
+{
+  "style": "Blue",
+  "colorways": [
+    { "colorway": "Red", "sku": "R-001" },
+    { "colorway": "Blue", "sku": "B-002" },
+    { "colorway": "Green", "sku": "G-003" }
+  ]
+}
