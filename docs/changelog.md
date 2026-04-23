@@ -29,7 +29,7 @@ The `evaluate()` and `execute()` catch blocks in `ts/src/index.ts` discarded lin
 ## 2026-04-21 — Fix `$root` binding collision with `$` path resolution + bindings API for TS
 
 ### Bug fix
-Passing a `$root` binding (e.g. from Eagle to provide the full unsliced IDM) overwrote the internal scope key that `$` path resolution uses, making `$.field` resolve against the binding instead of the input. Now `$` path resolution uses a separate internal key (`"$"`) that bindings cannot collide with.
+Passing a `$root` binding (e.g. to provide a full unsliced document) overwrote the internal scope key that `$` path resolution uses, making `$.field` resolve against the binding instead of the input. Now `$` path resolution uses a separate internal key (`"$"`) that bindings cannot collide with.
 
 After fix:
 - `$.field` always resolves from the **input** (first argument to `Execute`/`evaluate`)
@@ -61,7 +61,7 @@ $.variant?.sku             // returns null if variant is null
 $.variant.sku              // throws with enriched error if variant is null
 ```
 
-Combines naturally with `.omitNulls()` for the Eagle map migration pattern:
+Combines naturally with `.omitNulls()` for the common migration pattern:
 ```elwood
 { name: $.name, sku: $.variant?.sku, size: $.variant?.title }.omitNulls()
 ```
@@ -93,7 +93,7 @@ Both engines now throw on strict null path access (previously TS silently return
 
 ## 2026-04-19 — `.omitNulls()` method
 
-New built-in method that removes null-valued properties from objects. Designed for Eagle map migration where `nullValueHandling: "Ignore"` (the default on 98% of production maps) automatically strips nulls from output.
+New built-in method that removes null-valued properties from objects. Designed for migration from legacy JSON maps where `nullValueHandling: "Ignore"` automatically strips nulls from output.
 
 ```elwood
 { name: $.name, email: $.email, phone: $.phone }.omitNulls()
@@ -149,7 +149,7 @@ All 143 existing tests pass (86 conformance + 25 unit + 2 benchmark + 28 lexer +
 
 ## 2026-04-19 — Playground: large file mode + size display
 
-Ported three features from the Eagle Frontend's Elwood Playground to the standalone playground.
+Ported three features from the hosted playground to the standalone playground.
 
 ### Large File Mode
 - Threshold: 1 MB (`LARGE_FILE_THRESHOLD`)

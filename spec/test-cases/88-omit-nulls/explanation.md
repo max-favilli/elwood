@@ -1,6 +1,6 @@
 # omitNulls — strip null properties from objects
 
-Demonstrates the `.omitNulls()` method for removing null-valued properties from objects, a common need when migrating from Eagle JSON maps (which have `nullValueHandling: "Ignore"` by default).
+Demonstrates the `.omitNulls()` method for removing null-valued properties from objects, a common need when migrating from legacy JSON maps (which have `nullValueHandling: "Ignore"` by default).
 
 1. **Object construction** — builds a new object with explicit property mapping
 2. **`.omitNulls()`** — removes any property whose value is `null`; properties with `false`, `0`, `""`, or `[]` are kept

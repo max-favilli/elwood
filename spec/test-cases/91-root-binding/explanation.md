@@ -5,5 +5,5 @@ Verifies that when a `$root` binding is passed alongside a different input value
 - `$root` (identifier) resolves to the **binding** (the full document)
 - Other bindings like `$source` are also accessible
 
-This is the Eagle use case: the input is a sliced portion of the IDM, while `$root` gives
-the script access to the full unsliced document.
+This is the common consumer use case: the input is a sliced portion of a larger document,
+while `$root` gives the script access to the full unsliced document.

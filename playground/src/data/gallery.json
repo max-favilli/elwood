@@ -1052,19 +1052,67 @@
     "inputFormat": "json",
     "expected": "[\r\n  {\r\n    \"name\": \"Alice\",\r\n    \"email\": \"alice@example.com\",\r\n    \"city\": \"Berlin\"\r\n  },\r\n  {\r\n    \"name\": \"Bob\",\r\n    \"phone\": \"+49 123 456\"\r\n  },\r\n  {\r\n    \"name\": \"Charlie\",\r\n    \"email\": \"charlie@example.com\",\r\n    \"phone\": \"+49 789 012\",\r\n    \"city\": \"Munich\"\r\n  }\r\n]\r\n",
     "description": "",
-    "explanation": "# omitNulls — strip null properties from objects\r\n\r\nDemonstrates the `.omitNulls()` method for removing null-valued properties from objects, a common need when migrating from Eagle JSON maps (which have `nullValueHandling: \"Ignore\"` by default).\r\n\r\n1. **Object construction** — builds a new object with explicit property mapping\r\n2. **`.omitNulls()`** — removes any property whose value is `null`; properties with `false`, `0`, `\"\"`, or `[]` are kept\r\n3. **Auto-map over array** — when applied inside `select`, each element is processed independently\r\n4. **Varying null positions** — Alice has null phone, Bob has null email+city, Charlie has no nulls — verifies each case\r\n",
+    "explanation": "# omitNulls — strip null properties from objects\r\n\r\nDemonstrates the `.omitNulls()` method for removing null-valued properties from objects, a common need when migrating from legacy JSON maps (which have `nullValueHandling: \"Ignore\"` by default).\r\n\r\n1. **Object construction** — builds a new object with explicit property mapping\r\n2. **`.omitNulls()`** — removes any property whose value is `null`; properties with `false`, `0`, `\"\"`, or `[]` are kept\r\n3. **Auto-map over array** — when applied inside `select`, each element is processed independently\r\n4. **Varying null positions** — Alice has null phone, Bob has null email+city, Charlie has no nulls — verifies each case\r\n",
     "isBenchmark": false
   },
   {
     "id": "89-optional-chaining",
     "title": "Optional Chaining",
     "category": "Objects",
-    "script": "$[*] | select {\n  name: $.name,\n  sku: $.variant?.sku,\n  title: $.variant?.title\n}.omitNulls()\n",
-    "input": "[\n  { \"name\": \"Order 1\", \"variant\": { \"sku\": \"JW-001\", \"title\": \"Large\" } },\n  { \"name\": \"Order 2\", \"variant\": null },\n  { \"name\": \"Order 3\", \"variant\": { \"sku\": \"JW-002\", \"title\": \"Small\" } }\n]\n",
+    "script": "$[*] | select {\r\n  name: $.name,\r\n  sku: $.variant?.sku,\r\n  title: $.variant?.title\r\n}.omitNulls()\r\n",
+    "input": "[\r\n  { \"name\": \"Order 1\", \"variant\": { \"sku\": \"JW-001\", \"title\": \"Large\" } },\r\n  { \"name\": \"Order 2\", \"variant\": null },\r\n  { \"name\": \"Order 3\", \"variant\": { \"sku\": \"JW-002\", \"title\": \"Small\" } }\r\n]\r\n",
     "inputFormat": "json",
-    "expected": "[\n  { \"name\": \"Order 1\", \"sku\": \"JW-001\", \"title\": \"Large\" },\n  { \"name\": \"Order 2\" },\n  { \"name\": \"Order 3\", \"sku\": \"JW-002\", \"title\": \"Small\" }\n]\n",
+    "expected": "[\r\n  { \"name\": \"Order 1\", \"sku\": \"JW-001\", \"title\": \"Large\" },\r\n  { \"name\": \"Order 2\" },\r\n  { \"name\": \"Order 3\", \"sku\": \"JW-002\", \"title\": \"Small\" }\r\n]\r\n",
     "description": "",
-    "explanation": "# Optional chaining (`?.`) with omitNulls\n\nDemonstrates safe property access on nullable objects using `?.`, combined with `.omitNulls()` to strip null-valued properties.\n\n1. **`$.variant?.sku`** — returns the SKU when variant exists, null when variant is null (no error)\n2. **`.omitNulls()`** — removes the null sku/title properties from Order 2's output\n3. **Real-world pattern** — Shopify orders where some line items have `variant: null`\n4. **Contrast with strict access** — `$.variant.sku` (without `?`) would throw an enriched error identifying the null variant and suggesting `?.`\n",
+    "explanation": "# Optional chaining (`?.`) with omitNulls\r\n\r\nDemonstrates safe property access on nullable objects using `?.`, combined with `.omitNulls()` to strip null-valued properties.\r\n\r\n1. **`$.variant?.sku`** — returns the SKU when variant exists, null when variant is null (no error)\r\n2. **`.omitNulls()`** — removes the null sku/title properties from Order 2's output\r\n3. **Real-world pattern** — Shopify orders where some line items have `variant: null`\r\n4. **Contrast with strict access** — `$.variant.sku` (without `?`) would throw an enriched error identifying the null variant and suggesting `?.`\r\n",
+    "isBenchmark": false
+  },
+  {
+    "id": "90-member-access-array-automap",
+    "title": "Member Access Array Automap",
+    "category": "Objects",
+    "script": "let edges = $.edges[*].node\n\nreturn {\n  names: edges[*].name,\n  skus: edges[*].variant?.sku\n}\n",
+    "input": "{\n  \"edges\": [\n    { \"node\": { \"name\": \"Widget\", \"variant\": { \"sku\": \"W-001\" } } },\n    { \"node\": { \"name\": \"Gadget\", \"variant\": null } },\n    { \"node\": { \"name\": \"Doohickey\", \"variant\": { \"sku\": \"D-003\" } } }\n  ]\n}\n",
+    "inputFormat": "json",
+    "expected": "{\n  \"names\": [\"Widget\", \"Gadget\", \"Doohickey\"],\n  \"skus\": [\"W-001\", \"D-003\"]\n}\n",
+    "description": "",
+    "explanation": "# Member access auto-map over arrays\n\nRegression test: when a variable holds an array (from `let edges = $.edges[*].node`), subsequent property access like `edges[*].name` must auto-map over the array — the `.name` goes through MemberAccess, not PathExpression.\n\n1. **`edges[*].name`** — auto-maps `.name` over each node in the array\n2. **`edges[*].variant?.sku`** — combines auto-mapping with optional chaining; null variants are skipped by the `?.` + filter\n3. **Bug this prevents** — without auto-mapping in MemberAccess, `edges[*].name` would return null because LazyArrayValue.GetProperty returns null for all properties\n",
+    "isBenchmark": false
+  },
+  {
+    "id": "91-root-binding",
+    "title": "Root Binding",
+    "category": "Scripts",
+    "script": "return {\r\n  inputName: $.name,\r\n  inputValue: $.value,\r\n  rootName: $root.name,\r\n  rootValue: $root.value,\r\n  rootExtra: $root.extra,\r\n  sourceEndpoint: $source.endpoint\r\n}\r\n",
+    "input": "{\r\n  \"name\": \"Slice A\",\r\n  \"value\": 10\r\n}\r\n",
+    "inputFormat": "json",
+    "expected": "{\r\n  \"inputName\": \"Slice A\",\r\n  \"inputValue\": 10,\r\n  \"rootName\": \"Full Document\",\r\n  \"rootValue\": 99,\r\n  \"rootExtra\": \"only-in-root\",\r\n  \"sourceEndpoint\": \"https://api.example.com\"\r\n}\r\n",
+    "description": "",
+    "explanation": "# 91 — $root binding vs $ path resolution\r\n\r\nVerifies that when a `$root` binding is passed alongside a different input value:\r\n- `$` (rooted paths like `$.name`) resolves to the **input** (the slice)\r\n- `$root` (identifier) resolves to the **binding** (the full document)\r\n- Other bindings like `$source` are also accessible\r\n\r\nThis is the common consumer use case: the input is a sliced portion of a larger document,\r\nwhile `$root` gives the script access to the full unsliced document.\r\n",
+    "isBenchmark": false
+  },
+  {
+    "id": "92-lambda-dollar-scope",
+    "title": "Lambda Dollar Scope",
+    "category": "Scripts",
+    "script": "return {\n  matched: $.colorways[*] | first c => c.colorway == $.style,\n  filtered: $.colorways[*] | where c => c.colorway != $.style | select c => c.sku,\n  implicit: [1, 2, 3] | where $ > 1\n}\n",
+    "input": "{\n  \"style\": \"Blue\",\n  \"colorways\": [\n    { \"colorway\": \"Red\", \"sku\": \"R-001\" },\n    { \"colorway\": \"Blue\", \"sku\": \"B-002\" },\n    { \"colorway\": \"Green\", \"sku\": \"G-003\" }\n  ]\n}\n",
+    "inputFormat": "json",
+    "expected": "{\n  \"matched\": { \"colorway\": \"Blue\", \"sku\": \"B-002\" },\n  \"filtered\": [\"R-001\", \"G-003\"],\n  \"implicit\": [2, 3]\n}\n",
+    "description": "",
+    "explanation": "# 92 — Lambda $ scope preservation\n\nWhen a pipe operation uses an explicit lambda parameter (`c => ...`), `$` must retain\nits outer scope value (the input document). Only when using implicit `$` (no lambda\nparameter) should `$` be rebound to the current pipe element.\n\n- `first c => c.colorway == $.style` — `c` is the colorway, `$` is the root input\n- `where c => c.colorway != $.style` — same\n- `where $ > 1` — implicit, `$` is each array element\n",
+    "isBenchmark": false
+  },
+  {
+    "id": "93-dynamic-index",
+    "title": "Dynamic Index",
+    "category": "Basics",
+    "script": "let idx = 2\nlet items = $.items\n\nreturn {\n  byVariable: $.items[idx],\n  byField: $.items[$.pick],\n  byNestedField: $.items[$.nested.idx],\n  byLetItems: items[idx],\n  indices: $.items[*] | index | select i => $.items[i]\n}\n",
+    "input": "{\n  \"items\": [\"alpha\", \"beta\", \"gamma\"],\n  \"pick\": 1,\n  \"nested\": { \"idx\": 2 }\n}\n",
+    "inputFormat": "json",
+    "expected": "{\n  \"byVariable\": \"gamma\",\n  \"byField\": \"beta\",\n  \"byNestedField\": \"gamma\",\n  \"byLetItems\": \"gamma\",\n  \"indices\": [\"alpha\", \"beta\", \"gamma\"]\n}\n",
+    "description": "",
+    "explanation": "# 93 — Dynamic index expressions\n\nVerifies that bracket index access `[expr]` works with variables and expressions,\nnot just literal integers. The path parser now backtracks on non-literal bracket\ncontents, letting the postfix parser handle `[expr]` as an IndexExpression.\n\n- `$.items[idx]` — variable index\n- `$.items[$.pick]` — field-based index\n- `$.items[$.nested.idx]` — nested field index\n- `items[idx]` — let-binding + variable index\n- `$.items[*] | index | select i => $.items[i]` — lambda variable index\n",
     "isBenchmark": false
   }
 ]
