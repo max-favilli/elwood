@@ -12,8 +12,8 @@ sources:
     map: trigger-map.elwood
     auth:
       type: basic
-      user: "REDACTED-USER"
-      password: "REDACTED-ROTATE-THIS-SECRET"
+      user: $secrets.triggerUser
+      password: $secrets.triggerPassword
 
   - name: crm-call
     trigger: pull
