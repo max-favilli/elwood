@@ -1,0 +1,7 @@
+return {
+  existing: $.address.city,
+  missingProp: $.default_address?,
+  nestedMissing: $.address.zip?,
+  chainedOptional: $.address.country?,
+  trailingOnArray: $.items[*].nonexistent?
+}

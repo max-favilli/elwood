@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-04-29 — Add trailing `?` optional property marker (`$.prop?`) (v0.7.8)
+
+New syntax: append `?` after a property name to make it optional. `$.default_address?` returns null when the property doesn't exist, instead of throwing. This is the "property may or may not exist" counterpart to `?.` ("target may be null").
+
+Both forms now supported:
+- `$.variant?.sku` — returns null if `variant` is null (null-safe navigation)
+- `$.variant.sku?` — returns null if `sku` doesn't exist on `variant` (optional property)
+
+- `dotnet/src/Elwood.Core/Syntax/TokenKind.cs` — add `Question` token kind
+- `dotnet/src/Elwood.Core/Parsing/Lexer.cs` — tokenize standalone `?`
+- `dotnet/src/Elwood.Core/Parsing/Parser.cs` — consume trailing `?` after property names in `ParsePathSegments`
+- `ts/src/token.ts` — add `Question` token kind
+- `ts/src/lexer.ts` — tokenize standalone `?`
+- `ts/src/parser.ts` — consume trailing `?` after property names in `parsePathSegments`
+- `spec/test-cases/95-trailing-question-optional/` — new test case
+
 ## 2026-04-29 — Fix `?.` optional chaining for missing properties and `$?.` root syntax (v0.7.7)
 
 Two bugs fixed:

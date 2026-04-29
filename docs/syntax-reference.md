@@ -25,21 +25,28 @@ $..field                  Recursive descent (find in all descendants)
 
 Property access auto-maps over arrays: `$.items[*].name` extracts `name` from each item.
 
-### Optional Chaining (`?.`)
+### Optional Chaining (`?.`) and Trailing `?`
 
-Use `?.` instead of `.` when a property might not exist or the target might be null. Strict access (`.`) throws an error when the property is missing or the target is null; optional access (`?.`) returns null silently in both cases.
+Two forms of optional property access:
+
+- **`?.prop`** — null-safe navigation: returns null if the **target** is null
+- **`prop?`** — optional property: returns null if the **property** doesn't exist on the target
+
+Strict access (`.`) throws when the property is missing or the target is null.
 
 ```
 $.variant.sku              Throws if $.variant is null or has no 'sku' property
 $.variant?.sku             Returns null if $.variant is null OR if 'sku' doesn't exist
+$.variant.sku?             Returns null if 'sku' doesn't exist on $.variant
 $?.optional_field          Returns null if the root object has no 'optional_field'
+$.default_address?         Returns null if 'default_address' doesn't exist
 $?.address?.street         Chain from root — short-circuits at first null/missing
 ```
 
 Combine with `.omitNulls()` for the common pattern of building objects from nullable fields:
 
 ```
-{ name: $.name, sku: $.variant?.sku, size: $.variant?.title }.omitNulls()
+{ name: $.name, sku: $.variant?.sku, addr: $.default_address? }.omitNulls()
 ```
 
 ## Literals

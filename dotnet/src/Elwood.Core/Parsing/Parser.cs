@@ -560,7 +560,10 @@ public sealed class Parser
         // First segment after $. must be an identifier
         if (Check(TokenKind.Identifier))
         {
-            segments.Add(new PropertySegment(Advance().Text, Span(Current.Span)));
+            var seg = new PropertySegment(Advance().Text, Span(Current.Span));
+            if (Match(TokenKind.Question))
+                seg = seg with { Optional = true };
+            segments.Add(seg);
         }
 
         // Continue with .prop or ?.prop or [index] or ..prop
@@ -583,6 +586,7 @@ public sealed class Parser
                 if (Check(TokenKind.Identifier))
                 {
                     segments.Add(new PropertySegment(Advance().Text, Span(Current.Span), Optional: true));
+                    Match(TokenKind.Question); // tolerate redundant trailing ?
                 }
                 else
                 {
@@ -600,7 +604,10 @@ public sealed class Parser
                 Advance(); // consume the dot
                 if (Check(TokenKind.Identifier))
                 {
-                    segments.Add(new PropertySegment(Advance().Text, Span(Current.Span)));
+                    var seg = new PropertySegment(Advance().Text, Span(Current.Span));
+                    if (Match(TokenKind.Question))
+                        seg = seg with { Optional = true };
+                    segments.Add(seg);
                 }
                 else
                 {

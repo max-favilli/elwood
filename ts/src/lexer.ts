@@ -45,6 +45,7 @@ const SINGLE_CHAR: Record<string, TokenKind> = {
   '>': TokenKind.GreaterThan,
   '!': TokenKind.Bang,
   '=': TokenKind.Assign,
+  '?': TokenKind.Question,
 };
 
 const TWO_CHAR: Record<string, TokenKind> = {

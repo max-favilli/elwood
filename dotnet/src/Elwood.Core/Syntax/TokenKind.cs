@@ -16,6 +16,7 @@ public enum TokenKind
     Dot,                // .
     DotDot,             // ..  (recursive descent)
     QuestionDot,        // ?.  (optional chaining)
+    Question,           // ?   (trailing optional marker)
 
     // Brackets
     LeftBracket,        // [

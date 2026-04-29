@@ -1,0 +1,7 @@
+{
+  "existing": "Berlin",
+  "missingProp": null,
+  "nestedMissing": null,
+  "chainedOptional": null,
+  "trailingOnArray": []
+}

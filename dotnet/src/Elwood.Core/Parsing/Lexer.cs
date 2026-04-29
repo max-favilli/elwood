@@ -190,6 +190,7 @@ public sealed class Lexer
             '>' => TokenKind.GreaterThan,
             '!' => TokenKind.Bang,
             '=' => TokenKind.Assign,
+            '?' => TokenKind.Question,
             '_' => TokenKind.Underscore,
             '\n' => TokenKind.Newline,
             _ => (TokenKind?)null

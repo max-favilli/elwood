@@ -423,7 +423,9 @@ class Parser {
     const segments: PathSegment[] = [];
 
     if (this.check(TokenKind.Identifier)) {
-      segments.push({ type: 'Property', name: this.advance().text, span: this.span(this.current().span) });
+      const seg: PathSegment = { type: 'Property', name: this.advance().text, span: this.span(this.current().span) };
+      if (this.match(TokenKind.Question)) seg.optional = true;
+      segments.push(seg);
     }
 
     while (true) {
@@ -434,13 +436,16 @@ class Parser {
         this.advance();
         if (this.check(TokenKind.Identifier)) {
           segments.push({ type: 'Property', name: this.advance().text, optional: true, span: this.span(this.current().span) });
+          this.match(TokenKind.Question); // tolerate redundant trailing ?
         } else break;
       } else if (this.check(TokenKind.Dot) && !this.check(TokenKind.DotDot)) {
         // Stop if .identifier( — it's a method call
         if (this.peekAt(1)?.kind === TokenKind.Identifier && this.peekAt(2)?.kind === TokenKind.LeftParen) break;
         this.advance();
         if (this.check(TokenKind.Identifier)) {
-          segments.push({ type: 'Property', name: this.advance().text, span: this.span(this.current().span) });
+          const seg: PathSegment = { type: 'Property', name: this.advance().text, span: this.span(this.current().span) };
+          if (this.match(TokenKind.Question)) seg.optional = true;
+          segments.push(seg);
         } else break;
       } else if (this.check(TokenKind.LeftBracket)) {
         const saved = this.pos;
