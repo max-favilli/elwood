@@ -69,11 +69,11 @@ jobs:
       - name: Publish core
         if: ${{ env.NPM_TOKEN != '' }}
         working-directory: ts
-        run: npm publish --access public
+        run: npm publish --access public || true
       - name: Publish xlsx
         if: ${{ env.NPM_TOKEN != '' }}
         working-directory: ts-xlsx
-        run: npm publish --access public
+        run: npm publish --access public || true
       # ts-parquet not published — hyparquet is async-only and Elwood's TS extension API
       # is sync-only. See docs/known-issues.md. Tracked as a follow-up.
 
