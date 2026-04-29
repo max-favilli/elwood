@@ -245,7 +245,7 @@ public class CliIntegrationTests : IClassFixture<CliFixture>
     [Fact]
     public async Task Eval_InvalidExpression_ReturnsError()
     {
-        var result = await _fixture.Run("eval", "$.???", "--json", "{}");
+        var result = await _fixture.Run("eval", "$.@@@", "--json", "{}");
         Assert.NotEqual(0, result.ExitCode);
         Assert.False(string.IsNullOrWhiteSpace(result.Stderr));
     }
