@@ -393,7 +393,15 @@ class Parser {
     if (this.match(TokenKind.DollarDot)) {
       segments.push(...this.parsePathSegments());
     } else {
-      this.match(TokenKind.Dollar); // standalone $
+      this.match(TokenKind.Dollar); // $ or $?.
+      // $?. — optional chaining on root
+      if (this.check(TokenKind.QuestionDot)) {
+        this.advance(); // consume ?.
+        if (this.check(TokenKind.Identifier)) {
+          segments.push({ type: 'Property', name: this.advance().text, optional: true, span: this.span(this.current().span) });
+          segments.push(...this.parsePathSegments());
+        }
+      }
     }
 
     // If the last path segment is immediately followed by ( it's a method call,

@@ -27,12 +27,13 @@ Property access auto-maps over arrays: `$.items[*].name` extracts `name` from ea
 
 ### Optional Chaining (`?.`)
 
-Use `?.` instead of `.` when a property might be null. Strict access (`.`) throws an error with full context when the target is null; optional access (`?.`) returns null silently.
+Use `?.` instead of `.` when a property might not exist or the target might be null. Strict access (`.`) throws an error when the property is missing or the target is null; optional access (`?.`) returns null silently in both cases.
 
 ```
-$.variant.sku              Throws if $.variant is null (with expression, item index, fix suggestion)
-$.variant?.sku             Returns null if $.variant is null
-$.variant?.sku?.color      Chain multiple — short-circuits at first null
+$.variant.sku              Throws if $.variant is null or has no 'sku' property
+$.variant?.sku             Returns null if $.variant is null OR if 'sku' doesn't exist
+$?.optional_field          Returns null if the root object has no 'optional_field'
+$?.address?.street         Chain from root — short-circuits at first null/missing
 ```
 
 Combine with `.omitNulls()` for the common pattern of building objects from nullable fields:

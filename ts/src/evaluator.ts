@@ -191,6 +191,7 @@ function evalPath(expr: import('./ast.js').PathExpression, current: unknown, sco
           value = filtered;
           // If every item in the array lacked this property, report a helpful error
           if (filtered.length === 0 && arr.length > 0 && mapped.every(v => v === undefined)) {
+            if (seg.optional) break;
             const sample = arr.find(item => isObject(item));
             const suggestion = sample ? suggestProperty(seg.name, sample) : undefined;
             throw new Error(`Property '${seg.name}' not found on any item in the Array.${suggestion ? ' ' + suggestion : ''}`);
@@ -198,6 +199,7 @@ function evalPath(expr: import('./ast.js').PathExpression, current: unknown, sco
         } else if (isObject(value)) {
           const prop = (value as any)[seg.name];
           if (prop === undefined) {
+            if (seg.optional) { value = null; break; }
             const suggestion = suggestProperty(seg.name, value);
             throw new Error(`Property '${seg.name}' not found on Object.${suggestion ? ' ' + suggestion : ''}`);
           }

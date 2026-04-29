@@ -522,7 +522,17 @@ public sealed class Parser
         }
         else if (Match(TokenKind.Dollar))
         {
-            // Standalone $
+            // $?. — optional chaining on root
+            if (Check(TokenKind.QuestionDot))
+            {
+                Advance(); // consume ?.
+                if (Check(TokenKind.Identifier))
+                {
+                    segments.Add(new PropertySegment(Advance().Text, Span(Current.Span), Optional: true));
+                    segments.AddRange(ParsePathSegments());
+                }
+            }
+            // else: standalone $
         }
 
         // If the last path segment is immediately followed by ( it's a method call,

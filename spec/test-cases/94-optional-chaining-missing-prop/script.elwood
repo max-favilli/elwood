@@ -1,0 +1,6 @@
+return {
+  name: $.name,
+  rootOptional: $?.missing_field,
+  nestedOptional: $.items?.nonexistent,
+  deepChain: $?.default_address?.street
+}

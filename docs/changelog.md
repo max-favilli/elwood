@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-04-29 — Fix `?.` optional chaining for missing properties and `$?.` root syntax (v0.7.7)
+
+Two bugs fixed:
+
+**Parser**: `$?.field` failed with "Unexpected character '?'" because the lexer produced `Dollar` + `QuestionDot` tokens and the parser only expected `DollarDot` after `$`. Now the parser checks for `QuestionDot` after consuming a standalone `Dollar` and creates an optional `PropertySegment`.
+
+**Evaluator**: `?.` only returned null when the target was null (e.g. `null?.field`), but still threw "Property not found" when the target was a non-null object missing the property (e.g. `{name: "Alice"}?.address`). Now `?.` returns null in both cases — null target AND missing property on a non-null object. Same fix applied to array auto-map: `array?.missingProp` returns `[]` instead of throwing.
+
+- `dotnet/src/Elwood.Core/Parsing/Parser.cs` — handle `$?.` in `ParsePath()`
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — check `Optional` before throwing in object and array branches of `ResolveProperty`
+- `ts/src/parser.ts` — handle `$?.` in `parsePath()`
+- `ts/src/evaluator.ts` — check `optional` before throwing in object and array branches of `evalPath`
+- `spec/test-cases/94-optional-chaining-missing-prop/` — new test: `$?.missing`, `obj?.missing`, chained `$?.a?.b`
+
 ## 2026-04-22 — Support dynamic index expressions in paths (`$.items[variable]`)
 
 The path parser only accepted literal integers, `[*]`, slices, and quoted strings inside brackets. When it encountered a variable or expression (e.g. `$.items[idx]`), it consumed the `[` token but couldn't parse the content, leaving the parser in a broken state and producing `Expected '}'` errors.

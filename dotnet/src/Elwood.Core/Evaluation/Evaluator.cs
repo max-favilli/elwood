@@ -109,11 +109,15 @@ public sealed class Evaluator
     {
         if (value.Kind == ElwoodValueKind.Object)
         {
-            return value.GetProperty(prop.Name) ??
-                throw new ElwoodEvaluationException(
-                    $"Property '{prop.Name}' not found on {value.Kind}.",
-                    prop.Span,
-                    SuggestProperty(prop.Name, value));
+            var result = value.GetProperty(prop.Name);
+            if (result is not null)
+                return result;
+            if (prop.Optional)
+                return _factory.CreateNull();
+            throw new ElwoodEvaluationException(
+                $"Property '{prop.Name}' not found on {value.Kind}.",
+                prop.Span,
+                SuggestProperty(prop.Name, value));
         }
 
         // Auto-map over arrays: $.items[*].name → select each item's .name
@@ -128,6 +132,8 @@ public sealed class Evaluator
             // If every item in the array lacked this property, report a helpful error
             if (filtered.Count == 0 && items.Count > 0 && mapped.All(p => p is null))
             {
+                if (prop.Optional)
+                    return _factory.CreateArray(new List<IElwoodValue>());
                 var sample = items.FirstOrDefault(i => i.Kind == ElwoodValueKind.Object);
                 throw new ElwoodEvaluationException(
                     $"Property '{prop.Name}' not found on any item in the Array.",
