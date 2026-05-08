@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-05-08 — Fix `[*]` wildcard to flatten one level (JSONPath semantics) (v0.7.9)
+
+`[*]` on an array-of-arrays now flattens one level, matching standard JSONPath nodeset semantics. Previously, `$.styles[*].colorways[*]` produced nested arrays because auto-map (`.colorways` on an array) creates array-of-arrays and `[*]` was a no-op on arrays. Now `[*]` applies `SelectMany`/`.flat(1)` so chained wildcards like `$.a[*].b[*]` produce a flat list.
+
+Also fixed `JsonNodeValueFactory.ExtractNode` to handle non-`JsonNodeValue` types (like `LazyArrayValue`). Previously, placing a `LazyArrayValue` directly into an object literal serialized it as `null`.
+
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — two `[*]` locations: rooted path (line ~96) and `EvaluateIndex` (line ~780) now use `SelectMany` to flatten one level
+- `dotnet/src/Elwood.Json/JsonNodeValueFactory.cs` — `ExtractNode` now converts non-JsonNodeValue types via IElwoodValue interface instead of returning null
+- `ts/src/evaluator.ts` — `[*]` changed from `toArray(value)` to `toArray(value).flat(1)`
+- `spec/test-cases/96-wildcard-flatten/` — new test case: chained `[*]` on nested arrays
+
 ## 2026-04-29 — Add trailing `?` optional property marker (`$.prop?`) (v0.7.8)
 
 New syntax: append `?` after a property name to make it optional. `$.default_address?` returns null when the property doesn't exist, instead of throwing. This is the "property may or may not exist" counterpart to `?.` ("target may be null").

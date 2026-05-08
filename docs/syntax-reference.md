@@ -249,6 +249,8 @@ Comparisons work on both numbers and strings (ordinal comparison for strings).
 ### Logical
 `&&` (and), `||` (or), `!` (not)
 
+**Note:** Only `&&`, `||`, and `!` are valid. The keywords `and`, `or`, `not` are **not** supported — they will cause a parse error.
+
 ## Built-in Methods
 
 Methods are called with dot notation on values. Most also work as pipe operators.

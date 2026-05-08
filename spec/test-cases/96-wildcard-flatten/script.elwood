@@ -1,0 +1,3 @@
+let allColorways = $.styles[*].colorways[*]
+let codes = allColorways | select c => c.code
+return { colorways: allColorways, codes: codes }

@@ -219,7 +219,7 @@ function evalPath(expr: import('./ast.js').PathExpression, current: unknown, sco
         }
         break;
       case 'Index':
-        if (seg.index === null) value = toArray(value); // [*]
+        if (seg.index === null) value = toArray(value).flat(1); // [*] — flatten one level (JSONPath nodeset semantics)
         else value = toArray(value)[seg.index] ?? null;
         break;
       case 'Slice': {

@@ -93,7 +93,10 @@ public sealed class Evaluator
             value = segment switch
             {
                 PropertySegment prop => ResolveProperty(value, prop, path.Segments, i),
-                IndexSegment { Index: null } => new LazyArrayValue(value.EnumerateArray(), _factory),
+                IndexSegment { Index: null } => new LazyArrayValue(
+                    value.EnumerateArray().SelectMany(v =>
+                        v.Kind == ElwoodValueKind.Array ? v.EnumerateArray() : [v]),
+                    _factory),
                 IndexSegment { Index: int idx } => value.EnumerateArray().ElementAtOrDefault(idx) ??
                     throw new ElwoodEvaluationException($"Index {idx} out of range.", segment.Span),
                 SliceSegment slice => EvaluateSliceSegment(value, slice),
@@ -774,8 +777,10 @@ public sealed class Evaluator
     {
         var target = Evaluate(idx.Target, current, env);
 
-        if (idx.Index is null) // [*]
-            return _factory.CreateArray(target.EnumerateArray());
+        if (idx.Index is null) // [*] — flatten one level (JSONPath nodeset semantics)
+            return _factory.CreateArray(
+                target.EnumerateArray().SelectMany(v =>
+                    v.Kind == ElwoodValueKind.Array ? v.EnumerateArray() : [v]));
 
         var index = Evaluate(idx.Index, current, env);
 

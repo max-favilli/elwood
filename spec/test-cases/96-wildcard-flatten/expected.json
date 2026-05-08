@@ -1,0 +1,8 @@
+{
+  "colorways": [
+    { "code": "1010", "color": "Black" },
+    { "code": "2020", "color": "Blue" },
+    { "code": "3030", "color": "Red" }
+  ],
+  "codes": ["1010", "2020", "3030"]
+}

@@ -40,5 +40,29 @@ public sealed class JsonNodeValueFactory : IElwoodValueFactory
     public IElwoodValue CreateNull() => new JsonNodeValue(null);
 
     private static JsonNode? ExtractNode(IElwoodValue value)
-        => value is JsonNodeValue jnv ? jnv.Node : null;
+    {
+        if (value is JsonNodeValue jnv) return jnv.Node;
+        return value.Kind switch
+        {
+            ElwoodValueKind.Null => null,
+            ElwoodValueKind.String => JsonValue.Create(value.GetStringValue()),
+            ElwoodValueKind.Number => JsonValue.Create(value.GetNumberValue()),
+            ElwoodValueKind.Boolean => JsonValue.Create(value.GetBooleanValue()),
+            ElwoodValueKind.Array => new JsonArray(value.EnumerateArray()
+                .Select(v => ExtractNode(v)?.DeepClone()).ToArray()),
+            ElwoodValueKind.Object => ExtractObjectNode(value),
+            _ => null
+        };
+    }
+
+    private static JsonObject ExtractObjectNode(IElwoodValue value)
+    {
+        var obj = new JsonObject();
+        foreach (var name in value.GetPropertyNames())
+        {
+            var prop = value.GetProperty(name);
+            if (prop is not null) obj[name] = ExtractNode(prop)?.DeepClone();
+        }
+        return obj;
+    }
 }

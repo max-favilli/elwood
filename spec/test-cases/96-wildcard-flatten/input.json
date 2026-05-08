@@ -1,0 +1,17 @@
+{
+  "styles": [
+    {
+      "name": "Alpha",
+      "colorways": [
+        { "code": "1010", "color": "Black" },
+        { "code": "2020", "color": "Blue" }
+      ]
+    },
+    {
+      "name": "Beta",
+      "colorways": [
+        { "code": "3030", "color": "Red" }
+      ]
+    }
+  ]
+}
