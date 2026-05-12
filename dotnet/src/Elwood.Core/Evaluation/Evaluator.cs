@@ -69,6 +69,7 @@ public sealed class Evaluator
             InterpolatedStringExpression interp => EvaluateInterpolation(interp, current, env),
             MatchExpression match => EvaluateMatch(match, current, env),
             MemoExpression memo => EvaluateMemo(memo, current, env),
+            LetInExpression letIn => EvaluateLetIn(letIn, current, env),
             LambdaExpression => throw new ElwoodEvaluationException("Lambda expressions cannot be evaluated directly — they must be used as arguments to pipe operations.", expr.Span),
             _ => throw new ElwoodEvaluationException($"Unknown expression type: {expr.GetType().Name}", expr.Span)
         };
@@ -723,6 +724,14 @@ public sealed class Evaluator
     private IElwoodValue EvaluateMemo(MemoExpression memo, IElwoodValue current, ElwoodEnvironment env)
     {
         return new MemoizedFunctionValue(memo.Lambda, env, this, _factory);
+    }
+
+    private IElwoodValue EvaluateLetIn(LetInExpression letIn, IElwoodValue current, ElwoodEnvironment env)
+    {
+        var childEnv = env.CreateChild();
+        foreach (var binding in letIn.Bindings)
+            childEnv.Set(binding.Name, Evaluate(binding.Value, current, childEnv));
+        return Evaluate(letIn.Body, current, childEnv);
     }
 
     private IElwoodValue EvaluateFunction(FunctionCallExpression func, IElwoodValue current, ElwoodEnvironment env)

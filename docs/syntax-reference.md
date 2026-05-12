@@ -163,6 +163,19 @@ u => u.name.toLower()
 (acc, item) => acc + item.price
 ```
 
+### Let bindings in lambda bodies
+
+Lambda bodies can contain `let` bindings for intermediate calculations:
+
+```
+$.orders[*] | select o =>
+  let total = o.qty * o.price
+  let label = if total > 20 then "high" else "low"
+  { id: o.id, total: total, label: label }
+```
+
+Each `let` creates a scoped variable visible to subsequent `let` bindings and the final expression. This is especially useful for complex transformations inside `select`, `where`, and other pipe operations.
+
 ### Implicit $ context
 
 In pipe operations, `$` refers to the current item when no lambda is used:
@@ -221,7 +234,14 @@ let findByFlag = memo flag => $.items[*] | where i => i.active == flag
 $.data[*] | select d => findByFlag(d.active)
 ```
 
-The function body executes once per distinct argument value. Subsequent calls with the same argument return the cached result.
+Multiple parameters are supported:
+
+```
+let lookup = memo (sv, cn) => $.items[*] | first i => i.style == sv && i.color == cn
+$.pairs[*] | select p => lookup(p.style, p.color)
+```
+
+The function body executes once per distinct argument combination. Subsequent calls with the same arguments return the cached result.
 
 ## Conditionals
 

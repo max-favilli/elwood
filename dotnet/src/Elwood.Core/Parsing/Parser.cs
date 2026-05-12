@@ -474,7 +474,7 @@ public sealed class Parser
                 } while (Match(TokenKind.Comma));
                 Expect(TokenKind.RightParen, "Expected ')' after lambda parameters");
                 Expect(TokenKind.FatArrow, "Expected '=>' after lambda parameters");
-                var body = _pipeDepth > 0 ? ParseTernary() : ParseExpression();
+                var body = ParseLambdaBody();
                 return new LambdaExpression(parameters, body, Span(start));
             }
 
@@ -665,12 +665,11 @@ public sealed class Parser
         var start = Current.Span;
         var name = Advance().Text;
 
-        // Lambda: x => expr
+        // Lambda: x => expr  OR  x => let a = ... expr
         if (Check(TokenKind.FatArrow))
         {
             Advance(); // consume =>
-            // Inside a pipe argument, lambda body must not consume | (pipe is left-associative)
-            var body = _pipeDepth > 0 ? ParseTernary() : ParseExpression();
+            var body = ParseLambdaBody();
             return new LambdaExpression([name], body, Span(start));
         }
 
@@ -823,6 +822,19 @@ public sealed class Parser
             do { args.Add(ParseExpression()); } while (Match(TokenKind.Comma));
         }
         return args;
+    }
+
+    private ElwoodExpression ParseLambdaBody()
+    {
+        if (!Check(TokenKind.Let))
+            return _pipeDepth > 0 ? ParseTernary() : ParseExpression();
+
+        var start = Current.Span;
+        var bindings = new List<LetBindingNode>();
+        while (Check(TokenKind.Let))
+            bindings.Add(ParseLetBinding());
+        var body = _pipeDepth > 0 ? ParseTernary() : ParseExpression();
+        return new LetInExpression(bindings, body, Span(start));
     }
 
     private LetBindingNode ParseLetBinding()

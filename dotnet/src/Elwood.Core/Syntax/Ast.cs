@@ -119,6 +119,13 @@ public sealed record MatchArm(
     SourceSpan Span
 );
 
+/// <summary>Block expression: let bindings followed by a result expression. Used inside lambda bodies.</summary>
+public sealed record LetInExpression(
+    IReadOnlyList<LetBindingNode> Bindings,
+    ElwoodExpression Body,
+    SourceSpan Span
+) : ElwoodExpression(Span);
+
 /// <summary>Memoized lambda: memo params => body. Cached by argument values.</summary>
 public sealed record MemoExpression(
     LambdaExpression Lambda,

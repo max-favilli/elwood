@@ -1,0 +1,5 @@
+[
+  { "id": "A", "total": 30, "label": "high" },
+  { "id": "B", "total": 25, "label": "high" },
+  { "id": "C", "total": 20, "label": "low" }
+]

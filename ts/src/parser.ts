@@ -356,7 +356,7 @@ class Parser {
         do { params.push(this.expect(TokenKind.Identifier, "Expected parameter name").text); } while (this.match(TokenKind.Comma));
         this.expect(TokenKind.RightParen, "Expected ')'");
         this.expect(TokenKind.FatArrow, "Expected '=>'");
-        const body = this.pipeDepth > 0 ? this.parseTernary() : this.parseExpression();
+        const body = this.parseLambdaBody();
         return { type: 'Lambda', parameters: params, body, span: this.span(start) };
       }
       const expr = this.parseExpression();
@@ -487,7 +487,7 @@ class Parser {
 
     if (this.check(TokenKind.FatArrow)) {
       this.advance();
-      const body = this.pipeDepth > 0 ? this.parseTernary() : this.parseExpression();
+      const body = this.parseLambdaBody();
       return { type: 'Lambda', parameters: [name], body, span: this.span(start) };
     }
 
@@ -583,6 +583,20 @@ class Parser {
       this.match(TokenKind.Comma);
     }
     return arms;
+  }
+
+  // ── Lambda body (may contain let bindings) ──
+
+  private parseLambdaBody(): ElwoodExpression {
+    if (!this.check(TokenKind.Let))
+      return this.pipeDepth > 0 ? this.parseTernary() : this.parseExpression();
+
+    const start = this.current().span;
+    const bindings: LetBindingNode[] = [];
+    while (this.check(TokenKind.Let))
+      bindings.push(this.parseLetBinding());
+    const body = this.pipeDepth > 0 ? this.parseTernary() : this.parseExpression();
+    return { type: 'LetIn', bindings, body, span: this.span(start) };
   }
 
   // ── Let binding ──

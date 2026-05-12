@@ -1,0 +1,4 @@
+return $.orders[*] | select o =>
+  let total = o.qty * o.price
+  let label = if total > 20 then "high" else "low"
+  { id: o.id, total: total, label: label }

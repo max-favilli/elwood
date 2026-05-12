@@ -16,6 +16,7 @@ export type ElwoodExpression =
   | IfExpression
   | MatchExpression
   | MemoExpression
+  | LetInExpression
   | MethodCallExpression
   | FunctionCallExpression
   | MemberAccessExpression
@@ -135,6 +136,13 @@ export interface MatchExpression {
 export interface MatchArm {
   pattern: ElwoodExpression | null; // null = wildcard
   result: ElwoodExpression;
+  span: SourceSpan;
+}
+
+export interface LetInExpression {
+  type: 'LetIn';
+  bindings: LetBindingNode[];
+  body: ElwoodExpression;
   span: SourceSpan;
 }
 

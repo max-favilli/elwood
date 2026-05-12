@@ -172,6 +172,11 @@ function evaluate(expr: ElwoodExpression, current: unknown, scope: Scope): unkno
     case 'InterpolatedString': return evalInterpolation(expr, current, scope);
     case 'Match': return evalMatch(expr, current, scope);
     case 'Memo': return new MemoizedFunction(expr.lambda, scope, evaluate);
+    case 'LetIn': {
+      const child = scope.child();
+      for (const b of expr.bindings) child.set(b.name, evaluate(b.value, current, child));
+      return evaluate(expr.body, current, child);
+    }
     case 'Lambda': throw new Error('Lambda cannot be evaluated directly');
   }
 }

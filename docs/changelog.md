@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-05-12 — Let-in-lambda and multi-param memo (v0.7.11)
+
+Two language features that enable complex multi-step transformations inside pipe operations:
+
+**Let bindings in lambda bodies**: Lambda bodies can now contain `let` bindings for intermediate calculations:
+```
+$.orders[*] | select o =>
+  let total = o.qty * o.price
+  let label = if total > 20 then "high" else "low"
+  { id: o.id, total: total, label: label }
+```
+
+**Multi-param memo**: Memo functions now support multiple parameters:
+```
+let lookup = memo (sv, cn) => $.items[*] | first i => i.style == sv && i.color == cn
+```
+
+### Files
+- `dotnet/src/Elwood.Core/Syntax/Ast.cs` — add `LetInExpression` AST node
+- `dotnet/src/Elwood.Core/Parsing/Parser.cs` — add `ParseLambdaBody()` helper; use in both lambda parsing locations
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — add `EvaluateLetIn` method
+- `ts/src/ast.ts` — add `LetInExpression` type to union
+- `ts/src/parser.ts` — add `parseLambdaBody()` helper; use in both lambda parsing locations
+- `ts/src/evaluator.ts` — add `LetIn` case in evaluate switch
+- `spec/test-cases/98-memo-multiarg/` — multi-param memo test
+- `spec/test-cases/99-let-in-lambda/` — let bindings in select lambda test
+- `docs/syntax-reference.md` — document both features
+
 ## 2026-05-12 — Fix `toXml()` XML namespace support (v0.7.10)
 
 `toXml()` in .NET now correctly handles XML namespace declarations and prefixed attributes. Previously, property names containing `:` (like `@xmlns:xsi` or `@xsi:noNamespaceSchemaLocation`) caused `XmlException` because `System.Xml.Linq` requires proper `XNamespace` handling.
