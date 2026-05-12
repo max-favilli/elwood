@@ -1,0 +1,7 @@
+{
+  "company": "Jack Wolfskin",
+  "orders": [
+    { "id": "ORD-001", "item": "Jacket", "qty": 2 },
+    { "id": "ORD-002", "item": "Boots", "qty": 1 }
+  ]
+}

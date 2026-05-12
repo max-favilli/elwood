@@ -1404,9 +1404,27 @@ public sealed class Evaluator
         return _factory.CreateString(sb.ToString());
     }
 
-    private XElement ValueToXElement(string name, IElwoodValue value, string attrPrefix)
+    private XElement ValueToXElement(string name, IElwoodValue value, string attrPrefix,
+        Dictionary<string, XNamespace>? parentNamespaces = null)
     {
-        var el = new XElement(name);
+        var namespaces = parentNamespaces is not null
+            ? new Dictionary<string, XNamespace>(parentNamespaces)
+            : new Dictionary<string, XNamespace>();
+
+        // First pass: collect xmlns declarations so prefixed names can be resolved
+        if (value.Kind == ElwoodValueKind.Object)
+        {
+            foreach (var prop in value.GetPropertyNames())
+            {
+                if (!prop.StartsWith(attrPrefix)) continue;
+                var attrName = prop[attrPrefix.Length..];
+                if (attrName.StartsWith("xmlns:"))
+                    namespaces[attrName["xmlns:".Length..]] =
+                        XNamespace.Get(value.GetProperty(prop)?.GetStringValue() ?? "");
+            }
+        }
+
+        var el = new XElement(ResolveXmlName(name, namespaces));
 
         if (value.Kind == ElwoodValueKind.Object)
         {
@@ -1417,10 +1435,15 @@ public sealed class Evaluator
 
                 if (prop.StartsWith(attrPrefix))
                 {
-                    // Attribute
                     var attrName = prop[attrPrefix.Length..];
-                    if (attrName.Length > 0)
-                        el.SetAttributeValue(attrName, ValueToString(propVal));
+                    if (attrName.Length == 0) continue;
+
+                    if (attrName.StartsWith("xmlns:"))
+                        el.SetAttributeValue(XNamespace.Xmlns + attrName["xmlns:".Length..], ValueToString(propVal));
+                    else if (attrName == "xmlns")
+                        el.SetAttributeValue("xmlns", ValueToString(propVal));
+                    else
+                        el.SetAttributeValue(ResolveXmlName(attrName, namespaces), ValueToString(propVal));
                 }
                 else if (prop == "#text")
                 {
@@ -1428,18 +1451,16 @@ public sealed class Evaluator
                 }
                 else if (propVal.Kind == ElwoodValueKind.Array)
                 {
-                    // Array → repeated elements
                     foreach (var item in propVal.EnumerateArray())
-                        el.Add(ValueToXElement(prop, item, attrPrefix));
+                        el.Add(ValueToXElement(prop, item, attrPrefix, namespaces));
                 }
                 else if (propVal.Kind == ElwoodValueKind.Object)
                 {
-                    el.Add(ValueToXElement(prop, propVal, attrPrefix));
+                    el.Add(ValueToXElement(prop, propVal, attrPrefix, namespaces));
                 }
                 else
                 {
-                    // Scalar → child element with text
-                    el.Add(new XElement(prop, ValueToString(propVal)));
+                    el.Add(new XElement(ResolveXmlName(prop, namespaces), ValueToString(propVal)));
                 }
             }
         }
@@ -1449,6 +1470,14 @@ public sealed class Evaluator
         }
 
         return el;
+    }
+
+    private static XName ResolveXmlName(string name, Dictionary<string, XNamespace> namespaces)
+    {
+        var colonIdx = name.IndexOf(':');
+        if (colonIdx > 0 && namespaces.TryGetValue(name[..colonIdx], out var ns))
+            return ns + name[(colonIdx + 1)..];
+        return name;
     }
 
     private IElwoodValue EvaluateFromText(IElwoodValue target, List<IElwoodValue> args)

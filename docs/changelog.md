@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-05-12 — Fix `toXml()` XML namespace support (v0.7.10)
+
+`toXml()` in .NET now correctly handles XML namespace declarations and prefixed attributes. Previously, property names containing `:` (like `@xmlns:xsi` or `@xsi:noNamespaceSchemaLocation`) caused `XmlException` because `System.Xml.Linq` requires proper `XNamespace` handling.
+
+Fix: `ValueToXElement` now scans `@xmlns:prefix` attributes first to build a namespace map, then resolves `prefix:localName` in both attributes and element names using the collected namespace URIs. The namespace map is passed down to child elements.
+
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — rewrite `ValueToXElement` with namespace resolution; add `ResolveXmlName` helper
+- `spec/test-cases/97-toxml-namespaces/` — new test case: `xmlns:xsi` declaration + `xsi:noNamespaceSchemaLocation` prefixed attribute
+
 ## 2026-05-08 — Fix `[*]` wildcard to flatten one level (JSONPath semantics) (v0.7.9)
 
 `[*]` on an array-of-arrays now flattens one level, matching standard JSONPath nodeset semantics. Previously, `$.styles[*].colorways[*]` produced nested arrays because auto-map (`.colorways` on an array) creates array-of-arrays and `[*]` was a no-op on arrays. Now `[*]` applies `SelectMany`/`.flat(1)` so chained wildcards like `$.a[*].b[*]` produce a flat list.

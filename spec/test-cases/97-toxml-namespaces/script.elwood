@@ -1,0 +1,12 @@
+{
+  ExportOrders: {
+    ["@xmlns:xsi"]: "http://www.w3.org/2001/XMLSchema-instance",
+    ["@xsi:noNamespaceSchemaLocation"]: "ExportOrders.xsd",
+    ["@CompanyName"]: $.company,
+    Order: $.orders[*] | select o => {
+      OrderNo: o.id,
+      Item: o.item,
+      Quantity: o.qty
+    }
+  }
+}.toXml({ declaration: false })
