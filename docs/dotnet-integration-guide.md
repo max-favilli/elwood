@@ -390,6 +390,24 @@ let adults = $.users[*] | where u => u.age >= 18
 return { count: adults | count }
 ```
 
+Lambda bodies can contain `let` bindings for multi-step calculations:
+
+```
+$.orders[*] | select o =>
+  let total = o.qty * o.price
+  let label = if total > 20 then "high" else "low"
+  { id: o.id, total: total, label: label }
+```
+
+### Memoized Functions
+
+Cache expensive lookups by argument value — supports single and multiple parameters:
+
+```
+let findRow = memo sv => $.rows[*] | first r => r.style == sv
+let lookup = memo (sv, cn) => $.rows[*] | first r => r.style == sv && r.color == cn
+```
+
 ### Literals and Object Construction
 
 ```
