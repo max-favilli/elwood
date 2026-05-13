@@ -136,8 +136,8 @@ expression | operation1 | operation2 | ...
 
 | Operator | Syntax | Description |
 |---|---|---|
-| `any` | `\| any predicate` | True if any item matches |
-| `all` | `\| all predicate` | True if all items match |
+| `any` | `\| any [predicate]` | True if any item matches (no predicate: true if non-empty) |
+| `all` | `\| all [predicate]` | True if all items match (no predicate: always true) |
 
 ### Pattern Matching
 

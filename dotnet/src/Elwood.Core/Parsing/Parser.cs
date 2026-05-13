@@ -117,8 +117,7 @@ public sealed class Parser
             "join" => ParseJoin(start),
             "concat" => ParseConcat(start),
             "reduce" => ParseReduce(start),
-            "any" or "all" =>
-                new QuantifierOperation(name, ParsePipeArgExpression(), Span(start)),
+            "any" or "all" => ParseQuantifier(name, start),
             _ => throw Error($"Unknown pipe operator '{name}'")
         };
     }
@@ -164,6 +163,16 @@ public sealed class Parser
         }
         // Has a predicate — parse like where
         return new AggregateOperation(name, ParsePipeArgExpression(), Span(start));
+    }
+
+    private QuantifierOperation ParseQuantifier(string kind, SourceSpan start)
+    {
+        if (IsAtEnd || Check(TokenKind.Pipe) || Check(TokenKind.RightBrace) ||
+            Check(TokenKind.RightParen) || Check(TokenKind.Eof) || Check(TokenKind.Comma))
+        {
+            return new QuantifierOperation(kind, null, Span(start));
+        }
+        return new QuantifierOperation(kind, ParsePipeArgExpression(), Span(start));
     }
 
     private ReduceOperation ParseReduce(SourceSpan start)

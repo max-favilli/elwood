@@ -221,8 +221,8 @@ public sealed record ConcatOperation(ElwoodExpression? Separator, SourceSpan Spa
 /// <summary>| reduce (acc, item) => expr [from initialValue]</summary>
 public sealed record ReduceOperation(ElwoodExpression Accumulator, ElwoodExpression? InitialValue, SourceSpan Span) : PipeOperation(Span);
 
-/// <summary>| any pred, | all pred</summary>
-public sealed record QuantifierOperation(string Kind, ElwoodExpression Predicate, SourceSpan Span) : PipeOperation(Span);
+/// <summary>| any [pred], | all [pred]</summary>
+public sealed record QuantifierOperation(string Kind, ElwoodExpression? Predicate, SourceSpan Span) : PipeOperation(Span);
 
 /// <summary>| match { arms }</summary>
 public sealed record MatchOperation(IReadOnlyList<MatchArm> Arms, SourceSpan Span) : PipeOperation(Span);

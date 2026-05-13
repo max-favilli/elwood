@@ -109,8 +109,13 @@ class Parser {
       case 'join': return this.parseJoin(start);
       case 'concat': return this.parseConcat(start);
       case 'reduce': return this.parseReduce(start);
-      case 'any': case 'all':
+      case 'any': case 'all': {
+        if (this.isAtEnd() || this.check(TokenKind.Pipe) || this.check(TokenKind.RightBrace) ||
+            this.check(TokenKind.RightParen) || this.check(TokenKind.Eof) || this.check(TokenKind.Comma)) {
+          return { type: 'Quantifier', kind: name as 'any' | 'all', span: this.span(start) };
+        }
         return { type: 'Quantifier', kind: name as 'any' | 'all', predicate: this.parsePipeArg(), span: this.span(start) };
+      }
       default: throw this.error(`Unknown pipe operator '${name}'`);
     }
   }

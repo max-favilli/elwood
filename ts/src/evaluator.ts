@@ -386,10 +386,15 @@ function evalPipeOp(op: PipeOperation, input: unknown, scope: Scope): unknown {
     }
     case 'Reduce': return evalReduce(op, items, scope);
     case 'Join': return evalJoin(op, items, scope);
-    case 'Quantifier':
+    case 'Quantifier': {
+      const pred = op.predicate;
+      if (!pred) {
+        return op.kind === 'all' ? true : items.length > 0;
+      }
       return op.kind === 'all'
-        ? items.every(item => isTruthy(evalWithLambdaOrImplicit(op.predicate, item, scope)))
-        : items.some(item => isTruthy(evalWithLambdaOrImplicit(op.predicate, item, scope)));
+        ? items.every(item => isTruthy(evalWithLambdaOrImplicit(pred, item, scope)))
+        : items.some(item => isTruthy(evalWithLambdaOrImplicit(pred, item, scope)));
+    }
     case 'MatchOp': return evalMatchArms(op.arms, input, scope);
   }
 }

@@ -642,9 +642,17 @@ public sealed class Evaluator
     private IElwoodValue EvaluateQuantifier(QuantifierOperation q, IElwoodValue input, ElwoodEnvironment env)
     {
         var items = input.EnumerateArray();
-        var result = q.Kind == "all"
-            ? items.All(item => IsTruthy(EvaluateWithLambdaOrImplicit(q.Predicate, item, env)))
-            : items.Any(item => IsTruthy(EvaluateWithLambdaOrImplicit(q.Predicate, item, env)));
+        bool result;
+        if (q.Predicate is null)
+        {
+            result = q.Kind == "all" || items.Any();
+        }
+        else
+        {
+            result = q.Kind == "all"
+                ? items.All(item => IsTruthy(EvaluateWithLambdaOrImplicit(q.Predicate, item, env)))
+                : items.Any(item => IsTruthy(EvaluateWithLambdaOrImplicit(q.Predicate, item, env)));
+        }
         return _factory.CreateBool(result);
     }
 

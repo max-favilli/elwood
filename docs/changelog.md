@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-05-13 — `| any` / `| all` without predicate (v0.7.12)
+
+`| any` and `| all` now work without a predicate argument:
+- `| any` — returns `true` if the collection is non-empty, `false` if empty
+- `| all` — returns `true` always (vacuous truth for empty collections)
+
+Useful after `| where` to check existence: `$.items[*] | where i => i.active | any`
+
+### Files
+- `dotnet/src/Elwood.Core/Syntax/Ast.cs` — make `QuantifierOperation.Predicate` nullable
+- `dotnet/src/Elwood.Core/Parsing/Parser.cs` — add `ParseQuantifier` with optional predicate detection
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — handle null predicate in `EvaluateQuantifier`
+- `ts/src/ast.ts` — make `predicate` optional on `QuantifierOperation`
+- `ts/src/parser.ts` — detect missing predicate before calling `parsePipeArg()`
+- `ts/src/evaluator.ts` — handle missing predicate in Quantifier case
+- `spec/test-cases/100-105` — six test cases covering empty, non-empty, after-where, in-parens, backward compat
+- `docs/syntax-reference.md` — update quantifier operator docs
+
+---
+
 ## 2026-05-12 — Let-in-lambda and multi-param memo (v0.7.11)
 
 Two language features that enable complex multi-step transformations inside pipe operations:

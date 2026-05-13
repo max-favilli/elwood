@@ -222,7 +222,7 @@ export interface JoinOperation {
 }
 export interface ConcatOperation { type: 'Concat'; separator?: ElwoodExpression; span: SourceSpan }
 export interface ReduceOperation { type: 'Reduce'; accumulator: ElwoodExpression; initialValue?: ElwoodExpression; span: SourceSpan }
-export interface QuantifierOperation { type: 'Quantifier'; kind: 'any' | 'all'; predicate: ElwoodExpression; span: SourceSpan }
+export interface QuantifierOperation { type: 'Quantifier'; kind: 'any' | 'all'; predicate?: ElwoodExpression; span: SourceSpan }
 export interface MatchOperation { type: 'MatchOp'; arms: MatchArm[]; span: SourceSpan }
 
 export type JoinMode = 'inner' | 'left' | 'right' | 'full';
