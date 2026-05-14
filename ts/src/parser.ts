@@ -195,8 +195,9 @@ class Parser {
       const condition = this.parseOr();
       this.expect(TokenKind.Then, "Expected 'then'");
       const thenBranch = this.parseTernary();
-      this.expect(TokenKind.Else, "Expected 'else'");
-      const elseBranch = this.parseTernary();
+      const elseBranch = this.match(TokenKind.Else)
+        ? this.parseTernary()
+        : { type: 'Literal' as const, value: null, span: this.span(start) };
       return { type: 'If', condition, thenBranch, elseBranch, span: this.span(start) };
     }
     return this.parseOr();

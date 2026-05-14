@@ -233,8 +233,9 @@ public sealed class Parser
             var cond = ParseOr();
             Expect(TokenKind.Then, "Expected 'then' after if condition");
             var thenBranch = ParseTernary();
-            Expect(TokenKind.Else, "Expected 'else' after then branch");
-            var elseBranch = ParseTernary();
+            var elseBranch = Match(TokenKind.Else)
+                ? ParseTernary()
+                : new LiteralExpression(null, Span(start));
             return new IfExpression(cond, thenBranch, elseBranch, Span(start));
         }
         return ParseOr();

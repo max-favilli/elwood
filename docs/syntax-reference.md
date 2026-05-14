@@ -247,11 +247,13 @@ The function body executes once per distinct argument combination. Subsequent ca
 
 ```
 if condition then expression else expression
+if condition then expression                    // else defaults to null
 ```
 
-Example:
+Examples:
 ```
 $.users[*] | select u => if u.age >= 18 then "adult" else "minor"
+if $.type == "CAPTURE" then $.amount            // null when condition is false
 ```
 
 ## Operators

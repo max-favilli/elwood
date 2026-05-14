@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-05-14 — Optional `else` in `if/then` (v0.7.14)
+
+`if condition then expression` now works without an `else` clause — the else branch implicitly returns `null`. Useful for conditional-only transformations where the alternative is "nothing".
+
+### Files
+- `dotnet/src/Elwood.Core/Parsing/Parser.cs` — make `else` optional, emit null literal
+- `ts/src/parser.ts` — same
+- `docs/syntax-reference.md` — update conditionals section
+- `spec/test-cases/110-111` — two test cases (true → value, false → null)
+
+---
+
 ## 2026-05-14 — Parser fixes: `let`/`return` as pipe terminators, trailing `?` in postfix (v0.7.13)
 
 Two parser bugs fixed:
