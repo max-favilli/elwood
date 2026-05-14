@@ -1,0 +1,6 @@
+{
+  "items": [
+    { "name": "Alice", "active": true },
+    { "name": "Bob", "active": false }
+  ]
+}

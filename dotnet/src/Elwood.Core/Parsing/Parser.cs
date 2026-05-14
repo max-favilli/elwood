@@ -153,25 +153,22 @@ public sealed class Parser
         return new OrderByOperation(keys, Span(start));
     }
 
+    private bool IsAtPipeOperationEnd()
+        => IsAtEnd || Check(TokenKind.Pipe) || Check(TokenKind.RightBrace) ||
+           Check(TokenKind.RightParen) || Check(TokenKind.Eof) || Check(TokenKind.Comma) ||
+           Check(TokenKind.Let) || Check(TokenKind.Return);
+
     private PipeOperation ParseFirstLast(string name, SourceSpan start)
     {
-        // Check if there's a predicate (lambda or expression) following
-        if (IsAtEnd || Check(TokenKind.Pipe) || Check(TokenKind.RightBrace) ||
-            Check(TokenKind.RightParen) || Check(TokenKind.Eof) || Check(TokenKind.Comma))
-        {
+        if (IsAtPipeOperationEnd())
             return new AggregateOperation(name, Span(start));
-        }
-        // Has a predicate — parse like where
         return new AggregateOperation(name, ParsePipeArgExpression(), Span(start));
     }
 
     private QuantifierOperation ParseQuantifier(string kind, SourceSpan start)
     {
-        if (IsAtEnd || Check(TokenKind.Pipe) || Check(TokenKind.RightBrace) ||
-            Check(TokenKind.RightParen) || Check(TokenKind.Eof) || Check(TokenKind.Comma))
-        {
+        if (IsAtPipeOperationEnd())
             return new QuantifierOperation(kind, null, Span(start));
-        }
         return new QuantifierOperation(kind, ParsePipeArgExpression(), Span(start));
     }
 
@@ -188,13 +185,8 @@ public sealed class Parser
 
     private ConcatOperation ParseConcat(SourceSpan start)
     {
-        // Separator is optional — check if next token looks like an argument
-        // (string literal, identifier, parenthesized expression) vs next pipe or end
-        if (IsAtEnd || Check(TokenKind.Pipe) || Check(TokenKind.RightBrace) ||
-            Check(TokenKind.RightParen) || Check(TokenKind.Eof) || Check(TokenKind.Comma))
-        {
+        if (IsAtPipeOperationEnd())
             return new ConcatOperation(null, Span(start));
-        }
         return new ConcatOperation(ParsePipeArgExpression(), Span(start));
     }
 
@@ -369,7 +361,10 @@ public sealed class Parser
                 }
                 else
                 {
-                    expr = new MemberAccessExpression(expr, name, Span(start));
+                    var member = new MemberAccessExpression(expr, name, Span(start));
+                    if (Match(TokenKind.Question))
+                        member = member with { Optional = true };
+                    expr = member;
                 }
             }
             else if (Match(TokenKind.QuestionDot))

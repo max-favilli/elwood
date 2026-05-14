@@ -1,0 +1,3 @@
+let f = memo v => v
+let obj = { a: "hello" }
+return f(obj.a?)

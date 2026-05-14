@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-05-14 — Parser fixes: `let`/`return` as pipe terminators, trailing `?` in postfix (v0.7.13)
+
+Two parser bugs fixed:
+
+**`let`/`return` not recognized as pipe operation terminators**: Optional-argument pipe operators (`| first`, `| last`, `| any`, `| all`, `| concat`) tried to consume `let`/`return` as a predicate/argument, requiring workaround parentheses. Added `IsAtPipeOperationEnd` / `isAtPipeEnd` helper that checks for `let` and `return` tokens.
+
+**Trailing `?` not accepted in postfix expressions**: `obj.prop?` worked as a standalone expression but failed inside function arguments, array literals, and other nested contexts. `ParsePostfix` now consumes trailing `?` after `.name` member access.
+
+### Files
+- `dotnet/src/Elwood.Core/Parsing/Parser.cs` — add `IsAtPipeOperationEnd()`, fix `ParsePostfix` trailing `?`
+- `ts/src/parser.ts` — add `isAtPipeEnd()`, fix `parsePostfix` trailing `?`
+- `spec/test-cases/106-109` — four test cases
+
+---
+
 ## 2026-05-13 — `| any` / `| all` without predicate (v0.7.12)
 
 `| any` and `| all` now work without a predicate argument:

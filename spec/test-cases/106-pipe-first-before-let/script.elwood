@@ -1,0 +1,3 @@
+let item = $.items[*] | first
+let name = item.name
+return { name: name }

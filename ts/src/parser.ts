@@ -110,8 +110,7 @@ class Parser {
       case 'concat': return this.parseConcat(start);
       case 'reduce': return this.parseReduce(start);
       case 'any': case 'all': {
-        if (this.isAtEnd() || this.check(TokenKind.Pipe) || this.check(TokenKind.RightBrace) ||
-            this.check(TokenKind.RightParen) || this.check(TokenKind.Eof) || this.check(TokenKind.Comma)) {
+        if (this.isAtPipeEnd()) {
           return { type: 'Quantifier', kind: name as 'any' | 'all', span: this.span(start) };
         }
         return { type: 'Quantifier', kind: name as 'any' | 'all', predicate: this.parsePipeArg(), span: this.span(start) };
@@ -138,9 +137,14 @@ class Parser {
     return { type: 'OrderBy', keys, span: this.span(start) };
   }
 
+  private isAtPipeEnd(): boolean {
+    return this.isAtEnd() || this.check(TokenKind.Pipe) || this.check(TokenKind.RightBrace) ||
+        this.check(TokenKind.RightParen) || this.check(TokenKind.Eof) || this.check(TokenKind.Comma) ||
+        this.check(TokenKind.Let) || this.check(TokenKind.Return);
+  }
+
   private parseFirstLast(name: string, start: SourceSpan): PipeOperation {
-    if (this.isAtEnd() || this.check(TokenKind.Pipe) || this.check(TokenKind.RightBrace) ||
-        this.check(TokenKind.RightParen) || this.check(TokenKind.Eof) || this.check(TokenKind.Comma)) {
+    if (this.isAtPipeEnd()) {
       return { type: 'Aggregate', name, span: this.span(start) };
     }
     return { type: 'Aggregate', name, predicate: this.parsePipeArg(), span: this.span(start) };
@@ -154,8 +158,7 @@ class Parser {
   }
 
   private parseConcat(start: SourceSpan): PipeOperation {
-    if (this.isAtEnd() || this.check(TokenKind.Pipe) || this.check(TokenKind.RightBrace) ||
-        this.check(TokenKind.RightParen) || this.check(TokenKind.Eof) || this.check(TokenKind.Comma)) {
+    if (this.isAtPipeEnd()) {
       return { type: 'Concat', span: this.span(start) };
     }
     return { type: 'Concat', separator: this.parsePipeArg(), span: this.span(start) };
@@ -291,7 +294,8 @@ class Parser {
           this.expect(TokenKind.RightParen, "Expected ')'");
           expr = { type: 'MethodCall', target: expr, methodName: name, arguments: args, span: this.span(start) };
         } else {
-          expr = { type: 'MemberAccess', target: expr, memberName: name, optional, span: this.span(start) };
+          const trailingOpt = !optional && this.match(TokenKind.Question);
+          expr = { type: 'MemberAccess', target: expr, memberName: name, optional: optional || trailingOpt, span: this.span(start) };
         }
       } else if (this.match(TokenKind.LeftBracket)) {
         const start = this.previous().span;
