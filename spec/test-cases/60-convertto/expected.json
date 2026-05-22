@@ -3,5 +3,8 @@
   "toDouble": 5.6,
   "toBoolFromFlag": true,
   "toBoolFromString": true,
-  "boolArray": [true, true, true, false, false, true]
+  "boolArray": [true, true, true, false, false, true],
+  "boolTrueToInt": 1,
+  "boolFalseToInt": 0,
+  "boolTrueToDouble": 1
 }

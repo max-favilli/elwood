@@ -139,6 +139,16 @@ describe('Parser', () => {
       }
     });
 
+    it('parses spread in array', () => {
+      const { ast } = parseExpression('[...x, 1, ...y]');
+      if (ast.type === 'Array') {
+        expect(ast.items).toHaveLength(3);
+        expect(ast.items[0].isSpread).toBe(true);
+        expect(ast.items[1].isSpread).toBeUndefined();
+        expect(ast.items[2].isSpread).toBe(true);
+      }
+    });
+
     it('parses computed key', () => {
       const { ast } = parseExpression('{ [$.key]: "value" }');
       if (ast.type === 'Object') {

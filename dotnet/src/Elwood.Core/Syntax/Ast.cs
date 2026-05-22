@@ -63,9 +63,11 @@ public sealed record ObjectProperty(string Key, ElwoodExpression Value, SourceSp
 
 /// <summary>Array literal: [expr, expr, ...]</summary>
 public sealed record ArrayExpression(
-    IReadOnlyList<ElwoodExpression> Items,
+    IReadOnlyList<ArrayItem> Items,
     SourceSpan Span
 ) : ElwoodExpression(Span);
+
+public sealed record ArrayItem(ElwoodExpression Value, SourceSpan Span, bool IsSpread = false);
 
 /// <summary>String, number, bool, null literals.</summary>
 public sealed record LiteralExpression(

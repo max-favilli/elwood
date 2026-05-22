@@ -81,9 +81,15 @@ export interface ObjectProperty {
   computedKey?: ElwoodExpression;
 }
 
+export interface ArrayItem {
+  value: ElwoodExpression;
+  isSpread?: boolean;
+  span: SourceSpan;
+}
+
 export interface ArrayExpression {
   type: 'Array';
-  items: ElwoodExpression[];
+  items: ArrayItem[];
   span: SourceSpan;
 }
 

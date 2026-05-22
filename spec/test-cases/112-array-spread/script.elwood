@@ -1,0 +1,3 @@
+let a = $.first
+let b = $.second
+return [...a, ...b, 6, 7]

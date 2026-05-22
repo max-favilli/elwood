@@ -3,7 +3,7 @@ import { TokenKind } from './token.js';
 import { tokenize, type Diagnostic } from './lexer.js';
 import type {
   ElwoodExpression, ScriptNode, LetBindingNode, PipeOperation, PathSegment,
-  ObjectProperty, MatchArm, InterpolationPart, JoinMode,
+  ObjectProperty, ArrayItem, MatchArm, InterpolationPart, JoinMode,
 } from './ast.js';
 
 export class ParseError extends Error {
@@ -351,9 +351,16 @@ class Parser {
 
     // Array literal
     if (this.match(TokenKind.LeftBracket)) {
-      const items: ElwoodExpression[] = [];
+      const items: ArrayItem[] = [];
       if (!this.check(TokenKind.RightBracket)) {
-        do { items.push(this.parseExpression()); } while (this.match(TokenKind.Comma));
+        do {
+          const itemStart = this.current().span;
+          if (this.match(TokenKind.Spread)) {
+            items.push({ value: this.parseExpression(), isSpread: true, span: this.span(itemStart) });
+          } else {
+            items.push({ value: this.parseExpression(), span: this.span(itemStart) });
+          }
+        } while (this.match(TokenKind.Comma));
       }
       this.expect(TokenKind.RightBracket, "Expected ']'");
       return { type: 'Array', items, span: this.span(start) };

@@ -457,10 +457,17 @@ public sealed class Parser
         // Array literal: [ expr, ... ]
         if (Match(TokenKind.LeftBracket))
         {
-            var items = new List<ElwoodExpression>();
+            var items = new List<ArrayItem>();
             if (!Check(TokenKind.RightBracket))
             {
-                do { items.Add(ParseExpression()); } while (Match(TokenKind.Comma));
+                do
+                {
+                    var itemStart = Current.Span;
+                    if (Match(TokenKind.Spread))
+                        items.Add(new ArrayItem(ParseExpression(), Span(itemStart), IsSpread: true));
+                    else
+                        items.Add(new ArrayItem(ParseExpression(), Span(itemStart)));
+                } while (Match(TokenKind.Comma));
             }
             Expect(TokenKind.RightBracket, "Expected ']'");
             return new ArrayExpression(items, Span(start));

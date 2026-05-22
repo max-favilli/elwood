@@ -289,8 +289,23 @@ public sealed class Evaluator
 
     private IElwoodValue EvaluateArray(ArrayExpression arr, IElwoodValue current, ElwoodEnvironment env)
     {
-        var items = arr.Items.Select(i => Evaluate(i, current, env));
-        return _factory.CreateArray(items);
+        var result = new List<IElwoodValue>();
+        foreach (var item in arr.Items)
+        {
+            if (item.IsSpread)
+            {
+                var spread = Evaluate(item.Value, current, env);
+                if (spread.Kind == ElwoodValueKind.Array)
+                    result.AddRange(spread.EnumerateArray());
+                else
+                    result.Add(spread);
+            }
+            else
+            {
+                result.Add(Evaluate(item.Value, current, env));
+            }
+        }
+        return _factory.CreateArray(result);
     }
 
     private IElwoodValue EvaluatePipeline(PipelineExpression pipe, IElwoodValue current, ElwoodEnvironment env)
@@ -1876,6 +1891,14 @@ public sealed class Evaluator
     private IElwoodValue EvaluateConvertTo(IElwoodValue target, List<IElwoodValue> args)
     {
         var typeName = args.Count > 0 ? args[0].GetStringValue()?.ToLower() ?? "" : "";
+
+        if (target.Kind == ElwoodValueKind.Boolean)
+        {
+            var boolNum = IsTruthy(target) ? 1.0 : 0.0;
+            if (typeName is "int32" or "int" or "integer" or "int64" or "long" or "double" or "float" or "decimal")
+                return _factory.CreateNumber(boolNum);
+        }
+
         var str = ValueToString(target);
         return typeName switch
         {

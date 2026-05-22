@@ -163,7 +163,19 @@ function evaluate(expr: ElwoodExpression, current: unknown, scope: Scope): unkno
       ? evaluate(expr.thenBranch, current, scope)
       : evaluate(expr.elseBranch, current, scope);
     case 'Object': return evalObject(expr, current, scope);
-    case 'Array': return expr.items.map(i => evaluate(i, current, scope));
+    case 'Array': {
+      const result: unknown[] = [];
+      for (const item of expr.items) {
+        if (item.isSpread) {
+          const spread = evaluate(item.value, current, scope);
+          if (isArray(spread)) result.push(...spread);
+          else result.push(spread);
+        } else {
+          result.push(evaluate(item.value, current, scope));
+        }
+      }
+      return result;
+    }
     case 'Pipeline': return evalPipeline(expr, current, scope);
     case 'MemberAccess': return evalMemberAccess(expr, current, scope);
     case 'MethodCall': return evalMethodCall(expr, current, scope);
@@ -822,6 +834,12 @@ function concatMethod(target: unknown, args: unknown[]): string {
 
 function convertTo(target: unknown, args: unknown[]): unknown {
   const typeName = (valueToString(args[0]) ?? '').toLowerCase();
+  if (typeof target === 'boolean') {
+    switch (typeName) {
+      case 'int32': case 'int': case 'integer': case 'int64': case 'long': return target ? 1 : 0;
+      case 'double': case 'float': case 'decimal': return target ? 1 : 0;
+    }
+  }
   const s = valueToString(target);
   switch (typeName) {
     case 'int32': case 'int': case 'integer': { const n = parseFloat(s); return isNaN(n) ? 0 : Math.trunc(n); }
