@@ -659,7 +659,8 @@ function callBuiltin(name: string, target: unknown, args: unknown[], _scope?: Sc
     case 'startsWith': return str().toLowerCase().startsWith(valueToString(args[0]).toLowerCase());
     case 'endsWith': return str().toLowerCase().endsWith(valueToString(args[0]).toLowerCase());
     case 'replace': {
-      const s = str(), search = valueToString(args[0]), repl = args.length > 1 ? valueToString(args[1]) : '';
+      const unwrap = (v: unknown) => isArray(v) && v.length === 1 ? v[0] : v;
+      const s = str(), search = valueToString(unwrap(args[0])), repl = args.length > 1 ? valueToString(unwrap(args[1])) : '';
       const caseInsensitive = args.length > 2 && isTruthy(args[2]);
       if (caseInsensitive) return s.replace(new RegExp(escapeRegex(search), 'gi'), repl);
       return s.split(search).join(repl);

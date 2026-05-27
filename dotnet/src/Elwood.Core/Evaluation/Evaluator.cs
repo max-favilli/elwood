@@ -903,11 +903,7 @@ public sealed class Evaluator
                 target.GetStringValue()?.StartsWith(args[0].GetStringValue() ?? "", StringComparison.OrdinalIgnoreCase) ?? false),
             "endsWith" => _factory.CreateBool(
                 target.GetStringValue()?.EndsWith(args[0].GetStringValue() ?? "", StringComparison.OrdinalIgnoreCase) ?? false),
-            "replace" => _factory.CreateString(
-                target.GetStringValue()?.Replace(
-                    args[0].GetStringValue() ?? "",
-                    args.Count > 1 ? args[1].GetStringValue() ?? "" : "",
-                    args.Count > 2 && IsTruthy(args[2]) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ?? ""),
+            "replace" => EvaluateReplace(target, args),
             "substring" => EvaluateSubstring(target, args),
             "regex" => _factory.CreateArray(
                 System.Text.RegularExpressions.Regex.Matches(target.GetStringValue() ?? "", args[0].GetStringValue() ?? "")
@@ -1951,6 +1947,22 @@ public sealed class Evaluator
                 : new[] { arg });
 
         return _factory.CreateBool(candidates.Any(c => ValuesEqual(target, c)));
+    }
+
+    private IElwoodValue EvaluateReplace(IElwoodValue target, List<IElwoodValue> args)
+    {
+        IElwoodValue Unwrap(IElwoodValue v) =>
+            v.Kind == ElwoodValueKind.Array && v.GetArrayLength() == 1
+                ? v.EnumerateArray().First()
+                : v;
+
+        var str = target.GetStringValue() ?? "";
+        var search = Unwrap(args[0]).GetStringValue() ?? "";
+        var repl = args.Count > 1 ? Unwrap(args[1]).GetStringValue() ?? "" : "";
+        var comparison = args.Count > 2 && IsTruthy(args[2])
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        return _factory.CreateString(str.Replace(search, repl, comparison));
     }
 
     private IElwoodValue EvaluateSubstring(IElwoodValue target, List<IElwoodValue> args)
