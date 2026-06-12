@@ -3,6 +3,7 @@ using Elwood.Json;
 using Elwood.Pipeline;
 using Elwood.Pipeline.Async;
 using Elwood.Pipeline.Connectors;
+using Elwood.Pipeline.Schema;
 using Elwood.Pipeline.State;
 using Elwood.Pipeline.Storage;
 
@@ -318,6 +319,103 @@ public class AsyncExecutorTests
         Assert.Contains("B", output);
     }
 
+    [Fact]
+    public async Task PullSource_PostBodyEvaluatedFromIdm()
+    {
+        var capturedBodies = new List<string>();
+        var mockConnector = new MockSourceConnector(
+            response: """{"enriched":true}""",
+            onFetch: (config, _) => capturedBodies.Add(config.Http?.BodyContent ?? ""));
+
+        var stateStore = new InMemoryStateStore();
+        var docStore = new InMemoryDocumentStore();
+        var queue = new InMemoryStepQueue();
+        var executor = new AsyncExecutor(stateStore, docStore, queue,
+            sourceConnectors: [mockConnector]);
+
+        var pipeline = ParsePipeline("""
+            version: 2
+            name: async-body-test
+            mode: async
+            sources:
+              - name: trigger
+                trigger: http
+              - name: enrich
+                trigger: pull
+                depends: trigger
+                from:
+                  http:
+                    url: https://api.example.com/enrich
+                    method: POST
+                    body: "{ ids: $idm.items[*].id }"
+            outputs:
+              - name: result
+            """);
+
+        var triggerPayload = Factory.Parse("""{"items":[{"id":"X"},{"id":"Y"}]}""");
+        await executor.StartAsync(pipeline, triggerPayload, triggerSourceName: "trigger");
+
+        // Process stage 0 (trigger)
+        var stage0 = queue.DrainAll();
+        await executor.ExecuteStepAsync(stage0[0]);
+
+        // Process stage 1 (enrich — pull source with body)
+        var stage1 = queue.DrainAll();
+        await executor.ExecuteStepAsync(stage1.First(m => m.StepName == "enrich"));
+
+        Assert.Single(capturedBodies);
+        Assert.Contains("\"X\"", capturedBodies[0]);
+        Assert.Contains("\"Y\"", capturedBodies[0]);
+    }
+
+    [Fact]
+    public async Task PullSource_StatusCodeExposedInSourceMap()
+    {
+        var mockConnector = new MockSourceConnector(
+            response: """{"status":"not_found"}""",
+            statusCode: 404);
+
+        var stateStore = new InMemoryStateStore();
+        var docStore = new InMemoryDocumentStore();
+        var queue = new InMemoryStepQueue();
+        var executor = new AsyncExecutor(stateStore, docStore, queue,
+            sourceConnectors: [mockConnector]);
+
+        var pipeline = ParsePipeline("""
+            version: 2
+            name: async-status-test
+            mode: async
+            sources:
+              - name: check
+                trigger: pull
+                from:
+                  http:
+                    url: https://api.example.com/check
+                    acceptedStatusCodes: "2xx,4xx"
+                map: check-map.elwood
+            outputs:
+              - name: result
+            """,
+            scripts: new() { ["check-map.elwood"] = "return { data: $, httpStatus: $source.http.statusCode }" });
+
+        await executor.StartAsync(pipeline, Factory.Parse("{}"), triggerSourceName: "__none__");
+
+        // Process source
+        var msgs = queue.DrainAll();
+        await executor.ExecuteStepAsync(msgs[0]);
+
+        // Process output
+        var outputMsgs = queue.DrainAll();
+        await executor.ExecuteStepAsync(outputMsgs.First(m => m.Type == StepType.Output));
+
+        var state = await stateStore.GetExecutionAsync(msgs[0].ExecutionId);
+        Assert.Equal(ExecutionStatus.Completed, state!.Status);
+
+        var outputJson = await docStore.GetAsync($"exec/{msgs[0].ExecutionId}/output/result");
+        Assert.NotNull(outputJson);
+        Assert.Contains("404", outputJson);
+    }
+
     // ── helpers ──
 
     private static (AsyncExecutor executor, InMemoryStateStore state, InMemoryDocumentStore docs, InMemoryStepQueue queue) CreateExecutor()
@@ -329,13 +427,43 @@ public class AsyncExecutorTests
         return (executor, stateStore, docStore, queue);
     }
 
-    private static ParsedPipeline ParsePipeline(string yaml)
+    private static ParsedPipeline ParsePipeline(string yaml, Dictionary<string, string>? scripts = null)
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"elwood-async-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
-        var yamlPath = Path.Combine(tempDir, "pipeline.elwood.yaml");
-        File.WriteAllText(yamlPath, yaml);
+        File.WriteAllText(Path.Combine(tempDir, "pipeline.elwood.yaml"), yaml);
+        if (scripts is not null)
+        {
+            foreach (var (name, content) in scripts)
+                File.WriteAllText(Path.Combine(tempDir, name), content);
+        }
         var parser = new PipelineParser();
-        return parser.Parse(yamlPath);
+        return parser.Parse(Path.Combine(tempDir, "pipeline.elwood.yaml"));
+    }
+}
+
+/// <summary>
+/// Mock source connector for async executor tests — captures BodyContent and returns canned responses.
+/// </summary>
+public class MockSourceConnector : ISourceConnector
+{
+    private readonly string _response;
+    private readonly int? _statusCode;
+    private readonly Action<Schema.PullSourceConfig, IElwoodValue?>? _onFetch;
+
+    public MockSourceConnector(string response, int? statusCode = null,
+        Action<Schema.PullSourceConfig, IElwoodValue?>? onFetch = null)
+    {
+        _response = response;
+        _statusCode = statusCode;
+        _onFetch = onFetch;
+    }
+
+    public bool CanHandle(Schema.PullSourceConfig config) => config.Http is not null;
+
+    public Task<SourceFetchResult> FetchAsync(Schema.PullSourceConfig config, IElwoodValue? context = null)
+    {
+        _onFetch?.Invoke(config, context);
+        return Task.FromResult(new SourceFetchResult(_response, "json", statusCode: _statusCode));
     }
 }

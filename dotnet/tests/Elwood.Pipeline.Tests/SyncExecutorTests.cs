@@ -290,6 +290,97 @@ public class SyncExecutorTests
         finally { Directory.Delete(tempDir, true); }
     }
 
+    [Fact]
+    public async Task PullSource_PostBodyEvaluatedFromIdm()
+    {
+        var capturedBodies = new List<string>();
+        var mockHandler = new MockHttpMessageHandler(
+            new Dictionary<string, string>
+            {
+                ["https://api.example.com/enrich"] = """{"enriched":true}"""
+            },
+            onRequest: (_, body) => capturedBodies.Add(body));
+
+        var (pipeline, tempDir) = CreatePipeline("""
+            version: 2
+            name: body-test
+            sources:
+              - name: trigger
+                trigger: http
+                contentType: json
+              - name: enrich
+                trigger: pull
+                depends: trigger
+                from:
+                  http:
+                    url: https://api.example.com/enrich
+                    method: POST
+                    body: "{ ids: $idm.items[*].id }"
+            outputs:
+              - name: result
+                response: true
+            """);
+
+        try
+        {
+            var triggerPayload = Factory.Parse("""{ "items": [{"id":"A"}, {"id":"B"}] }""");
+            var executor = new SyncExecutor(
+                sourceConnectors: [new HttpSourceConnector(new HttpClient(mockHandler))]);
+
+            var result = await executor.ExecuteAsync(pipeline, triggerPayload);
+
+            Assert.True(result.IsSuccess, $"Errors: {string.Join("; ", result.Errors)}");
+            Assert.Single(capturedBodies);
+            Assert.Contains("\"A\"", capturedBodies[0]);
+            Assert.Contains("\"B\"", capturedBodies[0]);
+        }
+        finally { Directory.Delete(tempDir, true); }
+    }
+
+    [Fact]
+    public async Task PullSource_StatusCodeExposedInSourceMap()
+    {
+        var mockHandler = new MockHttpMessageHandler(
+            new Dictionary<string, string>
+            {
+                ["https://api.example.com/check"] = """{"status":"not_found"}"""
+            },
+            statusCode: HttpStatusCode.NotFound);
+
+        var (pipeline, tempDir) = CreatePipeline("""
+            version: 2
+            name: status-code-test
+            sources:
+              - name: check
+                trigger: pull
+                contentType: json
+                from:
+                  http:
+                    url: https://api.example.com/check
+                    acceptedStatusCodes: "2xx,4xx"
+                map: check-map.elwood
+            outputs:
+              - name: result
+                response: true
+            """,
+            scripts: new()
+            {
+                ["check-map.elwood"] = "return { data: $, httpStatus: $source.http.statusCode }"
+            });
+
+        try
+        {
+            var executor = new SyncExecutor(
+                sourceConnectors: [new HttpSourceConnector(new HttpClient(mockHandler))]);
+            var result = await executor.ExecuteAsync(pipeline, Factory.Parse("{}"), triggerSourceName: "__none__");
+
+            Assert.True(result.IsSuccess, $"Errors: {string.Join("; ", result.Errors)}");
+            var check = result.Outputs["result"];
+            Assert.Equal(404.0, check.GetProperty("httpStatus")?.GetNumberValue());
+        }
+        finally { Directory.Delete(tempDir, true); }
+    }
+
     // ── Helpers ──
 
     private static (ParsedPipeline pipeline, string tempDir) CreatePipeline(string yaml,
@@ -319,12 +410,15 @@ public class MockHttpMessageHandler : HttpMessageHandler
 {
     private readonly Dictionary<string, string> _responses;
     private readonly Action<string, string>? _onRequest;
+    private readonly HttpStatusCode _statusCode;
 
     public MockHttpMessageHandler(Dictionary<string, string> responses,
-        Action<string, string>? onRequest = null)
+        Action<string, string>? onRequest = null,
+        HttpStatusCode statusCode = HttpStatusCode.OK)
     {
         _responses = responses;
         _onRequest = onRequest;
+        _statusCode = statusCode;
     }
 
     protected override async Task<HttpResponseMessage> SendAsync(
@@ -339,13 +433,13 @@ public class MockHttpMessageHandler : HttpMessageHandler
 
         if (_responses.TryGetValue(url, out var response))
         {
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(_statusCode)
             {
                 Content = new StringContent(response, System.Text.Encoding.UTF8, "application/json")
             };
         }
 
-        return new HttpResponseMessage(HttpStatusCode.OK)
+        return new HttpResponseMessage(_statusCode)
         {
             Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json")
         };

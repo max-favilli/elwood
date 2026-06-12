@@ -177,6 +177,7 @@ public sealed class AsyncExecutor
         try
         {
             IElwoodValue payload;
+            SourceFetchResult? fetchResult = null;
 
             // Determine if this is the trigger source or a pull source
             var isTrigger = sourceConfig.Name == pipelineDto.TriggerSourceName ||
@@ -194,7 +195,26 @@ public sealed class AsyncExecutor
                 if (connector is null)
                     throw new InvalidOperationException($"No connector for source '{message.StepName}'");
 
-                var fetchResult = await connector.FetchAsync(sourceConfig.From, idm);
+                // Evaluate POST/PUT body expression against the IDM if present
+                if (sourceConfig.From.Http is not null && !string.IsNullOrWhiteSpace(sourceConfig.From.Http.Body))
+                {
+                    var bodyBindings = new Dictionary<string, IElwoodValue> { ["$idm"] = idm };
+                    var bodyResult = EvaluateReference(sourceConfig.From.Http.Body, idm, bodyBindings, pipelineDto.Scripts);
+                    if (bodyResult is not null)
+                        sourceConfig.From.Http.BodyContent = SerializeValue(bodyResult);
+                }
+
+                // Resolve inline expressions and secret references in HTTP config
+                if (sourceConfig.From.Http is not null)
+                {
+                    sourceConfig.From.Http.Url = _stringResolver.Resolve(sourceConfig.From.Http.Url, idm);
+                    if (!string.IsNullOrEmpty(sourceConfig.From.Http.User))
+                        sourceConfig.From.Http.User = _stringResolver.Resolve(sourceConfig.From.Http.User, idm);
+                    if (!string.IsNullOrEmpty(sourceConfig.From.Http.Password))
+                        sourceConfig.From.Http.Password = _stringResolver.Resolve(sourceConfig.From.Http.Password, idm);
+                }
+
+                fetchResult = await connector.FetchAsync(sourceConfig.From, idm);
                 payload = fetchResult.ContentType is "csv" or "txt" or "xml" or "text"
                     ? _factory.CreateString(fetchResult.Content)
                     : _factory.Parse(fetchResult.Content);
@@ -208,9 +228,12 @@ public sealed class AsyncExecutor
             // Apply source map
             if (!string.IsNullOrWhiteSpace(sourceConfig.Map))
             {
+                var sourceMetadata = fetchResult is not null
+                    ? CreatePullMetadata(sourceConfig, fetchResult)
+                    : CreateSourceMetadata(sourceConfig);
                 var bindings = new Dictionary<string, IElwoodValue>
                 {
-                    ["$source"] = CreateSourceMetadata(sourceConfig),
+                    ["$source"] = sourceMetadata,
                     ["$idm"] = idm,
                 };
                 var mapped = EvaluateReference(sourceConfig.Map, payload, bindings, pipelineDto.Scripts);
@@ -458,6 +481,28 @@ public sealed class AsyncExecutor
             new("eventId", _factory.CreateString(Guid.NewGuid().ToString())),
             new("timestamp", _factory.CreateString(DateTime.UtcNow.ToString("o"))),
         };
+        return _factory.CreateObject(props);
+    }
+
+    private IElwoodValue CreatePullMetadata(SourceConfig source, SourceFetchResult fetchResult)
+    {
+        var props = new List<KeyValuePair<string, IElwoodValue>>
+        {
+            new("name", _factory.CreateString(source.Name)),
+            new("trigger", _factory.CreateString("pull")),
+            new("eventId", _factory.CreateString(Guid.NewGuid().ToString())),
+            new("timestamp", _factory.CreateString(DateTime.UtcNow.ToString("o"))),
+            new("contentType", _factory.CreateString(fetchResult.ContentType)),
+        };
+
+        if (fetchResult.StatusCode is not null)
+        {
+            var httpMeta = _factory.CreateObject([
+                new("statusCode", _factory.CreateNumber(fetchResult.StatusCode.Value)),
+            ]);
+            props.Add(new("http", httpMeta));
+        }
+
         return _factory.CreateObject(props);
     }
 

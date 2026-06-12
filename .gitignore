@@ -34,6 +34,9 @@ dist/
 Thumbs.db
 .DS_Store
 
+## Elwood runtime state (local execution state from dev/test runs)
+.elwood/state/
+
 ## Build
 TestResults/
 BenchmarkDotNet.Artifacts/
