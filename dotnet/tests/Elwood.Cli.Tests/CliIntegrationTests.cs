@@ -281,8 +281,10 @@ public class CliFixture : IDisposable
         _specDir = System.IO.Path.Combine(repoRoot, "spec", "test-cases");
         var cliProject = System.IO.Path.Combine(repoRoot, "dotnet", "src", "Elwood.Cli", "Elwood.Cli.csproj");
 
-        // Build once
-        var buildResult = RunProcess("dotnet", $"build \"{cliProject}\" -c Release --nologo -v q");
+        // Build once. nodeReuse:false so no persistent MSBuild worker nodes are
+        // spawned — they inherit the redirected stdout handle and keep it open
+        // after the build exits, deadlocking ReadToEnd in RunProcess.
+        var buildResult = RunProcess("dotnet", $"build \"{cliProject}\" -c Release --nologo -v q /nodeReuse:false");
         if (buildResult.ExitCode != 0)
             throw new Exception($"CLI build failed: {buildResult.Stderr}");
 
