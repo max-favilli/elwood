@@ -1,5 +1,70 @@
 # Changelog
 
+## 2026-06-12 — Fix parser spans on path segments: errors reported at wrong position (v0.7.17)
+
+The .NET parser built path segment spans from the token *after* the consumed identifier (`new PropertySegment(Advance().Text, Span(Current.Span))` — `Advance()` consumes the identifier before `Current.Span` is read). Runtime errors like `Property 'bar' not found` were therefore attributed to the next token in the source. Within a line the offset was nearly invisible, but when the path ended a statement the error landed on the next statement entirely:
+
+```
+let foo = $.bar
+
+return { x: foo }
+```
+
+reported `Error at line 3, col 1` (the `return` keyword) instead of line 1, col 13 (`bar`). The TypeScript implementation was not affected.
+
+Fixed all 8 sites in `ParsePath`/`ParsePathSegments`: property, optional-chaining, and recursive-descent segments now carry the identifier token's own span; index and slice segments now span from `[` to `]`. The npm package is version-bumped in lockstep (no code change).
+
+### Files
+- `dotnet/src/Elwood.Core/Parsing/Parser.cs` — capture the consumed token before reading its span; new `Span(start, end)` overload for bracket segments
+- `dotnet/tests/Elwood.Core.Tests/SpanRegressionTests.cs` — new: 6 tests asserting diagnostic positions (including the multi-statement script repro) and segment span positions
+- `dotnet/src/Elwood.Core/Elwood.Core.csproj`, `dotnet/src/Elwood.Json/Elwood.Json.csproj`, `ts/package.json` — version 0.7.17
+
+---
+
+## 2026-05-27 — Replace auto-unwraps single-element array arguments (v0.7.16)
+
+`.replace()` now auto-unwraps single-element arrays passed as search or replacement arguments. This fixes a silent failure when composing replace with pipe operations like `take(1)` that return arrays:
+
+```
+let filename = $.url.split("/").skip(6).take(1)
+$.text.replace(filename, "replaced")
+```
+
+Previously this silently did nothing because `take(1)` returns a single-element array, not a string. Now the array is unwrapped to its sole element before matching. Multi-element arrays still produce no match (no error).
+
+### Files
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — add `EvaluateReplace` with `Unwrap` helper
+- `ts/src/evaluator.ts` — add `unwrap` in replace case
+- `spec/test-cases/60-convertto/` — updated with replace-related assertions
+
+---
+
+## 2026-05-22 — Array spread syntax, boolean convertTo fix (v0.7.15)
+
+Two features in this release:
+
+**Array spread syntax**: Array literals now support the spread operator `...` to flatten arrays inline:
+```
+let a = [1, 2]
+let b = [3, 4]
+[...a, ...b, 5, 6]
+```
+Result: `[1, 2, 3, 4, 5, 6]`. Spreading a non-array value inserts it as-is. Mirrors the existing object spread `{...a, ...b}` syntax.
+
+**Boolean convertTo fix**: `true.convertTo("Int32")` was returning `0` instead of `1`. Root cause: the value was stringified to `"true"` before numeric parsing, and `parseFloat("true")` = NaN fell back to 0. Now boolean values are detected before stringification and converted directly (`true`→1, `false`→0) for all numeric target types.
+
+### Files
+- `dotnet/src/Elwood.Core/Syntax/Ast.cs` — add `ArrayItem` record with `IsSpread` flag
+- `dotnet/src/Elwood.Core/Parsing/Parser.cs` — array literal parsing checks for spread token
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — spread evaluation in `EvaluateArray`, boolean convertTo early-return
+- `ts/src/ast.ts` — add `ArrayItem` interface, update `ArrayExpression`
+- `ts/src/parser.ts` — array literal parsing with spread support
+- `ts/src/evaluator.ts` — spread evaluation in array case, boolean convertTo early-return
+- `spec/test-cases/112-array-spread/` — four test files (input, script, expected, description)
+- `spec/test-cases/60-convertto/` — added `boolTrue`/`boolFalse` inputs and boolean→numeric assertions
+
+---
+
 ## 2026-05-14 — Optional `else` in `if/then` (v0.7.14)
 
 `if condition then expression` now works without an `else` clause — the else branch implicitly returns `null`. Useful for conditional-only transformations where the alternative is "nothing".

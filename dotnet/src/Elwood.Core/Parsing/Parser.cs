@@ -540,7 +540,8 @@ public sealed class Parser
                 Advance(); // consume ?.
                 if (Check(TokenKind.Identifier))
                 {
-                    segments.Add(new PropertySegment(Advance().Text, Span(Current.Span), Optional: true));
+                    var optTok = Advance();
+                    segments.Add(new PropertySegment(optTok.Text, optTok.Span, Optional: true));
                     segments.AddRange(ParsePathSegments());
                 }
             }
@@ -572,7 +573,8 @@ public sealed class Parser
         // First segment after $. must be an identifier
         if (Check(TokenKind.Identifier))
         {
-            var seg = new PropertySegment(Advance().Text, Span(Current.Span));
+            var tok = Advance();
+            var seg = new PropertySegment(tok.Text, tok.Span);
             if (Match(TokenKind.Question))
                 seg = seg with { Optional = true };
             segments.Add(seg);
@@ -583,8 +585,8 @@ public sealed class Parser
         {
             if (Match(TokenKind.DotDot))
             {
-                var name = Expect(TokenKind.Identifier, "Expected property name after '..'").Text;
-                segments.Add(new RecursiveDescentSegment(name, Span(Current.Span)));
+                var nameTok = Expect(TokenKind.Identifier, "Expected property name after '..'");
+                segments.Add(new RecursiveDescentSegment(nameTok.Text, nameTok.Span));
             }
             else if (Check(TokenKind.QuestionDot))
             {
@@ -597,7 +599,8 @@ public sealed class Parser
                 Advance(); // consume the ?.
                 if (Check(TokenKind.Identifier))
                 {
-                    segments.Add(new PropertySegment(Advance().Text, Span(Current.Span), Optional: true));
+                    var optTok = Advance();
+                    segments.Add(new PropertySegment(optTok.Text, optTok.Span, Optional: true));
                     Match(TokenKind.Question); // tolerate redundant trailing ?
                 }
                 else
@@ -616,7 +619,8 @@ public sealed class Parser
                 Advance(); // consume the dot
                 if (Check(TokenKind.Identifier))
                 {
-                    var seg = new PropertySegment(Advance().Text, Span(Current.Span));
+                    var tok = Advance();
+                    var seg = new PropertySegment(tok.Text, tok.Span);
                     if (Match(TokenKind.Question))
                         seg = seg with { Optional = true };
                     segments.Add(seg);
@@ -629,11 +633,12 @@ public sealed class Parser
             else if (Check(TokenKind.LeftBracket))
             {
                 var saved = _pos;
+                var bracketSpan = Current.Span;
                 Advance(); // consume '['
                 if (Match(TokenKind.Star))
                 {
-                    Expect(TokenKind.RightBracket, "Expected ']' after '[*'");
-                    segments.Add(new IndexSegment(null, Span(Current.Span)));
+                    var close = Expect(TokenKind.RightBracket, "Expected ']' after '[*'");
+                    segments.Add(new IndexSegment(null, Span(bracketSpan, close.Span)));
                 }
                 else if (Check(TokenKind.NumberLiteral) || Check(TokenKind.Minus) || Check(TokenKind.Colon))
                 {
@@ -643,13 +648,13 @@ public sealed class Parser
                     if (Match(TokenKind.Colon))
                     {
                         int? end = TryParseBracketInt();
-                        Expect(TokenKind.RightBracket, "Expected ']'");
-                        segments.Add(new SliceSegment(start, end, Span(Current.Span)));
+                        var close = Expect(TokenKind.RightBracket, "Expected ']'");
+                        segments.Add(new SliceSegment(start, end, Span(bracketSpan, close.Span)));
                     }
                     else if (start.HasValue)
                     {
-                        Expect(TokenKind.RightBracket, "Expected ']'");
-                        segments.Add(new IndexSegment(start.Value, Span(Current.Span)));
+                        var close = Expect(TokenKind.RightBracket, "Expected ']'");
+                        segments.Add(new IndexSegment(start.Value, Span(bracketSpan, close.Span)));
                     }
                     else
                     {
@@ -930,6 +935,9 @@ public sealed class Parser
 
     private SourceSpan Span(SourceSpan start)
         => new(start.Start, Current.Span.End, start.Line, start.Column);
+
+    private static SourceSpan Span(SourceSpan start, SourceSpan end)
+        => new(start.Start, end.End, start.Line, start.Column);
 
     private ElwoodParseException Error(string message)
     {
