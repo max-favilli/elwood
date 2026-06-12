@@ -6,8 +6,10 @@
  */
 
 import { parseExpression, parseScript, ParseError } from './parser.js';
-import { evaluateExpression, evaluateScript } from './evaluator.js';
+import { evaluateExpression, evaluateScript, EvaluationError } from './evaluator.js';
 import type { Diagnostic } from './lexer.js';
+
+export { EvaluationError } from './evaluator.js';
 
 export { TokenKind } from './token.js';
 export type { Token, SourceSpan } from './token.js';
@@ -43,10 +45,7 @@ export function evaluate(expression: string, input: unknown, bindings?: Record<s
     const value = evaluateExpression(ast, input, bindings);
     return { value, success: true, diagnostics: diagnostics.map(toDiag) };
   } catch (err: any) {
-    const diag = err instanceof ParseError
-      ? toDiag(err.diagnostic)
-      : { severity: 'error' as const, message: err.message };
-    return { value: null, success: false, diagnostics: [diag] };
+    return { value: null, success: false, diagnostics: [toRuntimeDiag(err)] };
   }
 }
 
@@ -63,10 +62,7 @@ export function execute(script: string, input: unknown, bindings?: Record<string
     const value = evaluateScript(ast, input, bindings);
     return { value, success: true, diagnostics: diagnostics.map(toDiag) };
   } catch (err: any) {
-    const diag = err instanceof ParseError
-      ? toDiag(err.diagnostic)
-      : { severity: 'error' as const, message: err.message };
-    return { value: null, success: false, diagnostics: [diag] };
+    return { value: null, success: false, diagnostics: [toRuntimeDiag(err)] };
   }
 }
 
@@ -77,4 +73,18 @@ function toDiag(d: Diagnostic): ElwoodDiagnostic {
     line: d.span?.line,
     column: d.span?.column,
   };
+}
+
+function toRuntimeDiag(err: any): ElwoodDiagnostic {
+  if (err instanceof ParseError) return toDiag(err.diagnostic);
+  if (err instanceof EvaluationError) {
+    return {
+      severity: 'error',
+      message: err.message,
+      line: err.span?.line,
+      column: err.span?.column,
+      suggestion: err.suggestion,
+    };
+  }
+  return { severity: 'error', message: err.message };
 }

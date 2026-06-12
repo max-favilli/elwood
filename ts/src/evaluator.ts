@@ -2,9 +2,22 @@ import type {
   ElwoodExpression, ScriptNode, PipeOperation, PathSegment,
   MatchArm, InterpolationPart, JoinMode, LambdaExpression,
 } from './ast.js';
-import { parseExpression } from './parser.js';
+import type { SourceSpan } from './token.js';
+import { parseExpression, ParseError } from './parser.js';
 import { getExtensionMethod } from './extensions.js';
 import { Scope } from './scope.js';
+
+/**
+ * Runtime evaluation error carrying the source position of the failing
+ * expression and an optional suggestion, mirroring the .NET
+ * ElwoodEvaluationException / ElwoodDiagnostic semantics.
+ */
+export class EvaluationError extends Error {
+  constructor(message: string, public span?: SourceSpan, public suggestion?: string) {
+    super(message);
+    this.name = 'EvaluationError';
+  }
+}
 
 // ── Helpers ──
 
@@ -153,6 +166,21 @@ export function evaluateScript(script: ScriptNode, input: unknown, bindings?: Re
 }
 
 function evaluate(expr: ElwoodExpression, current: unknown, scope: Scope): unknown {
+  try {
+    return evaluateNode(expr, current, scope);
+  } catch (err) {
+    // Attach the innermost expression's position to errors thrown without one,
+    // so runtime diagnostics always carry a source location.
+    if (err instanceof EvaluationError) {
+      if (!err.span) err.span = expr.span;
+      throw err;
+    }
+    if (err instanceof ParseError || !(err instanceof Error)) throw err;
+    throw new EvaluationError(err.message, expr.span);
+  }
+}
+
+function evaluateNode(expr: ElwoodExpression, current: unknown, scope: Scope): unknown {
   switch (expr.type) {
     case 'Literal': return expr.value;
     case 'Path': return evalPath(expr, current, scope);
@@ -211,14 +239,14 @@ function evalPath(expr: import('./ast.js').PathExpression, current: unknown, sco
             if (seg.optional) break;
             const sample = arr.find(item => isObject(item));
             const suggestion = sample ? suggestProperty(seg.name, sample) : undefined;
-            throw new Error(`Property '${seg.name}' not found on any item in the Array.${suggestion ? ' ' + suggestion : ''}`);
+            throw new EvaluationError(`Property '${seg.name}' not found on any item in the Array.`, seg.span, suggestion);
           }
         } else if (isObject(value)) {
           const prop = (value as any)[seg.name];
           if (prop === undefined) {
             if (seg.optional) { value = null; break; }
             const suggestion = suggestProperty(seg.name, value);
-            throw new Error(`Property '${seg.name}' not found on Object.${suggestion ? ' ' + suggestion : ''}`);
+            throw new EvaluationError(`Property '${seg.name}' not found on Object.`, seg.span, suggestion);
           }
           value = prop;
         } else {
@@ -232,7 +260,7 @@ function evalPath(expr: import('./ast.js').PathExpression, current: unknown, sco
             msg += ` While processing item [${_pipeContext.index}] of ${_pipeContext.total} in | ${_pipeContext.op}.`;
           }
           const suggestion = `Did you mean: ${resolvedPath}?.${seg.name}`;
-          throw new Error(`${msg} ${suggestion}`);
+          throw new EvaluationError(msg, seg.span, suggestion);
         }
         break;
       case 'Index':

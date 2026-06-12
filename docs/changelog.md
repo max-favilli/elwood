@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-06-12 — TS runtime diagnostics carry source positions; ESM-only npm package (v0.7.18)
+
+Two fixes in the TypeScript package:
+
+**Runtime diagnostic positions**: `execute()`/`evaluate()` returned runtime-error diagnostics with only `{ severity, message }` — no line/column. Two root causes, fixed together:
+- The TS parser had the same consume-then-read span bug fixed on the .NET side in v0.7.17 — path segment spans pointed at the *next* token. Fixed the same 8 sites in `parsePath`/`parsePathSegments`.
+- The TS evaluator threw plain `Error`s with no span at all. New `EvaluationError` (exported) carries `span` and `suggestion`; property-not-found errors throw it with the segment span, and a wrapper in the evaluate dispatch attaches the innermost expression's span to any runtime error thrown without one.
+
+Diagnostics now match .NET `ElwoodDiagnostic` semantics: 1-based `line`/`column` pointing at the failing expression, with `suggestion` as a separate field (no longer concatenated into the message). Cross-engine parity test: `let foo = $.bar\n\nreturn {...}` reports line 1, col 13 in both the TS and .NET suites.
+
+**ESM-only npm package**: `package.json` declared `"main": "dist/index.cjs"` and a `require` export condition, but the build is plain `tsc` and only emits ESM — `require('@elwood-lang/core')` threw `MODULE_NOT_FOUND` on every published version. Dropped `main` and the `require` condition (CJS never worked, so this breaks nobody) and moved `types` first in the exports map.
+
+### Files
+- `ts/src/parser.ts` — segment spans from the consumed token; `spanBetween` helper for `[`…`]` segments
+- `ts/src/evaluator.ts` — new `EvaluationError` with span + suggestion; span-attaching wrapper around node dispatch
+- `ts/src/index.ts` — runtime diagnostics map line/column/suggestion; export `EvaluationError`
+- `ts/package.json` — ESM-only entry points, types-first exports, version 0.7.18
+- `ts/tests/unit/diagnostics.test.ts` — new: 8 tests for diagnostic positions and segment spans (mirrors .NET `SpanRegressionTests`)
+- `dotnet/src/Elwood.Core/Elwood.Core.csproj`, `dotnet/src/Elwood.Json/Elwood.Json.csproj` — version 0.7.18 (lockstep, no code change)
+
+---
+
 ## 2026-06-12 — Fix parser spans on path segments: errors reported at wrong position (v0.7.17)
 
 The .NET parser built path segment spans from the token *after* the consumed identifier (`new PropertySegment(Advance().Text, Span(Current.Span))` — `Advance()` consumes the identifier before `Current.Span` is read). Runtime errors like `Property 'bar' not found` were therefore attributed to the next token in the source. Within a line the offset was nearly invisible, but when the path ended a statement the error landed on the next statement entirely:

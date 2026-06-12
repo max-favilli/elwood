@@ -1,16 +1,14 @@
 {
   "name": "@elwood-lang/core",
-  "version": "0.7.17",
+  "version": "0.7.18",
   "description": "Elwood — a functional JSON transformation DSL",
   "type": "module",
-  "main": "dist/index.cjs",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
   "scripts": {

@@ -24,6 +24,10 @@ export function parseScript(source: string): { ast: ScriptNode; diagnostics: Dia
   return { ast, diagnostics: [...lexDiags, ...parser.diagnostics] };
 }
 
+function spanBetween(start: SourceSpan, end: SourceSpan): SourceSpan {
+  return { start: start.start, end: end.end, line: start.line, column: start.column };
+}
+
 class Parser {
   private pos = 0;
   private pipeDepth = 0;
@@ -415,7 +419,8 @@ class Parser {
       if (this.check(TokenKind.QuestionDot)) {
         this.advance(); // consume ?.
         if (this.check(TokenKind.Identifier)) {
-          segments.push({ type: 'Property', name: this.advance().text, optional: true, span: this.span(this.current().span) });
+          const optTok = this.advance();
+          segments.push({ type: 'Property', name: optTok.text, optional: true, span: optTok.span });
           segments.push(...this.parsePathSegments());
         }
       }
@@ -440,19 +445,21 @@ class Parser {
     const segments: PathSegment[] = [];
 
     if (this.check(TokenKind.Identifier)) {
-      const seg: PathSegment = { type: 'Property', name: this.advance().text, span: this.span(this.current().span) };
+      const tok = this.advance();
+      const seg: PathSegment = { type: 'Property', name: tok.text, span: tok.span };
       if (this.match(TokenKind.Question)) seg.optional = true;
       segments.push(seg);
     }
 
     while (true) {
       if (this.match(TokenKind.DotDot)) {
-        const name = this.expect(TokenKind.Identifier, "Expected name after '..'").text;
-        segments.push({ type: 'RecursiveDescent', name, span: this.span(this.current().span) });
+        const nameTok = this.expect(TokenKind.Identifier, "Expected name after '..'");
+        segments.push({ type: 'RecursiveDescent', name: nameTok.text, span: nameTok.span });
       } else if (this.check(TokenKind.QuestionDot)) {
         this.advance();
         if (this.check(TokenKind.Identifier)) {
-          segments.push({ type: 'Property', name: this.advance().text, optional: true, span: this.span(this.current().span) });
+          const optTok = this.advance();
+          segments.push({ type: 'Property', name: optTok.text, optional: true, span: optTok.span });
           this.match(TokenKind.Question); // tolerate redundant trailing ?
         } else break;
       } else if (this.check(TokenKind.Dot) && !this.check(TokenKind.DotDot)) {
@@ -460,25 +467,27 @@ class Parser {
         if (this.peekAt(1)?.kind === TokenKind.Identifier && this.peekAt(2)?.kind === TokenKind.LeftParen) break;
         this.advance();
         if (this.check(TokenKind.Identifier)) {
-          const seg: PathSegment = { type: 'Property', name: this.advance().text, span: this.span(this.current().span) };
+          const tok = this.advance();
+          const seg: PathSegment = { type: 'Property', name: tok.text, span: tok.span };
           if (this.match(TokenKind.Question)) seg.optional = true;
           segments.push(seg);
         } else break;
       } else if (this.check(TokenKind.LeftBracket)) {
         const saved = this.pos;
+        const bracketSpan = this.current().span;
         this.advance(); // consume '['
         if (this.match(TokenKind.Star)) {
-          this.expect(TokenKind.RightBracket, "Expected ']'");
-          segments.push({ type: 'Index', index: null, span: this.span(this.current().span) });
+          const close = this.expect(TokenKind.RightBracket, "Expected ']'");
+          segments.push({ type: 'Index', index: null, span: spanBetween(bracketSpan, close.span) });
         } else if (this.check(TokenKind.NumberLiteral) || this.check(TokenKind.Minus) || this.check(TokenKind.Colon)) {
           const s = this.tryParseBracketInt();
           if (this.match(TokenKind.Colon)) {
             const e = this.tryParseBracketInt();
-            this.expect(TokenKind.RightBracket, "Expected ']'");
-            segments.push({ type: 'Slice', start: s, end: e, span: this.span(this.current().span) });
+            const close = this.expect(TokenKind.RightBracket, "Expected ']'");
+            segments.push({ type: 'Slice', start: s, end: e, span: spanBetween(bracketSpan, close.span) });
           } else if (s !== null) {
-            this.expect(TokenKind.RightBracket, "Expected ']'");
-            segments.push({ type: 'Index', index: s, span: this.span(this.current().span) });
+            const close = this.expect(TokenKind.RightBracket, "Expected ']'");
+            segments.push({ type: 'Index', index: s, span: spanBetween(bracketSpan, close.span) });
           } else { this.pos = saved; break; }
         } else { this.pos = saved; break; }
       } else break;
