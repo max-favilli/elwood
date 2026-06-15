@@ -1002,7 +1002,7 @@ public sealed class Evaluator
             "add" => EvaluateAdd(target, args),
             "dateFormat" => EvaluateDateFormat(target, args),
             "tryDateFormat" => EvaluateDateFormat(target, args),
-            "now" => EvaluateNow(args),
+            "now" => EvaluateNow(args, span),
             "utcNow" or "utcnow" => _factory.CreateString(DateTime.UtcNow.ToString(
                 args.Count > 0 ? args[0].GetStringValue() ?? "yyyy-MM-ddTHH:mm:ssZ" : "yyyy-MM-ddTHH:mm:ssZ",
                 System.Globalization.CultureInfo.InvariantCulture)),
@@ -1581,21 +1581,44 @@ public sealed class Evaluator
         return _factory.CreateString(Convert.ToBase64String(signature));
     }
 
-    private IElwoodValue EvaluateNow(List<IElwoodValue> args)
+    private IElwoodValue EvaluateNow(List<IElwoodValue> args, SourceSpan span)
     {
         var format = args.Count > 0 ? args[0].GetStringValue() ?? "yyyy-MM-ddTHH:mm:ssZ" : "yyyy-MM-ddTHH:mm:ssZ";
 
         if (args.Count >= 2)
         {
-            // now(format, timezone) — convert UTC to timezone
+            // now(format, timezone) — convert UTC to the requested IANA timezone
             var tzId = args[1].GetStringValue() ?? "UTC";
-            var tz = TimeZoneInfo.FindSystemTimeZoneById(tzId);
-            var localTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
-            return _factory.CreateString(localTime.ToString(format, System.Globalization.CultureInfo.InvariantCulture));
+            try
+            {
+                return _factory.CreateString(FormatInZone(DateTime.UtcNow, format, tzId));
+            }
+            catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException)
+            {
+                // Surface as a clear diagnostic instead of a silent UTC fallback or an
+                // uncaught exception. IANA ids (e.g. "Europe/Berlin") need the OS
+                // timezone data — present by default on Linux/Windows .NET via ICU.
+                throw new ElwoodEvaluationException(
+                    $"Unknown timezone '{tzId}'. Use an IANA timezone id like 'Europe/Berlin'; " +
+                    "the runtime must have timezone data installed.",
+                    span);
+            }
         }
 
         // now(format) — UTC
         return _factory.CreateString(DateTime.UtcNow.ToString(format, System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// Converts a UTC instant into the given IANA timezone and formats it.
+    /// Throws <see cref="TimeZoneNotFoundException"/>/<see cref="InvalidTimeZoneException"/>
+    /// for unknown ids; callers surface those as diagnostics.
+    /// </summary>
+    internal static string FormatInZone(DateTime utc, string format, string tzId)
+    {
+        var tz = TimeZoneInfo.FindSystemTimeZoneById(tzId);
+        var local = TimeZoneInfo.ConvertTimeFromUtc(utc, tz);
+        return local.ToString(format, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private IElwoodValue EvaluateToUnixTimeSeconds(IElwoodValue target, List<IElwoodValue> args)

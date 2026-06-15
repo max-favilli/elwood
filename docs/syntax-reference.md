@@ -385,8 +385,8 @@ Methods are called with dot notation on values. Most also work as pipe operators
 | Function | Description |
 |---|---|
 | `now(format?)` | Current UTC time |
-| `now(format, timezone)` | Current time in timezone |
-| `utcNow(format?)` | Current UTC time (explicit) |
+| `now(format, timezone)` | Current time converted to an IANA timezone (e.g. `"Europe/Berlin"`); unknown ids report an error |
+| `utcNow(format?)` | Current UTC time (explicit); any timezone argument is ignored |
 | `newGuid()` | Generate unique GUID |
 | `range(start, count)` | Generate numeric sequence |
 | `iterate(seed, fn)` | Generate lazy sequence: `[seed, fn(seed), fn(fn(seed)), ...]` — must use with `take`/`takeWhile` |

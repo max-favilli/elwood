@@ -787,7 +787,7 @@ function callBuiltin(name: string, target: unknown, args: unknown[], _scope?: Sc
     case 'dateFormat': case 'tryDateFormat': return evalDateFormat(target, args);
     case 'toUnixTimeSeconds': return evalToUnixTime(target, args);
     case 'now': return evalNow(args);
-    case 'utcNow': case 'utcnow': return evalNow(args);
+    case 'utcNow': case 'utcnow': return evalNow(args.slice(0, 1)); // UTC only — timezone arg ignored
 
     // Generators
     case 'range': return Array.from({ length: Number(args[1]) }, (_, i) => i + Number(args[0]));
@@ -963,25 +963,78 @@ function evalNow(args: unknown[]): string {
   const fmt = args.length > 0 ? valueToString(args[0]) : 'yyyy-MM-ddTHH:mm:ssZ';
   const date = new Date();
   if (args.length >= 2) {
-    // Timezone — not easily doable in pure JS without Intl, use UTC
-    return formatDate(date, fmt);
+    // now(format, timezone) — convert UTC to the requested IANA timezone
+    return formatDateInZone(date, fmt, valueToString(args[1]));
   }
   return formatDate(date, fmt);
 }
 
-function formatDate(d: Date, fmt: string): string {
-  const pad = (n: number, w = 2) => String(n).padStart(w, '0');
-  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+interface DateComponents {
+  year: string; month: string; day: string;
+  hour: string; minute: string; second: string;
+  monthIndex: number;
+}
+
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+function applyDateFormat(fmt: string, c: DateComponents): string {
   return fmt
-    .replace('yyyy', String(d.getUTCFullYear()))
-    .replace('MMMM', months[d.getUTCMonth()])
-    .replace('MMM', months[d.getUTCMonth()].slice(0, 3))
-    .replace('MM', pad(d.getUTCMonth() + 1))
-    .replace('dd', pad(d.getUTCDate()))
-    .replace('HH', pad(d.getUTCHours()))
-    .replace('mm', pad(d.getUTCMinutes()))
-    .replace('ss', pad(d.getUTCSeconds()))
+    .replace('yyyy', c.year)
+    .replace('MMMM', MONTH_NAMES[c.monthIndex])
+    .replace('MMM', MONTH_NAMES[c.monthIndex].slice(0, 3))
+    .replace('MM', c.month)
+    .replace('dd', c.day)
+    .replace('HH', c.hour)
+    .replace('mm', c.minute)
+    .replace('ss', c.second)
     .replace('Z', 'Z');
+}
+
+function formatDate(d: Date, fmt: string): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return applyDateFormat(fmt, {
+    year: String(d.getUTCFullYear()),
+    month: pad(d.getUTCMonth() + 1),
+    day: pad(d.getUTCDate()),
+    hour: pad(d.getUTCHours()),
+    minute: pad(d.getUTCMinutes()),
+    second: pad(d.getUTCSeconds()),
+    monthIndex: d.getUTCMonth(),
+  });
+}
+
+/**
+ * Formats a UTC instant in the given IANA timezone (e.g. "Europe/Berlin").
+ * Uses Intl.DateTimeFormat, which performs the UTC→zone conversion using the
+ * runtime's tz data — available in Node (full-ICU) and all browsers.
+ * Exported for cross-engine parity tests with fixed instants.
+ */
+export function formatDateInZone(d: Date, fmt: string, tz: string): string {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).formatToParts(d);
+  } catch {
+    throw new EvaluationError(`Unknown timezone '${tz}'. Use an IANA timezone id like 'Europe/Berlin'.`);
+  }
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? '';
+  // Some engines emit '24' for midnight with hour12:false; normalize to '00'.
+  let hour = get('hour');
+  if (hour === '24') hour = '00';
+  const month = get('month');
+  return applyDateFormat(fmt, {
+    year: get('year'),
+    month,
+    day: get('day'),
+    hour,
+    minute: get('minute'),
+    second: get('second'),
+    monthIndex: parseInt(month, 10) - 1,
+  });
 }
 
 // ── Crypto (uses node:crypto — documented browser limitation) ──

@@ -1,4 +1,6 @@
+using System.Globalization;
 using Elwood.Core;
+using Elwood.Core.Evaluation;
 using Elwood.Json;
 
 namespace Elwood.Core.Tests;
@@ -349,5 +351,64 @@ public class EndToEndTests
         var dateStr = result.Value!.GetStringValue();
         Assert.NotNull(dateStr);
         Assert.Matches(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$", dateStr!);
+    }
+
+    [Fact]
+    public void Now_WithTimezone_ConvertsFromUtc()
+    {
+        // now(format, tz) must convert UTC into the requested zone, not just format UTC.
+        // Compare a zoned result against UTC captured at the same instant; the offset
+        // must match the live Berlin offset (CEST +2 in summer, CET +1 in winter).
+        const string script = """
+            return {
+              utc:    utcNow("yyyy-MM-dd HH:mm:ss"),
+              berlin: now("yyyy-MM-dd HH:mm:ss", "Europe/Berlin")
+            }
+            """;
+        var input = _factory.Parse("{}");
+        var result = _engine.Execute(script, input);
+
+        Assert.True(result.Success, string.Join("; ", result.Diagnostics));
+        var utc = DateTime.ParseExact(result.Value!.GetProperty("utc")!.GetStringValue()!,
+            "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        var berlin = DateTime.ParseExact(result.Value!.GetProperty("berlin")!.GetStringValue()!,
+            "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+
+        var expectedOffset = TimeZoneInfo.FindSystemTimeZoneById("Europe/Berlin")
+            .GetUtcOffset(DateTime.UtcNow);
+        // Round to whole minutes to absorb the sub-second skew between the two calls.
+        var actualOffset = TimeSpan.FromMinutes(Math.Round((berlin - utc).TotalMinutes));
+
+        Assert.Equal(expectedOffset, actualOffset);
+        Assert.NotEqual(TimeSpan.Zero, actualOffset); // regression: tz must not be ignored
+        Assert.Contains(actualOffset.TotalHours, new[] { 1.0, 2.0 }); // Berlin is +1 (CET) or +2 (CEST)
+    }
+
+    [Theory]
+    // 2026-07-12 16:57 UTC → Europe/Berlin is CEST (UTC+2) → 18:57
+    [InlineData("2026-07-12T16:57:00", "Europe/Berlin", "2026-07-12 18:57:00")]
+    [InlineData("2026-07-12T16:57:00", "Europe/Rome",   "2026-07-12 18:57:00")]
+    // 2026-01-12 16:57 UTC → Europe/Berlin is CET (UTC+1) → 17:57
+    [InlineData("2026-01-12T16:57:00", "Europe/Berlin", "2026-01-12 17:57:00")]
+    public void FormatInZone_ConvertsAcrossDstBoundaries(string utcIso, string tz, string expected)
+    {
+        var utc = DateTime.SpecifyKind(
+            DateTime.ParseExact(utcIso, "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture),
+            DateTimeKind.Utc);
+
+        var formatted = Evaluator.FormatInZone(utc, "yyyy-MM-dd HH:mm:ss", tz);
+
+        Assert.Equal(expected, formatted);
+    }
+
+    [Fact]
+    public void Now_WithUnknownTimezone_ReportsDiagnostic()
+    {
+        var input = _factory.Parse("{}");
+        var result = _engine.Evaluate("now(\"yyyy-MM-dd\", \"Mars/Olympus\")", input);
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics,
+            d => d.Message.Contains("timezone", StringComparison.OrdinalIgnoreCase));
     }
 }

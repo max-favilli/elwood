@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-06-15 — Fix now(format, timezone): TS ignored the timezone (v0.7.19)
+
+`now(format, timezone)` is meant to convert the current UTC time into the given IANA timezone, then format it. The **TypeScript** engine ignored the timezone argument entirely and formatted UTC — so `now("yyyy-MM-dd HH:mm:ss", "Europe/Berlin")` returned UTC instead of CEST/CET. (The browser playground runs the TS engine, which is where this was observed.) The `evalNow` source even carried a comment claiming timezone conversion was "not easily doable in pure JS without Intl" — it is exactly doable with `Intl.DateTimeFormat`, which performs the conversion using the runtime's tz data (full-ICU Node and all browsers).
+
+Fixed the TS evaluator to convert via `Intl.DateTimeFormat`. Unknown timezone ids now report a diagnostic instead of silently falling back to UTC. `utcNow` is now explicitly UTC-only (any timezone argument is ignored), matching .NET.
+
+The **.NET** engine already converted correctly (`TimeZoneInfo.ConvertTimeFromUtc`), but a bad/unknown timezone id threw an *uncaught* `TimeZoneNotFoundException` rather than a clean diagnostic. Hardened: unknown ids are surfaced as an `ElwoodEvaluationException` with the call site span. IANA ids (e.g. `Europe/Berlin`) resolve on both Linux and Windows .NET via ICU; if a runtime lacks tz data the error now says so instead of failing opaquely.
+
+### Files
+- `ts/src/evaluator.ts` — `evalNow` converts via new exported `formatDateInZone`; shared `applyDateFormat`; `utcNow` drops the timezone arg
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — `EvaluateNow` wraps tz resolution in a clear diagnostic; extracted testable `FormatInZone`
+- `dotnet/src/Elwood.Core/Elwood.Core.csproj` — `InternalsVisibleTo` for the test project
+- `dotnet/tests/Elwood.Core.Tests/EndToEndTests.cs` — now+timezone integration (live offset), `FormatInZone` DST-boundary theory (CEST +2 / CET +1), unknown-tz diagnostic
+- `ts/tests/unit/now-timezone.test.ts` — new: parity tests (live offset, fixed-instant DST boundaries, unknown tz, utcNow ignores tz)
+- `docs/syntax-reference.md` — clarify `now(format, timezone)` / `utcNow` semantics
+- version 0.7.19 (Elwood.Core, Elwood.Json, `@elwood-lang/core`)
+
+---
+
 ## 2026-06-12 — TS runtime diagnostics carry source positions; ESM-only npm package (v0.7.18)
 
 Two fixes in the TypeScript package:
