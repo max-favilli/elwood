@@ -69,11 +69,25 @@ jobs:
       - name: Publish core
         if: ${{ env.NPM_TOKEN != '' }}
         working-directory: ts
-        run: npm publish --access public
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "$NAME@$VERSION is already published - skipping"
+          else
+            npm publish --access public
+          fi
       - name: Publish xlsx
         if: ${{ env.NPM_TOKEN != '' }}
         working-directory: ts-xlsx
-        run: npm publish --access public
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "$NAME@$VERSION is already published - skipping"
+          else
+            npm publish --access public
+          fi
       # ts-parquet not published — hyparquet is async-only and Elwood's TS extension API
       # is sync-only. See docs/known-issues.md. Tracked as a follow-up.
 
