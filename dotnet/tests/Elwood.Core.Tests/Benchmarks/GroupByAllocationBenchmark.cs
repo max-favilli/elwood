@@ -70,6 +70,49 @@ public class GroupByAllocationBenchmark
     public void ThreeLevelGroupBy_WithWhereFirst_AllocatesWithinInputGraph()
         => RunAllocationCheck("three-level groupBy + where/first", ThreeLevelMap);
 
+    // Mirrors the real-world shape: a let-bound groupBy cascade whose intermediate objects
+    // hold WHOLE ROWS (rep: items[0]) rather than scalar projections, then a projection that
+    // only reads scalars off those rows. Object literals materialize through the factory, so
+    // each embedded row is deep-cloned once — reintroducing a full copy of the dataset even
+    // though the final output contains only scalars.
+    private const string CascadeWholeRowMap = """
+        let cascade = (
+          $[*]
+          | groupBy r => r.style
+          | select s => {
+              styleVersion: s.key,
+              rep: (s.items | first r => r.attr02 == "hero"),
+              colorGroups: (
+                s.items
+                | groupBy r => r.colorway
+                | select c => {
+                    rep: c.items[0],
+                    sizes: (c.items | groupBy r => r.sku | select k => k.items[0])
+                  }
+              )
+            }
+        )
+
+        return cascade
+          | where s => s.rep != null
+          | select s => {
+              style: s.styleVersion,
+              title: s.rep.attr01,
+              colorways: (
+                s.colorGroups
+                | select c => {
+                    color: c.rep.colorway,
+                    name: c.rep.attr03,
+                    sizes: (c.sizes | select z => { sku: z.sku, v: z.attr04 })
+                  }
+              )
+            }
+        """;
+
+    [Fact]
+    public void LetBoundCascade_EmbeddingWholeRows_AllocatesWithinInputGraph()
+        => RunAllocationCheck("let-bound cascade embedding whole rows", CascadeWholeRowMap);
+
     private void RunAllocationCheck(string label, string script)
     {
         // JIT warmup on a tiny input so first-call compilation isn't attributed to the measurement.
@@ -111,7 +154,7 @@ public class GroupByAllocationBenchmark
             {
                 ["style"] = $"STYLE-{i % 300:D4}",
                 ["colorway"] = $"CW-{i % 900:D4}",
-                ["sku"] = $"SKU-{i % 3000:D5}",
+                ["sku"] = $"SKU-{i:D6}", // row identity: one row per sku, as in real spreadsheet exports
             };
             for (var c = 1; c <= columns; c++)
             {

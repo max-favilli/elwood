@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-09-23 — Object literals hold references; intermediate cascades no longer copy rows (v0.7.21)
+
+Follow-up to v0.7.20. Grouping itself no longer copied the dataset, but a common real-world shape still did: a `let`-bound `groupBy` cascade whose intermediate objects capture **whole rows**, for example
+
+```
+let cascade = $[*]
+  | groupBy r => r.style
+  | select s => {
+      rep: (s.items | first r => r.exported == "Yes"),
+      sizes: (s.items | groupBy r => r.sku | select k => k.items[0])
+    }
+```
+
+Object literals were built through `IElwoodValueFactory.CreateObject`, which materializes a JSON node graph and therefore deep-clones every embedded value. A captured input row is not evaluator-owned, so each one was copied in full. When the rows are wide (dozens of columns) and the grouping key is close to the row identity — a per-sku dedupe keeps essentially every row — that single line reintroduces a whole copy of the dataset, even though the final projection reads only scalars off those rows and the output is a small fraction of the input.
+
+### What changed
+
+- **Object literals are lazy.** `EvaluateObject` now returns a `LazyObjectValue` holding references to its already-evaluated property values instead of building a node graph. Property values are still evaluated eagerly at the literal, so evaluation order and non-deterministic functions are unaffected; only materialization is deferred. An intermediate object that never reaches the output now costs a pointer per property, and reading `s.rep.someColumn` navigates straight into the original row.
+- **Duplicate-key semantics preserved exactly.** A concrete JSON object resolves a repeated key — produced by a spread followed by an explicit override, or by a computed key colliding with a literal one — by keeping its **first position** and taking the **last value**. `LazyObjectValue.Create` reproduces that rule, with a fast path when there are no duplicates. This behaviour had **no test coverage** (`51-spread-operator` uses disjoint key sets), so it is now pinned by tests before the code path changed.
+- **Wide lazy objects index themselves.** Property lookup is a linear scan for small objects and switches to a dictionary above eight properties, so object literals used as lookup tables do not regress.
+
+### Measured (map allocation vs. the input graph, 6,000 rows × 60 columns)
+
+Rows carry one distinct sku each, as in a real spreadsheet export where the sku column is the row identity.
+
+| Map | v0.7.20 | v0.7.21 |
+|---|---|---|
+| `let`-bound cascade capturing whole rows | 1.13× | **0.62×** |
+| three-level `groupBy` + `where`/`first` (no whole-row capture) | 0.61× | 0.61× |
+| two-level `groupBy` with projections | 0.47× | 0.47× |
+
+The ~0.51× drop is close to one entire copy of a wide-row dataset. Maps without a whole-row intermediate are unchanged, which is the expected signature of this fix.
+
+### CI fix
+
+The npm publish steps ran `npm publish --access public || true`, so a failed publish still reported a green job. The v0.7.20 release surfaced this: both npm publishes failed with `E404` on an expired token while the workflow reported success, and only NuGet actually received 0.7.20. The guards are removed — a failed publish now fails the job. The `if: env.NPM_TOKEN != ''` condition is kept, since skipping when no token is configured is deliberate.
+
+### Files
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — object literals build a lazy object
+- `dotnet/src/Elwood.Core/Evaluation/LazyObjectValue.cs` — `Create` with duplicate-key resolution; dictionary index for wide objects
+- `dotnet/tests/Elwood.Core.Tests/LazyValueSemanticsTests.cs` — 4 new tests: spread override, spread-over-spread, computed-key collision, wide-object lookup
+- `dotnet/tests/Elwood.Core.Tests/Benchmarks/GroupByAllocationBenchmark.cs` — new cascade case reproducing the whole-row-capture shape; row generator now emits one row per sku
+- `.github/workflows/release.yml` — npm publish failures are no longer swallowed
+- version 0.7.21 (Elwood.Core, Elwood.Json, `@elwood-lang/core` in lockstep — no TS code change; note npm has no 0.7.20, which contained no TypeScript changes either)
+
+---
+
 ## 2026-09-23 — groupBy/batch/orderBy no longer deep-clone the dataset per stage (v0.7.20)
 
 Grouping a large, wide dataset (thousands of rows × dozens of columns, as produced by spreadsheet sources) allocated several times the size of the input graph and ran out of memory on real-world maps with two or three `groupBy` levels. Root cause, in two parts:

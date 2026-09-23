@@ -284,7 +284,11 @@ public sealed class Evaluator
                 properties.Add(new KeyValuePair<string, IElwoodValue>(p.Key, Evaluate(p.Value, current, env)));
             }
         }
-        return _factory.CreateObject(properties);
+        // Hold references rather than building a JSON node graph: an object literal used as an
+        // intermediate (a let-bound cascade, a group projection) never copies the rows it
+        // captures. Values are still evaluated eagerly here; only materialization is deferred
+        // to the moment the object is embedded into the final output.
+        return LazyObjectValue.Create(properties, _factory);
     }
 
     private IElwoodValue EvaluateArray(ArrayExpression arr, IElwoodValue current, ElwoodEnvironment env)

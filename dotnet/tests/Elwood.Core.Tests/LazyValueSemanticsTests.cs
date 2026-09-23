@@ -133,6 +133,59 @@ public class LazyValueSemanticsTests
             Json(result));
     }
 
+    // Object literals are built lazily (references, not a JSON node graph), so the duplicate-key
+    // rule of the concrete object they stand in for must be reproduced exactly: a repeated key
+    // keeps its FIRST position but takes the LAST value. No spec case covers this —
+    // 51-spread-operator uses disjoint key sets — so it is pinned here.
+    [Fact]
+    public void ObjectLiteral_ExplicitKeyOverridesSpread_KeepsFirstPositionLastValue()
+    {
+        const string script = """
+            let a = { x: 1, y: 2 }
+            return { ...a, x: 3 }
+            """;
+        var result = _engine.Execute(script, _factory.Parse("{}"));
+
+        Assert.Equal("""{"x":3,"y":2}""", Json(result));
+    }
+
+    [Fact]
+    public void ObjectLiteral_SpreadOverridesSpread_KeepsFirstPositionLastValue()
+    {
+        const string script = """
+            let a = { x: 1, y: 2 }
+            let b = { y: 9, z: 8 }
+            return { ...a, ...b }
+            """;
+        var result = _engine.Execute(script, _factory.Parse("{}"));
+
+        Assert.Equal("""{"x":1,"y":9,"z":8}""", Json(result));
+    }
+
+    [Fact]
+    public void ObjectLiteral_ComputedKeyCollidingWithExplicitKey_LastValueWins()
+    {
+        const string script = """
+            let k = "x"
+            return { x: 1, [k]: 2, y: 3 }
+            """;
+        var result = _engine.Execute(script, _factory.Parse("{}"));
+
+        Assert.Equal("""{"x":2,"y":3}""", Json(result));
+    }
+
+    [Fact]
+    public void ObjectLiteral_WideObject_ReadsEveryPropertyCorrectly()
+    {
+        // Crosses the linear-scan/index threshold used for property lookup on lazy objects.
+        var props = string.Join(", ", Enumerable.Range(1, 20).Select(i => $"p{i:D2}: {i}"));
+        var script = $"let o = {{ {props} }}{Environment.NewLine}return {{ a: o.p01, m: o.p11, z: o.p20, n: o.nope? }}";
+
+        var result = _engine.Execute(script, _factory.Parse("{}"));
+
+        Assert.Equal("""{"a":1,"m":11,"z":20,"n":null}""", Json(result));
+    }
+
     private static string Json(ElwoodResult result)
     {
         Assert.True(result.Success, string.Join("; ", result.Diagnostics));
