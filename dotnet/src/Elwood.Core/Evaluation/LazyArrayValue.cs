@@ -39,7 +39,7 @@ internal sealed class LazyArrayValue : IElwoodValue
     /// </summary>
     public List<IElwoodValue> Materialize()
     {
-        _materialized ??= _source.ToList();
+        _materialized ??= _source as List<IElwoodValue> ?? _source.ToList();
         return _materialized;
     }
 

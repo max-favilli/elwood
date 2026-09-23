@@ -60,7 +60,8 @@ public sealed class ElwoodEngine
                     env.Set(key, value);
             var result = evaluator.Evaluate(ast, input, env);
 
-            return new ElwoodResult(result, diagnostics);
+            // Hosts always receive concrete JSON: convert internal lazy values at the boundary.
+            return new ElwoodResult(LazyValues.ToConcrete(result), diagnostics);
         }
         catch (ElwoodParseException ex)
         {
@@ -107,7 +108,8 @@ public sealed class ElwoodEngine
             var evaluator = new Evaluator(_factory, _extensions);
             var result = evaluator.EvaluateScript(ast, input, bindings);
 
-            return new ElwoodResult(result, diagnostics);
+            // Hosts always receive concrete JSON: convert internal lazy values at the boundary.
+            return new ElwoodResult(LazyValues.ToConcrete(result), diagnostics);
         }
         catch (ElwoodParseException ex)
         {

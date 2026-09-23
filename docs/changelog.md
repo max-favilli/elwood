@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-09-23 — groupBy/batch/orderBy no longer deep-clone the dataset per stage (v0.7.20)
+
+Grouping a large, wide dataset (thousands of rows × dozens of columns, as produced by spreadsheet sources) allocated several times the size of the input graph and ran out of memory on real-world maps with two or three `groupBy` levels. Root cause, in two parts:
+
+1. **The System.Text.Json factory cloned everything it embedded.** `JsonNodeValueFactory.CreateArray`/`CreateObject` called `DeepClone()` on every item and property to satisfy the `JsonNode` single-parent rule — including nodes it had just built itself, so lazy values were copied twice on embedding.
+2. **`groupBy`, `batch`, `orderBy` and `join` materialized their results through `CreateArray`.** For `groupBy`, every row was cloned when the group's `items` array was built, again when that array was embedded into the `{ key, items }` object, and again when the group was embedded into the result array — per grouping level. A nested `g.items | groupBy …` repeated all of it.
+
+### What changed
+
+- **Groups hold references.** `groupBy` returns lazy `{ key, items }` group objects (new `LazyObjectValue`) whose `items` are a `LazyArrayValue` over the original rows. Nested groupings, `count`, `first`, `where`, indexing etc. run over references; nothing is copied. `batch` yields lazy slices; `orderBy` and `join` return lazy arrays over the sorted/merged references.
+- **The factory adopts evaluator-owned nodes and clones everything else.** A `JsonNodeValue` now carries an internal `IsFresh` flag set only for nodes the factory created during evaluation (literals, projections, clones). Embedding adopts a fresh, not-yet-attached node as-is; parsed input, navigated children and caller-supplied nodes are still deep-cloned. Inputs are therefore never mutated (a document root passed to the engine keeps `Parent == null`), and a row is copied at most once — at the moment it is embedded into the final output.
+- **Pipeline boundaries evaluate once but keep references.** `EvaluatePipeline` used to convert every pipeline result into a cloned `JsonArray`; it now materializes the lazy array's element list without cloning. The "evaluated exactly once" guarantee for bound pipelines is preserved (e.g. `let ids = $[*] | select r => { id: newGuid() }` yields identical values wherever `ids` is reused).
+- **Hosts still receive concrete JSON.** `ElwoodEngine.Evaluate`/`Execute` convert any remaining lazy array/object to a concrete `JsonNodeValue` at the boundary (`LazyValues.ToConcrete`), so CLI, runtime API, Azure Functions and pipeline executors are unaffected.
+
+`IElwoodValue.Parent` is not read anywhere in the evaluator and Elwood has no parent-navigation syntax, so nothing depended on clones having a new parent. Semantics guarded by new tests: property order, `groupBy | select g => g.items[0]`, a group bound with `let` and reused, a shared value embedded twice, the same parsed input evaluated twice, and non-deterministic projections in bound pipelines.
+
+### Measured (allocation of the map alone vs. the input graph, 6,000 rows × 60 columns)
+
+| Map | before | after |
+|---|---|---|
+| two-level `groupBy` with per-group projections | 3.08× | **0.52×** |
+| three-level `groupBy` + `where`/`first` per group | 4.14× | **0.67×** |
+
+The 50 MB / 200K-order benchmark's memory delta halved (~105 MB → ~56 MB) at the same throughput (~35K rows/sec); `take(1)` short-circuit remains 0 ms. `GroupByAllocationBenchmark` asserts the ratio stays ≤ 1.5× so this cannot regress silently.
+
+### Files
+- `dotnet/src/Elwood.Json/JsonNodeValueFactory.cs` — attach-or-clone rule (`ToAttachableNode`); fresh graphs for lazy values built once
+- `dotnet/src/Elwood.Json/JsonNodeValue.cs` — internal `IsFresh` ownership flag; construction delegates to the factory
+- `dotnet/src/Elwood.Core/Evaluation/LazyObjectValue.cs` — new: reference-holding object value for groups
+- `dotnet/src/Elwood.Core/Evaluation/LazyValues.cs` — new: lazy → concrete conversion at the engine boundary
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — `groupBy`/`batch`/`orderBy`/`join` return lazy reference-holding values; pipeline boundary materializes without cloning; `groupBy` keeps first-seen order and evaluates the key selector once per row (as the TS engine does)
+- `dotnet/src/Elwood.Core/Evaluation/LazyArrayValue.cs` — materializing an already-list source no longer copies it
+- `dotnet/src/Elwood.Core/ElwoodEngine.cs` — results converted to concrete values at the boundary
+- `dotnet/tests/Elwood.Core.Tests/Benchmarks/GroupByAllocationBenchmark.cs` — new: allocation regression guard (≤ 1.5× input graph)
+- `dotnet/tests/Elwood.Core.Tests/LazyValueSemanticsTests.cs` — new: 9 semantics tests for reference-holding values
+- version 0.7.20 (Elwood.Core, Elwood.Json, `@elwood-lang/core` in lockstep — no TS code change, the TS engine never cloned)
+
+---
+
 ## 2026-06-15 — Fix now(format, timezone): TS ignored the timezone (v0.7.19)
 
 `now(format, timezone)` is meant to convert the current UTC time into the given IANA timezone, then format it. The **TypeScript** engine ignored the timezone argument entirely and formatted UTC — so `now("yyyy-MM-dd HH:mm:ss", "Europe/Berlin")` returned UTC instead of CEST/CET. (The browser playground runs the TS engine, which is where this was observed.) The `evalNow` source even carried a comment claiming timezone conversion was "not easily doable in pure JS without Intl" — it is exactly doable with `Intl.DateTimeFormat`, which performs the conversion using the runtime's tz data (full-ICU Node and all browsers).

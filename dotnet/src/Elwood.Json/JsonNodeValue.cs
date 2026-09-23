@@ -10,10 +10,23 @@ public sealed class JsonNodeValue : IElwoodValue
 {
     private readonly JsonNode? _node;
 
-    public JsonNodeValue(JsonNode? node)
+    public JsonNodeValue(JsonNode? node) : this(node, fresh: false)
+    {
+    }
+
+    internal JsonNodeValue(JsonNode? node, bool fresh)
     {
         _node = node;
+        IsFresh = fresh;
     }
+
+    /// <summary>
+    /// True when this value's node was created by the Elwood factory during evaluation
+    /// (literal, projection, clone) and is therefore owned by the evaluator. Only such
+    /// nodes may be attached to a new parent without cloning; parsed input, navigated
+    /// children and caller-supplied nodes are never mutated.
+    /// </summary>
+    internal bool IsFresh { get; }
 
     public ElwoodValueKind Kind => _node switch
     {
@@ -67,56 +80,21 @@ public sealed class JsonNodeValue : IElwoodValue
 
     public IElwoodValue? Parent => _node?.Parent is not null ? new JsonNodeValue(_node.Parent) : null;
 
+    // Value construction shares the factory attach-or-clone rule (single source of truth).
     public IElwoodValue CreateObject(IEnumerable<KeyValuePair<string, IElwoodValue>> properties)
-    {
-        var obj = new JsonObject();
-        foreach (var (key, value) in properties)
-            obj[key] = ToJsonNode(value);
-        return new JsonNodeValue(obj);
-    }
+        => JsonNodeValueFactory.Instance.CreateObject(properties);
 
     public IElwoodValue CreateArray(IEnumerable<IElwoodValue> items)
-    {
-        var arr = new JsonArray();
-        foreach (var item in items)
-            arr.Add(ToJsonNode(item));
-        return new JsonNodeValue(arr);
-    }
+        => JsonNodeValueFactory.Instance.CreateArray(items);
 
-    public IElwoodValue CreateString(string value) => new JsonNodeValue(JsonValue.Create(value));
-    public IElwoodValue CreateNumber(double value) => new JsonNodeValue(JsonValue.Create(value));
-    public IElwoodValue CreateBool(bool value) => new JsonNodeValue(JsonValue.Create(value));
-    public IElwoodValue CreateNull() => new JsonNodeValue(null);
+    public IElwoodValue CreateString(string value) => JsonNodeValueFactory.Instance.CreateString(value);
+    public IElwoodValue CreateNumber(double value) => JsonNodeValueFactory.Instance.CreateNumber(value);
+    public IElwoodValue CreateBool(bool value) => JsonNodeValueFactory.Instance.CreateBool(value);
+    public IElwoodValue CreateNull() => JsonNodeValueFactory.Instance.CreateNull();
 
-    public IElwoodValue DeepClone() => new JsonNodeValue(_node?.DeepClone());
+    // A clone is a new graph owned by the evaluator: attachable without a second copy.
+    public IElwoodValue DeepClone() => new JsonNodeValue(_node?.DeepClone(), fresh: true);
 
     /// <summary>Get the underlying JsonNode for serialization.</summary>
     public JsonNode? Node => _node;
-
-    private static JsonNode? ToJsonNode(IElwoodValue value)
-    {
-        if (value is JsonNodeValue jnv) return jnv._node?.DeepClone();
-
-        return value.Kind switch
-        {
-            ElwoodValueKind.Null => null,
-            ElwoodValueKind.String => JsonValue.Create(value.GetStringValue()),
-            ElwoodValueKind.Number => JsonValue.Create(value.GetNumberValue()),
-            ElwoodValueKind.Boolean => JsonValue.Create(value.GetBooleanValue()),
-            ElwoodValueKind.Array => new JsonArray(value.EnumerateArray().Select(ToJsonNode).ToArray()),
-            ElwoodValueKind.Object => CreateJsonObject(value),
-            _ => null
-        };
-    }
-
-    private static JsonObject CreateJsonObject(IElwoodValue value)
-    {
-        var obj = new JsonObject();
-        foreach (var name in value.GetPropertyNames())
-        {
-            var prop = value.GetProperty(name);
-            if (prop is not null) obj[name] = ToJsonNode(prop);
-        }
-        return obj;
-    }
 }

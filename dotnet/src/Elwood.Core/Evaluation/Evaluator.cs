@@ -317,9 +317,11 @@ public sealed class Evaluator
             value = EvaluatePipeOperation(op, value, current, env);
         }
 
-        // Materialize lazy arrays at pipeline boundaries so callers get concrete JSON
+        // Evaluate lazy pipelines exactly once at the pipeline boundary — so a bound result
+        // is stable when reused (e.g. newGuid() inside a projection) — but keep the items as
+        // references. Nothing is cloned until the value is embedded into the final output.
         if (value is LazyArrayValue lazy)
-            return lazy.ToConcreteValue();
+            lazy.Materialize();
 
         return value;
     }
@@ -480,45 +482,58 @@ public sealed class Evaluator
                 ordered = ascending ? ordered.ThenBy(selector) : ordered.ThenByDescending(selector);
         }
 
-        return _factory.CreateArray(ordered ?? items.OrderBy(_ => 0));
+        // Sort once, hold references — rows are not copied by ordering.
+        var sorted = ordered is null ? items : ordered.ToList();
+        return new LazyArrayValue(sorted, _factory);
     }
 
     private IElwoodValue EvaluateGroupBy(GroupByOperation group, IElwoodValue input, ElwoodEnvironment env)
     {
-        var items = input.EnumerateArray().ToList();
-        var groups = items.GroupBy(item =>
-        {
-            var key = EvaluateWithLambdaOrImplicit(group.KeySelector, item, env);
-            return Serialize(key);
-        });
+        // Groups hold references to the input rows — nothing is copied here. Each group is a
+        // lazy { key, items } object whose items are a lazy array over the row references;
+        // rows are cloned only if/when a group is embedded into the final output.
+        // Groups keep first-seen order and the key value from the first row (as the TS engine does).
+        var order = new List<string>();
+        var groups = new Dictionary<string, (IElwoodValue Key, List<IElwoodValue> Items)>();
 
-        var result = groups.Select(g =>
+        foreach (var item in input.EnumerateArray())
         {
-            // Each group is an object with .key and .items
-            var firstItem = g.First();
-            var keyValue = EvaluateWithLambdaOrImplicit(group.KeySelector, firstItem, env);
-            return _factory.CreateObject(new[]
+            var keyValue = EvaluateWithLambdaOrImplicit(group.KeySelector, item, env);
+            var keyStr = Serialize(keyValue);
+            if (!groups.TryGetValue(keyStr, out var g))
             {
-                new KeyValuePair<string, IElwoodValue>("key", keyValue),
-                new KeyValuePair<string, IElwoodValue>("items", _factory.CreateArray(g))
-            });
-        });
+                g = (keyValue, new List<IElwoodValue>());
+                groups[keyStr] = g;
+                order.Add(keyStr);
+            }
+            g.Items.Add(item);
+        }
 
-        return _factory.CreateArray(result);
+        var result = new List<IElwoodValue>(order.Count);
+        foreach (var keyStr in order)
+        {
+            var (key, items) = groups[keyStr];
+            result.Add(new LazyObjectValue(
+            [
+                new KeyValuePair<string, IElwoodValue>("key", key),
+                new KeyValuePair<string, IElwoodValue>("items", new LazyArrayValue(items, _factory)),
+            ], _factory));
+        }
+
+        return new LazyArrayValue(result, _factory);
     }
 
     private IElwoodValue EvaluateBatch(BatchOperation batch, IElwoodValue input, ElwoodEnvironment env)
     {
         var size = (int)Evaluate(batch.Size, input, env).GetNumberValue();
         var items = input.EnumerateArray().ToList();
-        var batches = new List<IElwoodValue>();
+        var batches = new List<IElwoodValue>((items.Count + Math.Max(size, 1) - 1) / Math.Max(size, 1));
 
+        // Each batch is a lazy slice over the row references — no copying.
         for (var i = 0; i < items.Count; i += size)
-        {
-            batches.Add(_factory.CreateArray(items.Skip(i).Take(size)));
-        }
+            batches.Add(new LazyArrayValue(items.GetRange(i, Math.Min(size, items.Count - i)), _factory));
 
-        return _factory.CreateArray(batches);
+        return new LazyArrayValue(batches, _factory);
     }
 
     private IElwoodValue EvaluateMatchOp(MatchOperation match, IElwoodValue input, ElwoodEnvironment env)
@@ -594,7 +609,7 @@ public sealed class Evaluator
             }
         }
 
-        return _factory.CreateArray(results);
+        return new LazyArrayValue(results, _factory);
     }
 
     private IElwoodValue MergeJoinResult(IElwoodValue left, IElwoodValue right, string? intoAlias)
