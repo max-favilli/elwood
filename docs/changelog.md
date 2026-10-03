@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-10-03 — UTF-8 parse entry points: `ParseUtf8` (v0.7.22)
+
+`IElwoodValueFactory` exposed only `Parse(string)`, so a caller holding UTF-8 bytes — a file, an HTTP body, a blob — had to decode to a UTF-16 string first. That string is roughly twice the document's size and exists before parsing even begins, which on large models is the single most expensive thing about getting data into Elwood.
+
+Two overloads are added: `ParseUtf8(ReadOnlySpan<byte>)` and `ParseUtf8(Stream)`.
+
+Measured on a 47.6 MB compact UTF-8 document (heap retained after a forced blocking collection with the parsed model rooted; each entry point measured in its own process, because System.Text.Json rents parse buffers from `ArrayPool` and measuring several in one process lets later ones reuse earlier ones' buffers for free):
+
+| entry point | allocated | retained | × document size |
+|---|---|---|---|
+| `Parse(string)` | 399 MB | 399 MB | 8.4× |
+| `ParseUtf8(bytes)` | 304 MB | 304 MB | **6.4×** |
+| `ParseUtf8(stream)` | 304 MB | 304 MB | **6.4×** |
+
+A 24% reduction in both allocation and retained memory, and about 17% faster. For reference, the same document as a Newtonsoft `JToken` graph retains 981 MB (20.6×).
+
+### Not a breaking change
+
+Both members ship with a **default interface implementation** that transcodes and delegates to `Parse(string)`, so an existing adapter that implements only the original members keeps compiling and working — covered by a test that asserts a string-only adapter reaches the fallback. `JsonNodeValueFactory` overrides both to call `JsonNode.Parse` on the bytes directly. A leading UTF-8 byte order mark is skipped, which the string path never had to handle.
+
+The overloads are deliberately named `ParseUtf8` rather than overloading `Parse`, so that an existing `Parse(null)` call site cannot become ambiguous between `string` and `Stream`.
+
+### Files
+- `dotnet/src/Elwood.Core/Abstractions/IElwoodValueFactory.cs` — `ParseUtf8` span and stream overloads with default implementations; shared `StripBom` helper
+- `dotnet/src/Elwood.Json/JsonNodeValueFactory.cs` — direct UTF-8 overrides
+- `dotnet/tests/Elwood.Core.Tests/ParseUtf8Tests.cs` — new: 8 tests covering span/stream parity with the string path, BOM, non-ASCII, stream ownership, null, end-to-end evaluation, and the default-implementation fallback
+- `docs/dotnet-integration-guide.md` — when and why to prefer `ParseUtf8`, with the measured table
+- version 0.7.22 (Elwood.Core, Elwood.Json, `@elwood-lang/core` in lockstep — .NET-only change; the TypeScript engine takes JavaScript strings and has no equivalent)
+
+---
+
 ## 2026-09-23 — Object literals hold references; intermediate cascades no longer copy rows (v0.7.21)
 
 Follow-up to v0.7.20. Grouping itself no longer copied the dataset, but a common real-world shape still did: a `let`-bound `groupBy` cascade whose intermediate objects capture **whole rows**, for example

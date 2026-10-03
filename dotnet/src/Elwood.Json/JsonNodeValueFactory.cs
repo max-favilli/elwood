@@ -20,6 +20,21 @@ public sealed class JsonNodeValueFactory : IElwoodValueFactory
 
     public IElwoodValue Parse(string json) => new JsonNodeValue(JsonNode.Parse(json));
 
+    /// <summary>
+    /// Parses UTF-8 JSON directly, skipping the UTF-16 string the string overload
+    /// would force. Measurably cheaper: the string alone is about twice the
+    /// document's size before parsing begins.
+    /// </summary>
+    public IElwoodValue ParseUtf8(ReadOnlySpan<byte> utf8Json)
+        => new JsonNodeValue(JsonNode.Parse(IElwoodValueFactory.StripBom(utf8Json)));
+
+    /// <summary>Parses UTF-8 JSON from a stream. The stream is read but not disposed.</summary>
+    public IElwoodValue ParseUtf8(Stream utf8Json)
+    {
+        ArgumentNullException.ThrowIfNull(utf8Json);
+        return new JsonNodeValue(JsonNode.Parse(utf8Json));
+    }
+
     public IElwoodValue CreateObject(IEnumerable<KeyValuePair<string, IElwoodValue>> properties)
     {
         var obj = new JsonObject();
