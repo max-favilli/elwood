@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text.Json;
 using Elwood.Core;
 using Elwood.Json;
@@ -193,23 +194,32 @@ app.MapPost("/api/pipelines/{id}/scripts/{name}/test", async (string id, string 
     if (!pipeline.Content.Scripts.TryGetValue(name, out var script))
         return Results.NotFound();
 
-    using var reader = new StreamReader(req.Body);
-    var inputJson = await reader.ReadToEndAsync();
-
     var factory = JsonNodeValueFactory.Instance;
     var engine = new ElwoodEngine(factory);
-    var input = factory.Parse(inputJson);
+
+    // Read the body as UTF-8 bytes: ParseUtf8 avoids a UTF-16 copy of the whole document.
+    using var bodyBuffer = new MemoryStream();
+    await req.Body.CopyToAsync(bodyBuffer);
+    bodyBuffer.Position = 0;
+    var input = factory.ParseUtf8(bodyBuffer);
 
     var isScript = script.TrimStart().StartsWith("let ") ||
                    script.Contains("\nlet ") || script.Contains("return ");
-    var result = isScript ? engine.Execute(script, input) : engine.Evaluate(script.Trim(), input);
+
+    // Stream the result into a buffer instead of materialising a JsonNode graph and then
+    // serialising it. Buffer-then-flush: nothing is sent until evaluation has succeeded, so a
+    // failure cannot leave a truncated body behind a 200.
+    var output = new ArrayBufferWriter<byte>();
+    var writerOptions = new JsonWriterOptions { Indented = jsonOpts.WriteIndented };
+    var source = isScript ? script : script.Trim();
+    var result = isScript
+        ? engine.ExecuteTo(source, input, v => ElwoodJsonWriter.Write(output, v, writerOptions))
+        : engine.EvaluateTo(source, input, v => ElwoodJsonWriter.Write(output, v, writerOptions));
 
     if (!result.Success)
         return Results.BadRequest(new { errors = result.Diagnostics.Select(d => d.ToString()) });
 
-    if (result.Value is JsonNodeValue jnv)
-        return Results.Text(jnv.Node?.ToJsonString(jsonOpts) ?? "null", "application/json");
-    return Results.Text(result.Value?.GetStringValue() ?? "null", "application/json");
+    return Results.Bytes(output.WrittenMemory, "application/json");
 });
 
 // ── Validate ──
