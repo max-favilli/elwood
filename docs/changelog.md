@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-10-03 — Streaming output: write a result without building a JSON graph (v0.7.23)
+
+Evaluating a script produced the result twice. First `LazyValues.ToConcrete` turned the lazy result into a `JsonNode` graph, then the host called `ToJsonString()` on it to get the bytes it actually wanted. The graph is pure overhead: nobody wants it, it is a stepping stone to the text, and for a large projection it is the single biggest retained allocation of the output stage.
+
+`ElwoodEngine.EvaluateTo` and `ExecuteTo` hand the un-materialised result to a consumer, and `ElwoodJsonWriter` in `Elwood.Json` walks it straight to a `Utf8JsonWriter`. The graph is never built.
+
+```csharp
+var output = new ArrayBufferWriter<byte>();
+var result = engine.EvaluateTo(script, input, v => ElwoodJsonWriter.Write(output, v));
+if (!result.Success) return BadRequest(result.Diagnostics);   // nothing sent yet
+return Results.Bytes(output.WrittenMemory, "application/json");
+```
+
+### Buffer then flush, deliberately
+
+Writing straight to a network stream would mean a failure mid-write leaves a truncated body behind a status line already sent. The consumer runs **inside** the engine's error handling, so an Elwood evaluation failure while the value is being read is reported as a diagnostic rather than thrown; other exceptions, such as an I/O failure from the writer, still propagate. Write into a buffer, check `Success`, and only then flush. Nothing reaches the wire until evaluation has succeeded.
+
+### Measured (47.6 MB model, 80,000 records, on top of an already-parsed DOM)
+
+| script | path | churn | retained output |
+|---|---|---|---|
+| project 2 fields from every record | materialise | 98 MB | 29 MB |
+| project 2 fields from every record | **stream** | **79 MB** | **2 MB** |
+| filter to 11,429 of 80,000 | materialise | 49 MB | 1 MB |
+| filter to 11,429 of 80,000 | stream | 49 MB | 0 MB |
+
+Retained output memory falls by 93% on the large-output case, from a 29 MB graph to 2.5 MB of bytes. Total churn falls 19%, less than the full 29 MB, because the writer's own growing buffer is allocated instead. **The win scales with output size and is nil when the output is small** — the filter case, whose output is 148 KB, is unchanged. This is a peak-memory improvement, not a throughput one: streaming was *slower* here, 304 ms against 220 ms, because encoding and escaping JSON text costs more CPU than assembling nodes. Take it where holding the graph is the problem, not to go faster.
+
+### Correctness
+
+The streaming path must produce exactly what the materialising path produces. Every one of the 112 conformance cases is now additionally asserted **byte-for-byte identical** between the two paths, alongside targeted tests for each value kind, property order and nesting of a grouped projection, writer options, caller-owned buffers, and the contract that a failure never invokes the consumer.
+
+### Also
+
+`Elwood.Runtime.Api`'s script-test endpoint now uses both this and `ParseUtf8` from 0.7.22: the request body is parsed from UTF-8 bytes rather than a string, and the response is streamed into a buffer rather than materialised and stringified. Other hosts are unchanged and can opt in when there is a measured reason to.
+
+`Evaluate`, `Execute`, `EvaluateTo` and `ExecuteTo` now share one `Run` method, so lexing, parsing, evaluation and error handling exist once rather than four times.
+
+### Files
+- `dotnet/src/Elwood.Core/ElwoodEngine.cs` — `EvaluateTo`/`ExecuteTo`; shared `Run` pipeline
+- `dotnet/src/Elwood.Json/ElwoodJsonWriter.cs` — new: walks any `IElwoodValue` to a `Utf8JsonWriter`, with a fast path for already-concrete nodes
+- `dotnet/src/Elwood.Runtime.Api/Program.cs` — script-test endpoint uses `ParseUtf8` and the streaming writer
+- `dotnet/tests/Elwood.Core.Tests/StreamingOutputTests.cs` — new: 124 tests, including byte-for-byte parity across the whole conformance corpus
+- version 0.7.23 (Elwood.Core, Elwood.Json, `@elwood-lang/core` in lockstep — .NET-only change)
+
+---
+
 ## 2026-10-03 — UTF-8 parse entry points: `ParseUtf8` (v0.7.22)
 
 `IElwoodValueFactory` exposed only `Parse(string)`, so a caller holding UTF-8 bytes — a file, an HTTP body, a blob — had to decode to a UTF-16 string first. That string is roughly twice the document's size and exists before parsing even begins, which on large models is the single most expensive thing about getting data into Elwood.

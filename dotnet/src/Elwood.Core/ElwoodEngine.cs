@@ -32,66 +32,67 @@ public sealed class ElwoodEngine
     /// </summary>
     public ElwoodResult Evaluate(string expression, IElwoodValue input,
         Dictionary<string, IElwoodValue>? bindings = null)
-    {
-        var diagnostics = new List<ElwoodDiagnostic>();
-
-        try
-        {
-            var lexer = new Lexer(expression);
-            var tokens = lexer.Tokenize();
-            diagnostics.AddRange(lexer.Diagnostics);
-
-            if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
-                return new ElwoodResult(null, diagnostics);
-
-            var parser = new Parser(tokens);
-            var ast = parser.ParseExpression();
-            diagnostics.AddRange(parser.Diagnostics);
-
-            if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
-                return new ElwoodResult(null, diagnostics);
-
-            var evaluator = new Evaluator(_factory, _extensions);
-            var env = new ElwoodEnvironment();
-            env.Set("$", input);
-            env.Set("$root", input);
-            if (bindings is not null)
-                foreach (var (key, value) in bindings)
-                    env.Set(key, value);
-            var result = evaluator.Evaluate(ast, input, env);
-
-            // Hosts always receive concrete JSON: convert internal lazy values at the boundary.
-            return new ElwoodResult(LazyValues.ToConcrete(result), diagnostics);
-        }
-        catch (ElwoodParseException ex)
-        {
-            diagnostics.Add(ex.Diagnostic);
-            return new ElwoodResult(null, diagnostics);
-        }
-        catch (ElwoodEvaluationException ex)
-        {
-            diagnostics.Add(new ElwoodDiagnostic
-            {
-                Severity = DiagnosticSeverity.Error,
-                Message = ex.BaseMessage,
-                Span = ex.Span,
-                Suggestion = ex.Suggestion
-            });
-            return new ElwoodResult(null, diagnostics);
-        }
-    }
+        => Run(expression, isScript: false, input, bindings, LazyValues.ToConcrete);
 
     /// <summary>
     /// Execute an Elwood script (with let bindings and return) against input data.
     /// </summary>
     public ElwoodResult Execute(string script, IElwoodValue input,
         Dictionary<string, IElwoodValue>? bindings = null)
+        => Run(script, isScript: true, input, bindings, LazyValues.ToConcrete);
+
+    /// <summary>
+    /// Evaluate an expression and hand the result to <paramref name="consume"/> <b>without</b>
+    /// building a concrete JSON graph for it. Intended for writing a result straight to an
+    /// output stream: the graph that <see cref="Evaluate"/> would materialise never exists.
+    /// </summary>
+    /// <remarks>
+    /// The value passed to <paramref name="consume"/> holds references into the input and into
+    /// the evaluator's own structures. Read it inside the callback and do not retain it.
+    /// <para>
+    /// <paramref name="consume"/> runs inside the engine's error handling, so an Elwood
+    /// evaluation failure triggered while the value is being read is reported as a diagnostic
+    /// rather than thrown. Other exceptions, such as an I/O failure from the writer, propagate.
+    /// Write into a buffer and only flush it once <see cref="ElwoodResult.Success"/> is true, so
+    /// a failure cannot leave a partially written response behind.
+    /// </para>
+    /// <para>The returned result's <see cref="ElwoodResult.Value"/> is always null: the value
+    /// was consumed, not materialised.</para>
+    /// </remarks>
+    public ElwoodResult EvaluateTo(string expression, IElwoodValue input,
+        Action<IElwoodValue> consume, Dictionary<string, IElwoodValue>? bindings = null)
+    {
+        ArgumentNullException.ThrowIfNull(consume);
+        return Run(expression, isScript: false, input, bindings, Consuming(consume));
+    }
+
+    /// <summary>
+    /// Execute a script and hand the result to <paramref name="consume"/> without building a
+    /// concrete JSON graph. See <see cref="EvaluateTo"/> for the contract.
+    /// </summary>
+    public ElwoodResult ExecuteTo(string script, IElwoodValue input,
+        Action<IElwoodValue> consume, Dictionary<string, IElwoodValue>? bindings = null)
+    {
+        ArgumentNullException.ThrowIfNull(consume);
+        return Run(script, isScript: true, input, bindings, Consuming(consume));
+    }
+
+    private static Func<IElwoodValue, IElwoodValue?> Consuming(Action<IElwoodValue> consume)
+        => value => { consume(value); return null; };
+
+    /// <summary>
+    /// Shared pipeline: lex, parse, evaluate, then hand the raw result to <paramref name="finish"/>,
+    /// which either materialises it or streams it. Running <paramref name="finish"/> inside the
+    /// try block is what lets a streaming consumer report failures as diagnostics.
+    /// </summary>
+    private ElwoodResult Run(string source, bool isScript, IElwoodValue input,
+        Dictionary<string, IElwoodValue>? bindings, Func<IElwoodValue, IElwoodValue?> finish)
     {
         var diagnostics = new List<ElwoodDiagnostic>();
 
         try
         {
-            var lexer = new Lexer(script);
+            var lexer = new Lexer(source);
             var tokens = lexer.Tokenize();
             diagnostics.AddRange(lexer.Diagnostics);
 
@@ -99,17 +100,33 @@ public sealed class ElwoodEngine
                 return new ElwoodResult(null, diagnostics);
 
             var parser = new Parser(tokens);
-            var ast = parser.ParseScript();
+            ElwoodExpression? expressionAst = null;
+            ScriptNode? scriptAst = null;
+            if (isScript) scriptAst = parser.ParseScript();
+            else expressionAst = parser.ParseExpression();
             diagnostics.AddRange(parser.Diagnostics);
 
             if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
                 return new ElwoodResult(null, diagnostics);
 
             var evaluator = new Evaluator(_factory, _extensions);
-            var result = evaluator.EvaluateScript(ast, input, bindings);
+            IElwoodValue result;
+            if (isScript)
+            {
+                result = evaluator.EvaluateScript(scriptAst!, input, bindings);
+            }
+            else
+            {
+                var env = new ElwoodEnvironment();
+                env.Set("$", input);
+                env.Set("$root", input);
+                if (bindings is not null)
+                    foreach (var (key, value) in bindings)
+                        env.Set(key, value);
+                result = evaluator.Evaluate(expressionAst!, input, env);
+            }
 
-            // Hosts always receive concrete JSON: convert internal lazy values at the boundary.
-            return new ElwoodResult(LazyValues.ToConcrete(result), diagnostics);
+            return new ElwoodResult(finish(result), diagnostics);
         }
         catch (ElwoodParseException ex)
         {
