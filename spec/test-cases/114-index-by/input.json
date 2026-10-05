@@ -1,0 +1,24 @@
+{
+  "files": [
+    { "name": "a.jpg", "size": 10 },
+    { "name": "b.jpg", "size": 25 },
+    { "name": "c.jpg", "size": 30 },
+    { "name": null, "size": 99 }
+  ],
+  "history": [
+    { "fileName": "a.jpg", "size": 10, "seen": "first" },
+    { "fileName": "b.jpg", "size": 20, "seen": "first" },
+    { "fileName": "a.jpg", "size": 11, "seen": "second" },
+    { "fileName": "d.jpg", "size": 40, "seen": "first" },
+    { "fileName": null, "size": 0, "seen": "never" }
+  ],
+  "customers": [
+    { "id": 7, "name": "Ada" },
+    { "id": 12, "name": "Grace" }
+  ],
+  "orders": [
+    { "ref": "o1", "customerId": 12 },
+    { "ref": "o2", "customerId": 7 },
+    { "ref": "o3", "customerId": 99 }
+  ]
+}

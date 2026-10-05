@@ -12,7 +12,7 @@ export const monarchTokensProvider: languages.IMonarchLanguage = {
   ],
 
   pipeOperators: [
-    'where', 'select', 'selectMany', 'orderBy', 'groupBy', 'distinct',
+    'where', 'select', 'selectMany', 'orderBy', 'groupBy', 'indexBy', 'distinct',
     'take', 'skip', 'batch', 'join', 'concat', 'reduce', 'index',
     'count', 'sum', 'min', 'max', 'first', 'last', 'any', 'all',
   ],
@@ -168,6 +168,7 @@ const PIPE_OPERATOR_COMPLETIONS: languages.CompletionItem[] = [
   { label: 'selectMany', kind: 1, insertText: 'selectMany ${1:x} => ${2:x.items}', insertTextRules: 4, documentation: 'Flatten nested arrays' },
   { label: 'orderBy', kind: 1, insertText: 'orderBy ${1:x} => ${2:x.field} ${3|asc,desc|}', insertTextRules: 4, documentation: 'Sort by key' },
   { label: 'groupBy', kind: 1, insertText: 'groupBy ${1:x} => ${2:x.field}', insertTextRules: 4, documentation: 'Group by key → { key, items }' },
+  { label: 'indexBy', kind: 1, insertText: 'indexBy ${1:x} => ${2:x.key}', insertTextRules: 4, documentation: 'Object keyed by the selector, for lookups: index[key]' },
   { label: 'distinct', kind: 1, insertText: 'distinct', documentation: 'Remove duplicates' },
   { label: 'take', kind: 1, insertText: 'take ${1:n}', insertTextRules: 4, documentation: 'First n items' },
   { label: 'skip', kind: 1, insertText: 'skip ${1:n}', insertTextRules: 4, documentation: 'Skip n items' },

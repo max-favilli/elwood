@@ -1,0 +1,20 @@
+{
+  "actions": [
+    { "name": "a.jpg", "action": "unchanged" },
+    { "name": "b.jpg", "action": "updated" },
+    { "name": "c.jpg", "action": "new" },
+    { "name": null, "action": "new" }
+  ],
+  "firstWins": "first",
+  "missing": null,
+  "orders": [
+    { "ref": "o1", "customer": "Grace" },
+    { "ref": "o2", "customer": "Ada" },
+    { "ref": "o3", "customer": null }
+  ],
+  "allMatches": ["first", "second"],
+  "index": {
+    "Ada": { "id": 7, "name": "Ada" },
+    "Grace": { "id": 12, "name": "Grace" }
+  }
+}

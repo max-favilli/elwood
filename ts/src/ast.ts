@@ -196,6 +196,7 @@ export type PipeOperation =
   | SelectManyOperation
   | OrderByOperation
   | GroupByOperation
+  | IndexByOperation
   | DistinctOperation
   | AggregateOperation
   | SliceOperation
@@ -212,6 +213,7 @@ export interface SelectOperation { type: 'Select'; projection: ElwoodExpression;
 export interface SelectManyOperation { type: 'SelectMany'; projection: ElwoodExpression; span: SourceSpan }
 export interface OrderByOperation { type: 'OrderBy'; keys: { key: ElwoodExpression; ascending: boolean }[]; span: SourceSpan }
 export interface GroupByOperation { type: 'GroupBy'; keySelector: ElwoodExpression; span: SourceSpan }
+export interface IndexByOperation { type: 'IndexBy'; keySelector: ElwoodExpression; span: SourceSpan }
 export interface DistinctOperation { type: 'Distinct'; span: SourceSpan }
 export interface AggregateOperation { type: 'Aggregate'; name: string; predicate?: ElwoodExpression; span: SourceSpan }
 export interface SliceOperation { type: 'Slice'; kind: 'take' | 'skip'; count: ElwoodExpression; span: SourceSpan }

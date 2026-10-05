@@ -125,6 +125,7 @@ $.items[*] | where x => x.price > 10 | select x => x.name | distinct | take 5
 | `selectMany` | Flatten nested arrays |
 | `orderBy` | Sort (multi-key, asc/desc) |
 | `groupBy` | Group by key → `{ key, items }` |
+| `indexBy` | Object keyed by the selector, for lookups: `index[key]` |
 | `distinct` | Remove duplicates |
 | `take` / `skip` | Slice the array |
 | `takeWhile` | Take items while predicate is true |

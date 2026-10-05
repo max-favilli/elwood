@@ -1,0 +1,17 @@
+let historyByName = $.history[*] | indexBy h => h.fileName
+let customerById = $.customers[*] | indexBy $.id
+let historyGroups = $.history[*] | groupBy h => h.fileName | indexBy g => g.key
+
+return {
+  actions: $.files[*] | select f => {
+    name: f.name,
+    action: if historyByName[f.name] == null then "new"
+            else if historyByName[f.name].size != f.size then "updated"
+            else "unchanged"
+  },
+  firstWins: historyByName["a.jpg"].seen,
+  missing: historyByName["nope.jpg"],
+  orders: $.orders[*] | select o => { ref: o.ref, customer: customerById[o.customerId]?.name },
+  allMatches: historyGroups["a.jpg"].items | select h => h.seen,
+  index: $.customers[*] | indexBy c => c.name
+}

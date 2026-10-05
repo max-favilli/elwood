@@ -1,5 +1,80 @@
 # Changelog
 
+## 2026-10-05 — `indexBy` for lookups by key; the repeated-scan warning covers `first` and `where`, and only real repeats (v0.7.25)
+
+0.7.24 warned about a quadratic `any`. The map that prompted it had a second quadratic that the warning did not see:
+
+```
+let findHistory = memo name => ($slice.ProductImagesHistory | first h => h.fileName == name)
+```
+
+`first` with a predicate is a scan like `any`. Called once per file with a distinct name, the memo never hits and each call walks the history. Across 338 production maps `| first` appears in 47 and `| any`/`| all` in 18, so the warning covered the rarer shape. And where `any` had a one-token fix in `.in()`, `first`-by-key had none short of restructuring the map as a join.
+
+### `| indexBy key`
+
+Builds an object keyed by the selector, holding references to the rows. `index[key]` reads it.
+
+```
+let historyByName = $slice.ProductImagesHistory | indexBy h => h.fileName
+... if historyByName[$.Name] == null then 'N' else if historyByName[$.Name].size != ...
+```
+
+One pass to build, constant time per lookup. Rules, chosen so that `index[k]` is a drop-in for `first x => x.key == k`:
+
+- The **first** row with a key wins.
+- A key with no entry gives `null`.
+- Keys are text: a number or boolean key is read by its text, so `byId[row.id]` works with numeric ids. Consequently `7` and `"7"` are one key, which `==` would keep apart.
+- A row whose key is `null` has no entry and `index[null]` is `null`. This is the one difference from `first x => x.key == null`, which matches such a row.
+- For every match rather than the first: `list | groupBy x => x.key | indexBy g => g.key`, then `index[k].items`.
+
+In TypeScript the index is an object without a prototype, so a key such as `constructor` is only ever a row. As with any object the TypeScript engine builds, number-like keys enumerate in numeric order there; this matters only if an index with such keys is returned as output rather than used for lookups.
+
+### `obj[key]` reads a property for number and boolean keys
+
+Indexing an object with a number fell through to array indexing, where an object counts as a one-element array: `obj[0]` returned the object itself and any other number `null`. It now reads the property named by the key's text, as a string key always did, and a `null` key gives `null`. Arrays are unaffected. This is a behaviour change, to something that had no sensible use.
+
+### The warning counts `first`, `last` and `where`
+
+`first`/`last` with a predicate and `where` are counted exactly as `any`/`all` are: predicate evaluations per site, summed over runs, against `ScanWarningThreshold`. The count sits inside the scan, so a memo miss is counted and a memo hit is not. The suggestion names the fix for the operator: `.in()` for `any`/`all`, `indexBy` for `first`/`last`, `groupBy` then `indexBy` for `where`.
+
+### The warning is given only when every run scans the same collection
+
+0.7.24 reported a site on totals alone, so this was reported as quadratic once its total passed the threshold:
+
+```
+$.orders[*] | where o => (o.lines | any l => l.qty > 5)
+```
+
+It is linear: each run scans that order's own lines. With `first` counted the mistake would be common, since `first` over a row's own child collection is ordinary. When a site crosses the threshold the engine now reads the script to decide whether the scan's input is computed from the row of the nearest enclosing lambda or implicit `$` context — following names through `let` bindings inside the lambda, and allowing for inner lambdas that reuse a name — and stays silent if it is. This happens when a warning is about to be reported, never during evaluation.
+
+The message now reads `scans the same collection once for every row of an enclosing one`.
+
+### Measured
+
+8,000 files against 8,000 history entries, 5% absent, .NET 10 Release:
+
+| | time | allocated |
+|---|---|---|
+| `memo name => (history \| first h => h.fileName == name)`, one call per file | 8.8 s | 19.8 GB |
+| `history \| indexBy h => h.fileName`, one lookup per file | 0.03 s | 17 MB |
+
+### Files
+- `dotnet/src/Elwood.Core/Evaluation/ScanAnalysis.cs` — new: decides whether a repeated scan's input depends on the enclosing row
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — `indexBy`; `obj[key]` for number/boolean keys; `first`/`last`/`where` counted; warnings filtered by the analysis
+- `dotnet/src/Elwood.Core/Syntax/Ast.cs`, `Parsing/Parser.cs` — `IndexByOperation`
+- `dotnet/src/Elwood.Core/ElwoodEngine.cs` — hands the parsed script to the evaluator
+- `ts/src/scan-analysis.ts` — new: the same analysis
+- `ts/src/evaluator.ts`, `ast.ts`, `parser.ts` — the same changes
+- `playground/src/editor/elwood-language.ts` — `indexBy` highlighted and completed
+- `dotnet/tests/Elwood.Core.Tests/RepeatedScanTests.cs` — new: 23 tests
+- `dotnet/tests/Elwood.Core.Tests/IndexByTests.cs` — new: 20 tests
+- `ts/tests/unit/repeated-scan.test.ts`, `index-by.test.ts` — new: 42 tests
+- `spec/test-cases/114-index-by/` — new conformance case
+- `docs/syntax-reference.md`, `docs/editor-integration-guide.md`, `README.md` — `indexBy`, repeated scans
+- version 0.7.25 (Elwood.Core, Elwood.Json, `@elwood-lang/core` in lockstep)
+
+---
+
 ## 2026-10-05 — `.in(list)` is a lookup, parsed strings are decoded once, and a repeated scan warns (v0.7.24)
 
 A production map that diffs a 29 MB file listing against a 26 MB history spent 19 minutes and 2 TB of allocation in one expression:

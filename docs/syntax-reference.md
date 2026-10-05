@@ -12,6 +12,7 @@ Elwood is a functional JSON transformation DSL combining JSONPath navigation, KQ
 $                         Root of the input document (always the Execute input parameter)
 $.field                   Property access
 $.obj["@attr"]            Bracket property access (special characters)
+obj[key]                  Property by computed key (string, number or boolean); null if absent
 $.nested.field            Nested property access
 $.nullable?.child         Optional chaining — returns null if nullable is null
 $[0]                      Array index
@@ -111,6 +112,7 @@ expression | operation1 | operation2 | ...
 | `selectMany` | `\| selectMany projection` | Flatten nested results |
 | `orderBy` | `\| orderBy key [asc\|desc]` | Sort (multi-key with commas) |
 | `groupBy` | `\| groupBy key` | Group → objects with `.key` and `.items` |
+| `indexBy` | `\| indexBy key` | Object keyed by the selector, for lookups — see [Lookup by key](#lookup-by-key) |
 | `distinct` | `\| distinct` | Remove duplicates |
 | `take` | `\| take n` | First n items |
 | `takeWhile` | `\| takeWhile predicate` | Take items while predicate is true, then stop |
@@ -139,7 +141,48 @@ expression | operation1 | operation2 | ...
 | `any` | `\| any [predicate]` | True if any item matches (no predicate: true if non-empty) |
 | `all` | `\| all [predicate]` | True if all items match (no predicate: always true) |
 
-A quantifier scans its input. Placed inside a `where` or `select` over another collection it scans once per row, which costs rows × list size. When one `any`/`all` adds up to 10 million predicate evaluations over repeated runs, the result carries a **warning** diagnostic naming its line; the evaluation still succeeds and its value is unaffected. For "is this value in that list" use [`.in()`](#membership) or `join` instead.
+A quantifier scans its input. Placed inside a `where` or `select` over another collection it scans once per row, which costs rows × list size. For "is this value in that list" use [`.in()`](#membership) or `join` instead.
+
+### Repeated scans
+
+`any`, `all`, `where`, and `first`/`last` with a predicate all walk their input. Each is cheap once and expensive when repeated: written inside a lambda, over a collection that is the same for every row, it walks that whole collection once per row.
+
+```
+$.files[*] | select f => ($.history[*] | first h => h.fileName == f.name)   // files × history
+```
+
+When one such operation adds up to 10 million predicate evaluations over repeated runs, the result carries a **warning** diagnostic naming its line and suggesting the rewrite. The evaluation still succeeds and its value is unaffected. A `memo` does not hide it: a call that misses the cache does the scan.
+
+Scanning a collection that belongs to the row is not reported, however large the total, because that is linear:
+
+```
+$.orders[*] | where o => (o.lines | any l => l.qty > 5)                     // each order's own lines
+```
+
+The fixes: [`.in()`](#membership) for "is it in the list", [`indexBy`](#lookup-by-key) for "find the row with this key", `join` for combining two collections.
+
+### Lookup by key
+
+`| indexBy key` builds an object keyed by the selector. Read it with `index[key]`.
+
+```
+let historyByName = $.history[*] | indexBy h => h.fileName
+
+return $.files[*] | select f => {
+  name: f.name,
+  action: if historyByName[f.name] == null then "new"
+          else if historyByName[f.name].size != f.size then "updated"
+          else "unchanged"
+}
+```
+
+The collection is walked once to build the index and each lookup is constant time, where `history | first h => h.fileName == f.name` walks the history for every file.
+
+- A key with no entry gives `null`.
+- The **first** row with a key wins, so `index[k]` is the row `first x => x.key == k` finds.
+- Keys are text. A number or boolean key is read by its text, so `byId[row.id]` works with numeric ids; it also means `7` and `"7"` are the same key.
+- A row whose key is `null` has no entry, and `index[null]` is `null`.
+- For every match rather than the first: `list | groupBy x => x.key | indexBy g => g.key`, then `index[k].items`.
 
 ### Pattern Matching
 
