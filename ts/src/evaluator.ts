@@ -1,11 +1,12 @@
 import type {
   ElwoodExpression, ScriptNode, PipeOperation, PathSegment,
-  MatchArm, InterpolationPart, JoinMode, LambdaExpression, QuantifierOperation,
+  MatchArm, InterpolationPart, JoinMode, LambdaExpression,
 } from './ast.js';
 import type { SourceSpan } from './token.js';
 import { parseExpression, ParseError } from './parser.js';
 import { getExtensionMethod } from './extensions.js';
 import { Scope } from './scope.js';
+import { inputVariesPerRow } from './scan-analysis.js';
 
 /**
  * Runtime evaluation error carrying the source position of the failing
@@ -164,21 +165,46 @@ function stringIndexOf(list: unknown[]): Set<string> | null {
   return built;
 }
 
-// ── Repeated-scan warning for any/all ──
+// ── Repeated-scan warning ──
 
 export const DEFAULT_SCAN_WARNING_THRESHOLD = 10_000_000;
 let _scanWarningThreshold = DEFAULT_SCAN_WARNING_THRESHOLD;
 
 /**
- * How many predicate evaluations a single any/all in a script may add up to, over repeated
- * runs of it, before the result carries a warning naming it. Zero disables the warning.
+ * How many predicate evaluations a single scanning operation in a script — any, all, where,
+ * or first/last with a predicate — may add up to, over repeated runs of it, before the
+ * result carries a warning naming it. The warning is given only when every run scans the
+ * same collection; scanning each row's own collection is not reported. Zero disables it.
  */
 export function setScanWarningThreshold(evaluations: number): void {
   _scanWarningThreshold = evaluations;
 }
 
-// Per any/all site: how often it ran and how many predicate evaluations that cost.
-let _scanSites = new Map<QuantifierOperation, { calls: number; evaluations: number }>();
+// Per scanning site (any, all, where, and first/last with a predicate): how often it ran
+// and how many predicate evaluations that cost.
+interface ScanCount { calls: number; evaluations: number }
+let _scanSites = new Map<PipeOperation, ScanCount>();
+
+// The script or expression being evaluated, read when a warning is about to be reported.
+let _root: ScriptNode | ElwoodExpression | null = null;
+
+/** Counts one more run of a scanning operation and returns its tally. */
+function beginScan(site: PipeOperation): ScanCount {
+  let count = _scanSites.get(site);
+  if (!count) _scanSites.set(site, count = { calls: 0, evaluations: 0 });
+  count.calls++;
+  return count;
+}
+
+const LOOKUP_SUGGESTION =
+  'Build the lookup once and read it by key: let byKey = list | indexBy x => x.key, then byKey[value]. Or use a join. Both cost the rows plus the list rather than rows times list.';
+
+function describeScan(site: PipeOperation): [string, string] {
+  if (site.type === 'Quantifier')
+    return [site.kind, 'For an equality test use value.in(list) on a let-bound list, or a join; both cost the rows plus the list rather than rows times list.'];
+  if (site.type === 'Aggregate') return [site.name, LOOKUP_SUGGESTION];
+  return ['where', 'If it matches on a key, group once and read by key: let byKey = list | groupBy x => x.key | indexBy g => g.key, then byKey[value].items. Or use a join. Both cost the rows plus the list rather than rows times list.'];
+}
 
 export interface ScanWarning { message: string; suggestion: string; span: SourceSpan }
 
@@ -191,10 +217,15 @@ export function scanWarnings(): ScanWarning[] {
     // One run over a large input is linear; the cost worth reporting is a scan repeated
     // for every row of something else.
     if (count.calls < 2 || count.evaluations < _scanWarningThreshold) continue;
+
+    // Many runs that each scan the row's own collection are linear too.
+    if (_root && inputVariesPerRow(_root, op)) continue;
+
+    const [name, suggestion] = describeScan(op);
     const n = (v: number) => v.toLocaleString('en-US');
     warnings.push({
-      message: `'${op.kind}' evaluated its predicate ${n(count.evaluations)} times over ${n(count.calls)} runs: it scans its input once for every row of an enclosing collection.`,
-      suggestion: 'For an equality test use value.in(list) on a let-bound list, or a join; both cost the rows plus the list rather than rows times list.',
+      message: `'${name}' evaluated its predicate ${n(count.evaluations)} times over ${n(count.calls)} runs: it scans the same collection once for every row of an enclosing one.`,
+      suggestion,
       span: op.span,
     });
   }
@@ -206,6 +237,7 @@ export function scanWarnings(): ScanWarning[] {
 export function evaluateExpression(expr: ElwoodExpression, input: unknown, bindings?: Record<string, unknown>): unknown {
   _inIndexes = new WeakMap();
   _scanSites = new Map();
+  _root = expr;
   const scope = new Scope();
   scope.set('$', input);
   scope.set('$root', input);
@@ -216,6 +248,7 @@ export function evaluateExpression(expr: ElwoodExpression, input: unknown, bindi
 export function evaluateScript(script: ScriptNode, input: unknown, bindings?: Record<string, unknown>): unknown {
   _inIndexes = new WeakMap();
   _scanSites = new Map();
+  _root = script;
   const scope = new Scope();
   scope.set('$', input);
   scope.set('$root', input);
@@ -442,12 +475,16 @@ function evalWithLambdaOrImplicit(expr: ElwoodExpression, item: unknown, scope: 
 function evalPipeOp(op: PipeOperation, input: unknown, scope: Scope): unknown {
   const items = toArray(input);
   switch (op.type) {
-    case 'Where': return items.filter((item, idx) => {
+    case 'Where': {
+      const count = beginScan(op);
+      return items.filter((item, idx) => {
+      count.evaluations++;
       _pipeContext = { op: 'where', index: idx, total: items.length };
       const result = isTruthy(evalWithLambdaOrImplicit(op.predicate, item, scope));
       _pipeContext = null;
       return result;
-    });
+      });
+    }
     case 'Select': return items.map((item, idx) => {
       _pipeContext = { op: 'select', index: idx, total: items.length };
       const result = evalWithLambdaOrImplicit(op.projection, item, scope);
@@ -476,6 +513,20 @@ function evalPipeOp(op: PipeOperation, input: unknown, scope: Scope): unknown {
     }
     case 'OrderBy': return evalOrderBy(op, items, scope);
     case 'GroupBy': return evalGroupBy(op, items, scope);
+    case 'IndexBy': {
+      // An object keyed by the selector: built in one pass, read by key in constant time.
+      // The first row with a given key wins, so byKey[k] is the row that
+      // `first x => x.key == k` would find. Rows with a null key have no entry. No
+      // prototype, so a key such as "constructor" is only ever a row.
+      const index: Record<string, unknown> = Object.create(null);
+      for (const item of items) {
+        const key = evalWithLambdaOrImplicit(op.keySelector, item, scope);
+        if (key === null || key === undefined) continue;
+        const name = valueToString(key);
+        if (!(name in index)) index[name] = item;
+      }
+      return index;
+    }
     case 'Batch': {
       const size = evaluate(op.size, input, scope) as number;
       const batches: unknown[][] = [];
@@ -493,18 +544,12 @@ function evalPipeOp(op: PipeOperation, input: unknown, scope: Scope): unknown {
       if (!pred) {
         return op.kind === 'all' ? true : items.length > 0;
       }
-      let evaluations = 0;
+      const count = beginScan(op);
       const test = (item: unknown) => {
-        evaluations++;
+        count.evaluations++;
         return isTruthy(evalWithLambdaOrImplicit(pred, item, scope));
       };
-      const result = op.kind === 'all' ? items.every(test) : items.some(test);
-
-      let count = _scanSites.get(op);
-      if (!count) _scanSites.set(op, count = { calls: 0, evaluations: 0 });
-      count.calls++;
-      count.evaluations += evaluations;
-      return result;
+      return op.kind === 'all' ? items.every(test) : items.some(test);
     }
     case 'MatchOp': return evalMatchArms(op.arms, input, scope);
   }
@@ -513,12 +558,20 @@ function evalPipeOp(op: PipeOperation, input: unknown, scope: Scope): unknown {
 function evalAggregate(op: import('./ast.js').AggregateOperation, items: unknown[], scope: Scope): unknown {
   if (op.name === 'first') {
     if (op.predicate) {
-      return items.find(item => isTruthy(evalWithLambdaOrImplicit(op.predicate!, item, scope))) ?? null;
+      const count = beginScan(op);
+      return items.find(item => {
+        count.evaluations++;
+        return isTruthy(evalWithLambdaOrImplicit(op.predicate!, item, scope));
+      }) ?? null;
     }
     return items[0] ?? null;
   }
   if (op.name === 'last' && op.predicate) {
-    return [...items].reverse().find(item => isTruthy(evalWithLambdaOrImplicit(op.predicate!, item, scope))) ?? null;
+    const count = beginScan(op);
+    return [...items].reverse().find(item => {
+      count.evaluations++;
+      return isTruthy(evalWithLambdaOrImplicit(op.predicate!, item, scope));
+    }) ?? null;
   }
   switch (op.name) {
     case 'count': return items.length;
@@ -712,8 +765,14 @@ function evalIndex(expr: import('./ast.js').IndexExpression, current: unknown, s
   if (expr.index === null) return toArray(target);
   const idx = evaluate(expr.index, current, scope);
 
-  // String index on object → property access (e.g., obj["@id"])
-  if (typeof idx === 'string' && isObject(target)) return (target as any)[idx] ?? null;
+  // Index on object → property access by key (e.g., obj["@id"], byId[row.id]). A number or
+  // boolean key reads the property named by its text, matching how computed keys and
+  // indexBy name their properties; a null key finds nothing.
+  if (isObject(target)) {
+    if (idx === null || idx === undefined) return null;
+    if (typeof idx === 'string' || typeof idx === 'number' || typeof idx === 'boolean')
+      return (target as any)[valueToString(idx)] ?? null;
+  }
 
   return toArray(target)[idx as number] ?? null;
 }

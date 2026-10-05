@@ -24,11 +24,12 @@ public sealed class ElwoodEngine
     public const long DefaultScanWarningThreshold = 10_000_000;
 
     /// <summary>
-    /// How many predicate evaluations a single <c>any</c>/<c>all</c> in a script may add up to,
+    /// How many predicate evaluations a single scanning operation in a script — <c>any</c>,
+    /// <c>all</c>, <c>where</c>, or <c>first</c>/<c>last</c> with a predicate — may add up to,
     /// over repeated runs of it, before the result carries a <see cref="DiagnosticSeverity.Warning"/>
-    /// naming it. Such a total means the quantifier scans its input once per row of an enclosing
-    /// collection, which is quadratic. The result is still successful and its value unaffected.
-    /// Set to zero to disable.
+    /// naming it. The warning is given only when every run scans the same collection, once per
+    /// row of an enclosing one, which is quadratic; scanning each row's own collection is not
+    /// reported. The result is still successful and its value unaffected. Set to zero to disable.
     /// </summary>
     public long ScanWarningThreshold { get; set; } = DefaultScanWarningThreshold;
 
@@ -122,7 +123,11 @@ public sealed class ElwoodEngine
             if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
                 return new ElwoodResult(null, diagnostics);
 
-            evaluator = new Evaluator(_factory, _extensions) { ScanWarningThreshold = ScanWarningThreshold };
+            evaluator = new Evaluator(_factory, _extensions)
+            {
+                ScanWarningThreshold = ScanWarningThreshold,
+                Root = isScript ? scriptAst : expressionAst
+            };
             IElwoodValue result;
             if (isScript)
             {

@@ -186,6 +186,9 @@ public sealed record OrderByOperation(
 /// <summary>| groupBy key</summary>
 public sealed record GroupByOperation(ElwoodExpression KeySelector, SourceSpan Span) : PipeOperation(Span);
 
+/// <summary>| indexBy key — an object keyed by the selector, for lookups by key</summary>
+public sealed record IndexByOperation(ElwoodExpression KeySelector, SourceSpan Span) : PipeOperation(Span);
+
 /// <summary>| distinct</summary>
 public sealed record DistinctOperation(SourceSpan Span) : PipeOperation(Span);
 

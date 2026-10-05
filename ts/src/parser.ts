@@ -101,6 +101,7 @@ class Parser {
       case 'selectMany': return { type: 'SelectMany', projection: this.parsePipeArg(), span: this.span(start) };
       case 'orderBy': return this.parseOrderBy(start);
       case 'groupBy': return { type: 'GroupBy', keySelector: this.parsePipeArg(), span: this.span(start) };
+      case 'indexBy': return { type: 'IndexBy', keySelector: this.parsePipeArg(), span: this.span(start) };
       case 'distinct': return { type: 'Distinct', span: this.span(start) };
       case 'first': case 'last': return this.parseFirstLast(name, start);
       case 'count': case 'sum': case 'min': case 'max': case 'index':

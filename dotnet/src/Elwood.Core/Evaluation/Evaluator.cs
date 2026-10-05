@@ -29,7 +29,8 @@ public sealed class Evaluator
         public MembershipIndex? Index;
     }
 
-    // Per `any`/`all` site: how often it ran and how many predicate evaluations that cost.
+    // Per scanning site (any, all, where, and first/last with a predicate): how often it ran
+    // and how many predicate evaluations that cost.
     private Dictionary<object, ScanCount>? _scanSites;
 
     private sealed class ScanCount
@@ -38,11 +39,39 @@ public sealed class Evaluator
         public long Evaluations;
     }
 
+    /// <summary>Counts one more run of a scanning operation and returns its tally.</summary>
+    private ScanCount BeginScan(PipeOperation site)
+    {
+        _scanSites ??= new(ReferenceEqualityComparer.Instance);
+        if (!_scanSites.TryGetValue(site, out var count))
+            _scanSites[site] = count = new ScanCount();
+        count.Calls++;
+        return count;
+    }
+
     /// <summary>
-    /// Predicate evaluations at one <c>any</c>/<c>all</c> site, summed over repeated runs of
-    /// that site, from which a warning is reported. Zero disables the warning.
+    /// Predicate evaluations at one scanning site, summed over repeated runs of that site,
+    /// from which a warning is reported. Zero disables the warning.
     /// </summary>
     public long ScanWarningThreshold { get; init; } = ElwoodEngine.DefaultScanWarningThreshold;
+
+    /// <summary>
+    /// The script or expression being evaluated. With it, a repeated scan is reported only
+    /// when every run is given the same collection; without it, whenever the totals say so.
+    /// </summary>
+    internal ElwoodNode? Root { get; set; }
+
+    private const string LookupSuggestion =
+        "Build the lookup once and read it by key: let byKey = list | indexBy x => x.key, then byKey[value]. Or use a join. Both cost the rows plus the list rather than rows times list.";
+
+    private static (string Name, string Suggestion) Describe(PipeOperation site) => site switch
+    {
+        QuantifierOperation q => (q.Kind,
+            "For an equality test use value.in(list) on a let-bound list, or a join; both cost the rows plus the list rather than rows times list."),
+        AggregateOperation a => (a.Name, LookupSuggestion),
+        _ => ("where",
+            "If it matches on a key, group once and read by key: let byKey = list | groupBy x => x.key | indexBy g => g.key, then byKey[value].items. Or use a join. Both cost the rows plus the list rather than rows times list.")
+    };
 
     /// <summary>
     /// Diagnostics gathered so far. Evaluation is lazy, so read this after the result has been
@@ -55,19 +84,24 @@ public sealed class Evaluator
             if (_scanSites is null || ScanWarningThreshold <= 0) return _diagnostics;
 
             var all = new List<ElwoodDiagnostic>(_diagnostics);
-            foreach (var (site, count) in _scanSites.OrderBy(s => ((QuantifierOperation)s.Key).Span.Start))
+            foreach (var (site, count) in _scanSites.OrderBy(s => ((PipeOperation)s.Key).Span.Start))
             {
                 // One run over a large input is linear; the cost worth reporting is a scan
                 // repeated for every row of something else.
                 if (count.Calls < 2 || count.Evaluations < ScanWarningThreshold) continue;
-                var op = (QuantifierOperation)site;
+
+                // Many runs that each scan the row's own collection are linear too.
+                var op = (PipeOperation)site;
+                if (Root is not null && ScanAnalysis.InputVariesPerRow(Root, op)) continue;
+
+                var (name, suggestion) = Describe(op);
                 all.Add(new ElwoodDiagnostic
                 {
                     Severity = DiagnosticSeverity.Warning,
                     Message = string.Create(System.Globalization.CultureInfo.InvariantCulture,
-                        $"'{op.Kind}' evaluated its predicate {count.Evaluations:N0} times over {count.Calls:N0} runs: it scans its input once for every row of an enclosing collection."),
+                        $"'{name}' evaluated its predicate {count.Evaluations:N0} times over {count.Calls:N0} runs: it scans the same collection once for every row of an enclosing one."),
                     Span = op.Span,
-                    Suggestion = "For an equality test use value.in(list) on a let-bound list, or a join; both cost the rows plus the list rather than rows times list."
+                    Suggestion = suggestion
                 });
             }
             return all;
@@ -83,6 +117,7 @@ public sealed class Evaluator
     public IElwoodValue EvaluateScript(ScriptNode script, IElwoodValue root,
         Dictionary<string, Abstractions.IElwoodValue>? bindings = null)
     {
+        Root ??= script;
         var env = new ElwoodEnvironment();
         env.Set("$", root);
         env.Set("$root", root);
@@ -396,6 +431,7 @@ public sealed class Evaluator
             TakeWhileOperation tw => EvaluateTakeWhile(tw, input, env),
             OrderByOperation order => EvaluateOrderBy(order, input, env),
             GroupByOperation group => EvaluateGroupBy(group, input, env),
+            IndexByOperation indexBy => EvaluateIndexBy(indexBy, input, env),
             BatchOperation batch => EvaluateBatch(batch, input, env),
             MatchOperation match => EvaluateMatchOp(match, input, env),
             ConcatOperation concat => EvaluateConcat(concat, input, env),
@@ -413,9 +449,11 @@ public sealed class Evaluator
         // Only get total for concrete arrays — avoid materializing lazy arrays just for error context
         var total = input is not LazyArrayValue && input.Kind == ElwoodValueKind.Array ? input.GetArrayLength() : -1;
         var index = 0;
+        var count = BeginScan(where);
         var items = input.EnumerateArray()
             .Where(item =>
             {
+                count.Evaluations++;
                 _pipeOp = "where"; _pipeIndex = index; _pipeTotal = total;
                 var result = EvaluateWithLambdaOrImplicit(where.Predicate, item, env);
                 index++;
@@ -472,7 +510,14 @@ public sealed class Evaluator
         {
             var source = input.EnumerateArray();
             if (agg.Predicate is not null)
-                source = source.Where(item => IsTruthy(EvaluateWithLambdaOrImplicit(agg.Predicate, item, env)));
+            {
+                var count = BeginScan(agg);
+                source = source.Where(item =>
+                {
+                    count.Evaluations++;
+                    return IsTruthy(EvaluateWithLambdaOrImplicit(agg.Predicate, item, env));
+                });
+            }
             return source.FirstOrDefault() ?? _factory.CreateNull();
         }
 
@@ -482,6 +527,8 @@ public sealed class Evaluator
         // last with optional predicate
         if (agg.Name == "last" && agg.Predicate is not null)
         {
+            var count = BeginScan(agg);
+            count.Evaluations += items.Count;
             var filtered = items.Where(item => IsTruthy(EvaluateWithLambdaOrImplicit(agg.Predicate, item, env)));
             return filtered.LastOrDefault() ?? _factory.CreateNull();
         }
@@ -542,6 +589,26 @@ public sealed class Evaluator
         // Sort once, hold references — rows are not copied by ordering.
         var sorted = ordered is null ? items : ordered.ToList();
         return new LazyArrayValue(sorted, _factory);
+    }
+
+    private IElwoodValue EvaluateIndexBy(IndexByOperation indexBy, IElwoodValue input, ElwoodEnvironment env)
+    {
+        // An object keyed by the selector, holding references to the rows: built in one pass,
+        // read by key in constant time. The first row with a given key wins, so byKey[k] is
+        // the row that `first x => x.key == k` would find. Rows with a null key have no entry.
+        var properties = new List<KeyValuePair<string, IElwoodValue>>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var item in input.EnumerateArray())
+        {
+            var key = EvaluateWithLambdaOrImplicit(indexBy.KeySelector, item, env);
+            if (key.Kind == ElwoodValueKind.Null) continue;
+            var name = ValueToString(key);
+            if (seen.Add(name))
+                properties.Add(new KeyValuePair<string, IElwoodValue>(name, item));
+        }
+
+        return new LazyObjectValue(properties.ToArray(), _factory);
     }
 
     private IElwoodValue EvaluateGroupBy(GroupByOperation group, IElwoodValue input, ElwoodEnvironment env)
@@ -736,20 +803,14 @@ public sealed class Evaluator
         }
         else
         {
-            long evaluations = 0;
+            var count = BeginScan(q);
             bool Test(IElwoodValue item)
             {
-                evaluations++;
+                count.Evaluations++;
                 return IsTruthy(EvaluateWithLambdaOrImplicit(q.Predicate, item, env));
             }
 
             result = q.Kind == "all" ? items.All(Test) : items.Any(Test);
-
-            _scanSites ??= new(ReferenceEqualityComparer.Instance);
-            if (!_scanSites.TryGetValue(q, out var count))
-                _scanSites[q] = count = new ScanCount();
-            count.Calls++;
-            count.Evaluations += evaluations;
         }
         return _factory.CreateBool(result);
     }
@@ -902,9 +963,15 @@ public sealed class Evaluator
 
         var index = Evaluate(idx.Index, current, env);
 
-        // String index on object → property access (e.g., obj["@id"])
-        if (index.Kind == ElwoodValueKind.String && target.Kind == ElwoodValueKind.Object)
-            return target.GetProperty(index.GetStringValue()!) ?? _factory.CreateNull();
+        // Index on object → property access by key (e.g., obj["@id"], byId[row.id]). A number or
+        // boolean key reads the property named by its text, matching how computed keys and
+        // indexBy name their properties; a null key finds nothing.
+        if (target.Kind == ElwoodValueKind.Object)
+        {
+            if (index.Kind == ElwoodValueKind.Null) return _factory.CreateNull();
+            if (index.Kind is ElwoodValueKind.String or ElwoodValueKind.Number or ElwoodValueKind.Boolean)
+                return target.GetProperty(ValueToString(index)) ?? _factory.CreateNull();
+        }
 
         var i = (int)index.GetNumberValue();
         return target.EnumerateArray().ElementAtOrDefault(i) ?? _factory.CreateNull();

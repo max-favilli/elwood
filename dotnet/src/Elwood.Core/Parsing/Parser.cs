@@ -106,6 +106,7 @@ public sealed class Parser
             "selectMany" => new SelectManyOperation(ParsePipeArgExpression(), Span(start)),
             "orderBy" => ParseOrderBy(start),
             "groupBy" => new GroupByOperation(ParsePipeArgExpression(), Span(start)),
+            "indexBy" => new IndexByOperation(ParsePipeArgExpression(), Span(start)),
             "distinct" => new DistinctOperation(Span(start)),
             "first" or "last" => ParseFirstLast(name, start),
             "count" or "sum" or "min" or "max" or "index" =>

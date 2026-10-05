@@ -40,7 +40,7 @@ export const monarchTokensProvider: languages.IMonarchLanguage = {
 
   // Pipe operators — highlighted differently after |
   pipeOperators: [
-    'where', 'select', 'selectMany', 'orderBy', 'groupBy', 'distinct',
+    'where', 'select', 'selectMany', 'orderBy', 'groupBy', 'indexBy', 'distinct',
     'take', 'skip', 'batch', 'join', 'concat', 'reduce', 'index',
     'count', 'sum', 'min', 'max', 'first', 'last', 'any', 'all',
     'takeWhile',
@@ -326,6 +326,7 @@ const PIPE_OPERATORS = [
   { label: 'select',    detail: 'Transform each item',       insert: 'select ${1:projection}' },
   { label: 'selectMany', detail: 'Flatten nested results',   insert: 'selectMany ${1:projection}' },
   { label: 'groupBy',   detail: 'Group by key',              insert: 'groupBy ${1:key}' },
+  { label: 'indexBy',   detail: 'Object keyed for lookups',  insert: 'indexBy ${1:key}' },
   { label: 'orderBy',   detail: 'Sort items',                insert: 'orderBy ${1:key}' },
   { label: 'distinct',  detail: 'Remove duplicates',         insert: 'distinct' },
   { label: 'take',      detail: 'First n items',             insert: 'take ${1:n}' },
