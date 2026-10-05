@@ -20,6 +20,18 @@ public sealed class ElwoodEngine
         _factory = factory;
     }
 
+    /// <summary>The default for <see cref="ScanWarningThreshold"/>.</summary>
+    public const long DefaultScanWarningThreshold = 10_000_000;
+
+    /// <summary>
+    /// How many predicate evaluations a single <c>any</c>/<c>all</c> in a script may add up to,
+    /// over repeated runs of it, before the result carries a <see cref="DiagnosticSeverity.Warning"/>
+    /// naming it. Such a total means the quantifier scans its input once per row of an enclosing
+    /// collection, which is quadratic. The result is still successful and its value unaffected.
+    /// Set to zero to disable.
+    /// </summary>
+    public long ScanWarningThreshold { get; set; } = DefaultScanWarningThreshold;
+
     /// <summary>
     /// Register a custom method provided by an extension package.
     /// Extensions cannot override built-in methods.
@@ -89,6 +101,7 @@ public sealed class ElwoodEngine
         Dictionary<string, IElwoodValue>? bindings, Func<IElwoodValue, IElwoodValue?> finish)
     {
         var diagnostics = new List<ElwoodDiagnostic>();
+        Evaluator? evaluator = null;
 
         try
         {
@@ -109,7 +122,7 @@ public sealed class ElwoodEngine
             if (diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error))
                 return new ElwoodResult(null, diagnostics);
 
-            var evaluator = new Evaluator(_factory, _extensions);
+            evaluator = new Evaluator(_factory, _extensions) { ScanWarningThreshold = ScanWarningThreshold };
             IElwoodValue result;
             if (isScript)
             {
@@ -126,7 +139,11 @@ public sealed class ElwoodEngine
                 result = evaluator.Evaluate(expressionAst!, input, env);
             }
 
-            return new ElwoodResult(finish(result), diagnostics);
+            // Evaluation is lazy: much of the work happens while the result is consumed, so
+            // the evaluator's diagnostics are complete only after that.
+            var finished = finish(result);
+            diagnostics.AddRange(evaluator.Diagnostics);
+            return new ElwoodResult(finished, diagnostics);
         }
         catch (ElwoodParseException ex)
         {
@@ -142,6 +159,7 @@ public sealed class ElwoodEngine
                 Span = ex.Span,
                 Suggestion = ex.Suggestion
             });
+            if (evaluator is not null) diagnostics.AddRange(evaluator.Diagnostics);
             return new ElwoodResult(null, diagnostics);
         }
     }

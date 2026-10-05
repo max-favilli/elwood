@@ -1,0 +1,8 @@
+let allowed = $.allowed
+let activeCodes = $.codes[*] | where c => c.active | select c => c.code
+
+return {
+  mixedKinds: $.rows[*] | where r => r.v.in(allowed) | select r => r.id,
+  fromPipeline: $.rows[*] | where r => r.v.in(activeCodes) | select r => r.id,
+  notIn: $.rows[*] | where r => !r.v.in(activeCodes) | count
+}

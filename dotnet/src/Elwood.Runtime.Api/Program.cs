@@ -219,6 +219,12 @@ app.MapPost("/api/pipelines/{id}/scripts/{name}/test", async (string id, string 
     if (!result.Success)
         return Results.BadRequest(new { errors = result.Diagnostics.Select(d => d.ToString()) });
 
+    // The body is the result alone, so warnings travel beside it: a JSON array of strings,
+    // ASCII-escaped by the serializer and therefore safe as a header value.
+    if (result.Diagnostics.Count > 0)
+        req.HttpContext.Response.Headers["X-Elwood-Warnings"] =
+            JsonSerializer.Serialize(result.Diagnostics.Select(d => d.ToString()));
+
     return Results.Bytes(output.WrittenMemory, "application/json");
 });
 
