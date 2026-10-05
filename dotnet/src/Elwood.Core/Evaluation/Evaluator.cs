@@ -19,7 +19,60 @@ public sealed class Evaluator
     private int _pipeIndex;
     private int _pipeTotal;
 
-    public IReadOnlyList<ElwoodDiagnostic> Diagnostics => _diagnostics;
+    // Per `x.in(list)` call site: the list last tested against and, once that same list has
+    // come round again, its membership index.
+    private Dictionary<object, InSiteCache>? _inSites;
+
+    private sealed class InSiteCache
+    {
+        public IElwoodValue? List;
+        public MembershipIndex? Index;
+    }
+
+    // Per `any`/`all` site: how often it ran and how many predicate evaluations that cost.
+    private Dictionary<object, ScanCount>? _scanSites;
+
+    private sealed class ScanCount
+    {
+        public long Calls;
+        public long Evaluations;
+    }
+
+    /// <summary>
+    /// Predicate evaluations at one <c>any</c>/<c>all</c> site, summed over repeated runs of
+    /// that site, from which a warning is reported. Zero disables the warning.
+    /// </summary>
+    public long ScanWarningThreshold { get; init; } = ElwoodEngine.DefaultScanWarningThreshold;
+
+    /// <summary>
+    /// Diagnostics gathered so far. Evaluation is lazy, so read this after the result has been
+    /// consumed: work done while the result is read is counted too.
+    /// </summary>
+    public IReadOnlyList<ElwoodDiagnostic> Diagnostics
+    {
+        get
+        {
+            if (_scanSites is null || ScanWarningThreshold <= 0) return _diagnostics;
+
+            var all = new List<ElwoodDiagnostic>(_diagnostics);
+            foreach (var (site, count) in _scanSites.OrderBy(s => ((QuantifierOperation)s.Key).Span.Start))
+            {
+                // One run over a large input is linear; the cost worth reporting is a scan
+                // repeated for every row of something else.
+                if (count.Calls < 2 || count.Evaluations < ScanWarningThreshold) continue;
+                var op = (QuantifierOperation)site;
+                all.Add(new ElwoodDiagnostic
+                {
+                    Severity = DiagnosticSeverity.Warning,
+                    Message = string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                        $"'{op.Kind}' evaluated its predicate {count.Evaluations:N0} times over {count.Calls:N0} runs: it scans its input once for every row of an enclosing collection."),
+                    Span = op.Span,
+                    Suggestion = "For an equality test use value.in(list) on a let-bound list, or a join; both cost the rows plus the list rather than rows times list."
+                });
+            }
+            return all;
+        }
+    }
 
     public Evaluator(IElwoodValueFactory factory, Extensions.ElwoodExtensionRegistry? extensions = null)
     {
@@ -683,9 +736,20 @@ public sealed class Evaluator
         }
         else
         {
-            result = q.Kind == "all"
-                ? items.All(item => IsTruthy(EvaluateWithLambdaOrImplicit(q.Predicate, item, env)))
-                : items.Any(item => IsTruthy(EvaluateWithLambdaOrImplicit(q.Predicate, item, env)));
+            long evaluations = 0;
+            bool Test(IElwoodValue item)
+            {
+                evaluations++;
+                return IsTruthy(EvaluateWithLambdaOrImplicit(q.Predicate, item, env));
+            }
+
+            result = q.Kind == "all" ? items.All(Test) : items.Any(Test);
+
+            _scanSites ??= new(ReferenceEqualityComparer.Instance);
+            if (!_scanSites.TryGetValue(q, out var count))
+                _scanSites[q] = count = new ScanCount();
+            count.Calls++;
+            count.Evaluations += evaluations;
         }
         return _factory.CreateBool(result);
     }
@@ -751,6 +815,9 @@ public sealed class Evaluator
     {
         var target = Evaluate(method.Target, current, env);
         var args = method.Arguments.Select(a => Evaluate(a, current, env)).ToList();
+
+        if (method.MethodName == "in")
+            return EvaluateIn(target, args, method);
 
         if (target.Kind == ElwoodValueKind.Array && !ArrayNativeMethods.Contains(method.MethodName))
         {
@@ -821,7 +888,7 @@ public sealed class Evaluator
                 func.Span);
         }
 
-        return new LazyArrayValue(Generate(), _factory);
+        return new LazyArrayValue(Generate(), _factory, unbounded: true);
     }
 
     private IElwoodValue EvaluateIndex(IndexExpression idx, IElwoodValue current, ElwoodEnvironment env)
@@ -945,7 +1012,7 @@ public sealed class Evaluator
                 (target.GetStringValue() ?? "").Select(c => _factory.CreateString(c.ToString()))),
 
             // Membership
-            "in" => EvaluateIn(target, args),
+            "in" => EvaluateIn(target, args, null),
 
             // Object manipulation
             "clone" => target.DeepClone(),
@@ -1980,8 +2047,28 @@ public sealed class Evaluator
         }
     }
 
-    private IElwoodValue EvaluateIn(IElwoodValue target, List<IElwoodValue> args)
+    private IElwoodValue EvaluateIn(IElwoodValue target, List<IElwoodValue> args, MethodCallExpression? site)
     {
+        // A list that reaches the same call site twice is being tested once per row of some
+        // other collection. Index it then, so the remaining rows cost a lookup each instead of
+        // a scan. A list seen only once is scanned, which is cheaper than indexing it.
+        if (site is not null && args.Count == 1 && args[0] is var list
+            && list.Kind == ElwoodValueKind.Array && list is not LazyArrayValue { IsUnbounded: true })
+        {
+            _inSites ??= new(ReferenceEqualityComparer.Instance);
+            if (!_inSites.TryGetValue(site, out var cache))
+                _inSites[site] = cache = new InSiteCache();
+
+            if (ReferenceEquals(cache.List, list))
+            {
+                cache.Index ??= new MembershipIndex(list.EnumerateArray());
+                return _factory.CreateBool(cache.Index.Contains(target));
+            }
+
+            cache.List = list;
+            cache.Index = null;
+        }
+
         // Flatten all arguments: arrays are expanded, scalars included directly
         var candidates = args.SelectMany(arg =>
             arg.Kind == ElwoodValueKind.Array

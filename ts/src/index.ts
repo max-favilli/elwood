@@ -6,10 +6,10 @@
  */
 
 import { parseExpression, parseScript, ParseError } from './parser.js';
-import { evaluateExpression, evaluateScript, EvaluationError } from './evaluator.js';
+import { evaluateExpression, evaluateScript, EvaluationError, scanWarnings } from './evaluator.js';
 import type { Diagnostic } from './lexer.js';
 
-export { EvaluationError } from './evaluator.js';
+export { EvaluationError, setScanWarningThreshold, DEFAULT_SCAN_WARNING_THRESHOLD } from './evaluator.js';
 
 export { TokenKind } from './token.js';
 export type { Token, SourceSpan } from './token.js';
@@ -43,9 +43,9 @@ export function evaluate(expression: string, input: unknown, bindings?: Record<s
       return { value: null, success: false, diagnostics: diagnostics.map(toDiag) };
     }
     const value = evaluateExpression(ast, input, bindings);
-    return { value, success: true, diagnostics: diagnostics.map(toDiag) };
+    return { value, success: true, diagnostics: [...diagnostics.map(toDiag), ...warnings()] };
   } catch (err: any) {
-    return { value: null, success: false, diagnostics: [toRuntimeDiag(err)] };
+    return { value: null, success: false, diagnostics: [toRuntimeDiag(err), ...warnings()] };
   }
 }
 
@@ -60,10 +60,20 @@ export function execute(script: string, input: unknown, bindings?: Record<string
       return { value: null, success: false, diagnostics: diagnostics.map(toDiag) };
     }
     const value = evaluateScript(ast, input, bindings);
-    return { value, success: true, diagnostics: diagnostics.map(toDiag) };
+    return { value, success: true, diagnostics: [...diagnostics.map(toDiag), ...warnings()] };
   } catch (err: any) {
-    return { value: null, success: false, diagnostics: [toRuntimeDiag(err)] };
+    return { value: null, success: false, diagnostics: [toRuntimeDiag(err), ...warnings()] };
   }
+}
+
+function warnings(): ElwoodDiagnostic[] {
+  return scanWarnings().map(w => ({
+    severity: 'warning',
+    message: w.message,
+    line: w.span.line,
+    column: w.span.column,
+    suggestion: w.suggestion,
+  }));
 }
 
 function toDiag(d: Diagnostic): ElwoodDiagnostic {

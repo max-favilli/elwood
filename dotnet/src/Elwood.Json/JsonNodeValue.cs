@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Elwood.Core.Abstractions;
 
@@ -28,20 +29,51 @@ public sealed class JsonNodeValue : IElwoodValue
     /// </summary>
     internal bool IsFresh { get; }
 
-    public ElwoodValueKind Kind => _node switch
-    {
-        JsonObject => ElwoodValueKind.Object,
-        JsonArray => ElwoodValueKind.Array,
-        JsonValue v when v.TryGetValue<bool>(out _) => ElwoodValueKind.Boolean,
-        JsonValue v when v.TryGetValue<double>(out _) => ElwoodValueKind.Number,
-        JsonValue v when v.TryGetValue<int>(out _) => ElwoodValueKind.Number,
-        JsonValue v when v.TryGetValue<long>(out _) => ElwoodValueKind.Number,
-        JsonValue v when v.TryGetValue<string>(out _) => ElwoodValueKind.String,
-        null => ElwoodValueKind.Null,
-        _ => ElwoodValueKind.Null
-    };
+    // Kind and string content are asked for on every comparison. A parsed string is held as
+    // UTF-8 and decoded afresh on each read, so both are resolved once per wrapper.
+    private const byte KindUnknown = byte.MaxValue;
+    private byte _kind = KindUnknown;
+    private string? _string;
 
-    public string? GetStringValue() => _node is JsonValue v ? v.GetValue<string>() : null;
+    public ElwoodValueKind Kind
+    {
+        get
+        {
+            if (_kind == KindUnknown)
+                _kind = (byte)ResolveKind();
+            return (ElwoodValueKind)_kind;
+        }
+    }
+
+    private ElwoodValueKind ResolveKind()
+    {
+        switch (_node)
+        {
+            case JsonObject: return ElwoodValueKind.Object;
+            case JsonArray: return ElwoodValueKind.Array;
+            case JsonValue v:
+                // Ask the node what it is rather than probing each type in turn; a probe for
+                // string is the only one needed on a string, and its result is kept.
+                if (v.GetValueKind() == JsonValueKind.String && v.TryGetValue<string>(out var s))
+                {
+                    _string = s;
+                    return ElwoodValueKind.String;
+                }
+                if (v.TryGetValue<bool>(out _)) return ElwoodValueKind.Boolean;
+                if (v.TryGetValue<double>(out _)) return ElwoodValueKind.Number;
+                if (v.TryGetValue<int>(out _)) return ElwoodValueKind.Number;
+                if (v.TryGetValue<long>(out _)) return ElwoodValueKind.Number;
+                if (v.TryGetValue<string>(out _)) return ElwoodValueKind.String;
+                return ElwoodValueKind.Null;
+            default: return ElwoodValueKind.Null;
+        }
+    }
+
+    public string? GetStringValue()
+    {
+        if (_string is not null) return _string;
+        return _node is JsonValue v ? _string = v.GetValue<string>() : null;
+    }
     public double GetNumberValue()
     {
         if (_node is JsonValue v)

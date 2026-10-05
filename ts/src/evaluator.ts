@@ -1,6 +1,6 @@
 import type {
   ElwoodExpression, ScriptNode, PipeOperation, PathSegment,
-  MatchArm, InterpolationPart, JoinMode, LambdaExpression,
+  MatchArm, InterpolationPart, JoinMode, LambdaExpression, QuantifierOperation,
 } from './ast.js';
 import type { SourceSpan } from './token.js';
 import { parseExpression, ParseError } from './parser.js';
@@ -143,9 +143,69 @@ class MemoizedFunction {
   }
 }
 
+// ── Membership index for in() ──
+
+// Per list tested with `x.in(list)`: null after its first test, then the set of its strings
+// once the same list is tested again — i.e. once per row of some other collection — so the
+// remaining rows cost a lookup each instead of a scan. Reset per evaluation, because a host
+// may change an input array between calls.
+let _inIndexes = new WeakMap<unknown[], Set<string> | null>();
+
+function stringIndexOf(list: unknown[]): Set<string> | null {
+  const index = _inIndexes.get(list);
+  if (index) return index;
+  if (index === undefined) {
+    _inIndexes.set(list, null);
+    return null;
+  }
+  const built = new Set<string>();
+  for (const v of list) if (typeof v === 'string') built.add(v);
+  _inIndexes.set(list, built);
+  return built;
+}
+
+// ── Repeated-scan warning for any/all ──
+
+export const DEFAULT_SCAN_WARNING_THRESHOLD = 10_000_000;
+let _scanWarningThreshold = DEFAULT_SCAN_WARNING_THRESHOLD;
+
+/**
+ * How many predicate evaluations a single any/all in a script may add up to, over repeated
+ * runs of it, before the result carries a warning naming it. Zero disables the warning.
+ */
+export function setScanWarningThreshold(evaluations: number): void {
+  _scanWarningThreshold = evaluations;
+}
+
+// Per any/all site: how often it ran and how many predicate evaluations that cost.
+let _scanSites = new Map<QuantifierOperation, { calls: number; evaluations: number }>();
+
+export interface ScanWarning { message: string; suggestion: string; span: SourceSpan }
+
+/** Warnings for the evaluation that has just run. */
+export function scanWarnings(): ScanWarning[] {
+  if (_scanWarningThreshold <= 0) return [];
+  const warnings: ScanWarning[] = [];
+  const sites = [..._scanSites].sort(([a], [b]) => a.span.start - b.span.start);
+  for (const [op, count] of sites) {
+    // One run over a large input is linear; the cost worth reporting is a scan repeated
+    // for every row of something else.
+    if (count.calls < 2 || count.evaluations < _scanWarningThreshold) continue;
+    const n = (v: number) => v.toLocaleString('en-US');
+    warnings.push({
+      message: `'${op.kind}' evaluated its predicate ${n(count.evaluations)} times over ${n(count.calls)} runs: it scans its input once for every row of an enclosing collection.`,
+      suggestion: 'For an equality test use value.in(list) on a let-bound list, or a join; both cost the rows plus the list rather than rows times list.',
+      span: op.span,
+    });
+  }
+  return warnings;
+}
+
 // ── Main Evaluator ──
 
 export function evaluateExpression(expr: ElwoodExpression, input: unknown, bindings?: Record<string, unknown>): unknown {
+  _inIndexes = new WeakMap();
+  _scanSites = new Map();
   const scope = new Scope();
   scope.set('$', input);
   scope.set('$root', input);
@@ -154,6 +214,8 @@ export function evaluateExpression(expr: ElwoodExpression, input: unknown, bindi
 }
 
 export function evaluateScript(script: ScriptNode, input: unknown, bindings?: Record<string, unknown>): unknown {
+  _inIndexes = new WeakMap();
+  _scanSites = new Map();
   const scope = new Scope();
   scope.set('$', input);
   scope.set('$root', input);
@@ -431,9 +493,18 @@ function evalPipeOp(op: PipeOperation, input: unknown, scope: Scope): unknown {
       if (!pred) {
         return op.kind === 'all' ? true : items.length > 0;
       }
-      return op.kind === 'all'
-        ? items.every(item => isTruthy(evalWithLambdaOrImplicit(pred, item, scope)))
-        : items.some(item => isTruthy(evalWithLambdaOrImplicit(pred, item, scope)));
+      let evaluations = 0;
+      const test = (item: unknown) => {
+        evaluations++;
+        return isTruthy(evalWithLambdaOrImplicit(pred, item, scope));
+      };
+      const result = op.kind === 'all' ? items.every(test) : items.some(test);
+
+      let count = _scanSites.get(op);
+      if (!count) _scanSites.set(op, count = { calls: 0, evaluations: 0 });
+      count.calls++;
+      count.evaluations += evaluations;
+      return result;
     }
     case 'MatchOp': return evalMatchArms(op.arms, input, scope);
   }
@@ -709,6 +780,14 @@ function callBuiltin(name: string, target: unknown, args: unknown[], _scope?: Sc
 
     // Membership
     case 'in': {
+      if (args.length === 1 && isArray(args[0])) {
+        const list = args[0];
+        if (typeof target === 'string') {
+          const index = stringIndexOf(list);
+          if (index) return index.has(target);
+        }
+        return list.some(c => valuesEqual(target, c));
+      }
       const candidates = args.flatMap(a => isArray(a) ? a : [a]);
       return candidates.some(c => valuesEqual(target, c));
     }

@@ -14,11 +14,18 @@ internal sealed class LazyArrayValue : IElwoodValue
     private readonly IElwoodValueFactory _factory;
     private List<IElwoodValue>? _materialized;
 
-    public LazyArrayValue(IEnumerable<IElwoodValue> source, IElwoodValueFactory factory)
+    public LazyArrayValue(IEnumerable<IElwoodValue> source, IElwoodValueFactory factory, bool unbounded = false)
     {
         _source = source;
         _factory = factory;
+        IsUnbounded = unbounded;
     }
+
+    /// <summary>
+    /// True for a sequence with no end of its own (<c>iterate</c>), which must be consumed
+    /// through a limiting operator and never read to completion.
+    /// </summary>
+    public bool IsUnbounded { get; }
 
     public ElwoodValueKind Kind => ElwoodValueKind.Array;
 

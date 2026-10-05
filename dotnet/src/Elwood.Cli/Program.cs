@@ -430,6 +430,14 @@ static void PrintResultRepl(ElwoodResult result)
         return;
     }
 
+    if (result.Diagnostics.Count > 0)
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        foreach (var diag in result.Diagnostics)
+            Console.WriteLine($"  {diag}");
+        Console.ResetColor();
+    }
+
     if (result.Value is null)
     {
         Console.WriteLine("null");
@@ -458,6 +466,10 @@ static int PrintResult(ElwoodResult result, JsonNodeValueFactory factory, string
             Console.Error.WriteLine(diag);
         return 1;
     }
+
+    // Warnings go to stderr so that stdout stays the result alone.
+    foreach (var diag in result.Diagnostics)
+        Console.Error.WriteLine(diag);
 
     var value = result.Value;
 

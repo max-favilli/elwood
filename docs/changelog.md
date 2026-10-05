@@ -1,5 +1,75 @@
 # Changelog
 
+## 2026-10-05 — `.in(list)` is a lookup, parsed strings are decoded once, and a repeated scan warns (v0.7.24)
+
+A production map that diffs a 29 MB file listing against a 26 MB history spent 19 minutes and 2 TB of allocation in one expression:
+
+```
+let currentNames = (currentFiles | select $.Name)
+... | where h => !(currentNames | any n => n == h.fileName)
+```
+
+`currentNames` is evaluated once — a bound pipeline is materialised at its boundary — so nothing is re-executed. The cost is the scan itself: `any` walks the list for every history row, about 2.5 billion comparisons at that size, and each comparison cost about 800 bytes and 500 ns. Two things are made cheaper here and the third is made visible: the scan in `any` itself remains, `join` or `.in()` are the way to write a membership test, and a script that does it the slow way now says so.
+
+### `.in(list)` indexes a list that is tested repeatedly
+
+`.in()` was also a scan. It now builds a membership index for a list the second time that same list reaches the same call site, which is what happens when the test sits inside a `where` over another collection. A list seen once is still scanned, since indexing it would cost more than the scan it replaces; so is a list that differs on every call, and an unbounded `iterate` sequence.
+
+The index answers exactly what `==` against each element answers: strings by ordinal hash, numbers within the same 1e-10 tolerance (binary search to the neighbourhood, then the same comparison), `null` and booleans by presence, arrays and objects by serialized form. A test asserts agreement with `==` for every pairing of 22 sample values across all kinds.
+
+The TypeScript engine indexes the strings of such a list in a `Set` and scans for other kinds. Its index is discarded at the start of each evaluation, because a host may change an input array between calls.
+
+### Parsed strings are decoded once per value
+
+`JsonNodeValue.Kind` probed a node for bool, double, int, long and string in turn, and `GetStringValue()` read the string again. System.Text.Json keeps a parsed string as UTF-8 and decodes it on every read, so comparing two parsed strings decoded each of them twice — over half the allocation of the comparison. `Kind` now asks the node for its kind first, and both the kind and the decoded string are kept on the wrapper. This applies to every string comparison, grouping key and method call on parsed input, not only to membership.
+
+### A repeated scan reports itself
+
+Nothing told the author of that map what it cost. The evaluator now counts predicate evaluations per `any`/`all` site, and when one site adds up to `ScanWarningThreshold` evaluations (default 10 million) over two or more runs, the result carries a diagnostic of severity `Warning`:
+
+```
+Warning at line 2, col 40: 'any' evaluated its predicate 16,000,000 times over 4,000 runs: it scans its input once for every row of an enclosing collection. For an equality test use value.in(list) on a let-bound list, or a join; both cost the rows plus the list rather than rows times list.
+```
+
+The result is still successful and its value is unchanged: `ElwoodResult.Success` is false only for an `Error`. A single run over a large input never warns, however large — that is linear. The totals are final ones, gathered after the result has been consumed, so a lazy `where` whose scans run while `ExecuteTo` writes the output is counted in full.
+
+This is the first warning Elwood emits on a successful result, so a host that only reads `Diagnostics` on failure will not see it. `ElwoodEngine.ScanWarningThreshold` sets the threshold, zero disables it. In TypeScript the warning is in `result.diagnostics` with `severity: 'warning'`, and `setScanWarningThreshold(n)` sets the threshold. The CLI prints warnings to stderr, leaving stdout as the result alone; the Runtime API's script-test endpoint returns them in an `X-Elwood-Warnings` response header as a JSON array of strings.
+
+The count is one increment per predicate evaluation and one dictionary lookup per quantifier run; no difference is measurable on the benchmark below.
+
+### Measured
+
+8,000 files against 8,000 history entries, 5% deleted, .NET 10 Release:
+
+| | before | after |
+|---|---|---|
+| `!h.fileName.in(currentNames)` | 11.4 s, 14.1 GB | 0.04 s, 41 MB |
+| `!(currentNames \| any n => n == h.fileName)` | 16.8 s, 27.5 GB | 6.7 s, 16.7 GB |
+| `Kind` of a parsed string | 120 B, 164 ns | 0 B, 7 ns |
+| `GetStringValue()` of a parsed string | 88 B, 88 ns | 0 B, 4 ns |
+
+The `any` form is 2.5 times faster but still quadratic. The remaining cost per comparison is the lambda's scope (a dictionary per call) and the boolean result node; neither is changed here.
+
+### Files
+- `dotnet/src/Elwood.Core/Evaluation/MembershipIndex.cs` — new: membership index with `==` semantics
+- `dotnet/src/Elwood.Core/Evaluation/Evaluator.cs` — `.in()` indexes a list seen twice at one call site; `any`/`all` count their predicate evaluations
+- `dotnet/src/Elwood.Core/Evaluation/LazyArrayValue.cs` — `iterate` sequences are marked unbounded
+- `dotnet/src/Elwood.Json/JsonNodeValue.cs` — kind and decoded string resolved once per wrapper
+- `ts/src/evaluator.ts` — `.in()` indexes the strings of a list tested more than once; `any`/`all` count their predicate evaluations
+- `dotnet/src/Elwood.Core/ElwoodEngine.cs` — `ScanWarningThreshold`; evaluator diagnostics collected after the result is consumed
+- `dotnet/src/Elwood.Cli/Program.cs` — warnings on a successful result go to stderr
+- `dotnet/src/Elwood.Runtime.Api/Program.cs` — script-test endpoint returns warnings in `X-Elwood-Warnings`
+- `ts/src/index.ts` — warnings in `diagnostics`; exports `setScanWarningThreshold`
+- `dotnet/tests/Elwood.Core.Tests/InMembershipTests.cs` — new: 16 tests
+- `dotnet/tests/Elwood.Core.Tests/ScanWarningTests.cs` — new: 11 tests
+- `ts/tests/unit/in-membership.test.ts` — new: 5 tests
+- `ts/tests/unit/scan-warning.test.ts` — new: 8 tests
+- `spec/test-cases/113-in-membership-repeated/` — new conformance case: mixed kinds, list from a pipeline
+- `docs/syntax-reference.md` — membership idiom; the quantifier warning
+- version 0.7.24 (Elwood.Core, Elwood.Json, `@elwood-lang/core` in lockstep)
+
+---
+
 ## 2026-10-03 — Streaming output: write a result without building a JSON graph (v0.7.23)
 
 Evaluating a script produced the result twice. First `LazyValues.ToConcrete` turned the lazy result into a `JsonNode` graph, then the host called `ToJsonString()` on it to get the bytes it actually wanted. The graph is pure overhead: nobody wants it, it is a stepping stone to the text, and for a large projection it is the single biggest retained allocation of the output stage.

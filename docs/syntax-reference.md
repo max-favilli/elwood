@@ -139,6 +139,8 @@ expression | operation1 | operation2 | ...
 | `any` | `\| any [predicate]` | True if any item matches (no predicate: true if non-empty) |
 | `all` | `\| all [predicate]` | True if all items match (no predicate: always true) |
 
+A quantifier scans its input. Placed inside a `where` or `select` over another collection it scans once per row, which costs rows × list size. When one `any`/`all` adds up to 10 million predicate evaluations over repeated runs, the result carries a **warning** diagnostic naming its line; the evaluation still succeeds and its value is unaffected. For "is this value in that list" use [`.in()`](#membership) or `join` instead.
+
 ### Pattern Matching
 
 ```
@@ -327,6 +329,15 @@ Methods are called with dot notation on values. Most also work as pipe operators
 |---|---|
 | `.in(array)` | Check if value exists in array |
 | `.in(arr1, arr2, "val")` | Check against union of multiple sources |
+
+To keep the rows whose value is (or is not) in a list, bind the list with `let` and test with `.in()`:
+
+```
+let currentNames = $.files[*] | select f => f.name
+return $.history[*] | where h => !h.fileName.in(currentNames)
+```
+
+A list tested once per row is indexed, so this costs the number of rows plus the size of the list. The same test written as `currentNames | any n => n == h.fileName` scans the whole list for every row — rows × list size — and becomes very slow once both run to tens of thousands. When you need the matching rows themselves rather than a yes/no, use `join`.
 
 ### Null/Empty Checks
 
