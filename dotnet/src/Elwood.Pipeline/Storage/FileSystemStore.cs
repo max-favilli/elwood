@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Elwood.Pipeline.State;
 
 namespace Elwood.Pipeline.Storage;
@@ -6,6 +7,7 @@ namespace Elwood.Pipeline.Storage;
 public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMaintenance
 {
     private readonly string _baseDir;
+    private readonly ILogger<FileSystemStateStore>? _logger;
     private bool _indexesReady;
     private readonly SemaphoreSlim _initializeIndexes = new(1, 1);
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -14,8 +16,9 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
-    public FileSystemStateStore(string baseDir)
+    public FileSystemStateStore(string baseDir, ILogger<FileSystemStateStore>? logger = null)
     {
+        _logger = logger;
         _baseDir = Path.GetFullPath(baseDir);
         SafePath.Within(_baseDir, "check");
         Directory.CreateDirectory(baseDir);
@@ -74,21 +77,25 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
         var result = new List<ExecutionState>();
         foreach (var marker in Directory.EnumerateFiles(SafePath.Within(_baseDir, "indexes/" + index)))
         {
-            var id = Path.GetFileName(marker);
-            var state = await GetExecutionAsync(id);
-            if (state is not null && IndexFor(state) == index) result.Add(state);
-            else
+            try
             {
-                // Reconcile a crashed transition only while owning the execution.
-                await using var claim = await TryLockAsync(id);
-                if (claim is null) continue;
-                state = await GetExecutionAsync(id);
-                if (state is null || IndexFor(state) != index)
+                var id = Path.GetFileName(marker);
+                var state = await GetExecutionAsync(id);
+                if (state is not null && IndexFor(state) == index) result.Add(state);
+                else
                 {
-                    if (state is not null && IndexFor(state) is { } current) Mark(current, id);
-                    File.Delete(marker);
+                    // Reconcile a crashed transition only while owning the execution.
+                    await using var claim = await TryLockAsync(id);
+                    if (claim is null) continue;
+                    state = await GetExecutionAsync(id);
+                    if (state is null || IndexFor(state) != index)
+                    {
+                        if (state is not null && IndexFor(state) is { } current) Mark(current, id);
+                        File.Delete(marker);
+                    }
                 }
             }
+            catch (Exception ex) when (BadEntry(ex)) { LogEntry(Path.GetFileName(marker), ex); }
         }
         return result;
     }
@@ -112,7 +119,11 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
     {
         var path = SafePath.Within(_baseDir, $"{SafePath.Id(executionId)}.json");
         var json = await AtomicExecutionFile.ReadAsync(path);
-        return json is null ? null : JsonSerializer.Deserialize<ExecutionState>(json, JsonOpts);
+        if (json is null) return null;
+        var state = JsonSerializer.Deserialize<ExecutionState>(json, JsonOpts);
+        if (state is null || state.ExecutionId != executionId || state.Sources is null || state.Outputs is null || state.Errors is null)
+            throw new JsonException("Invalid execution state header.");
+        return state;
     }
 
     public async Task<List<ExecutionState>> ListExecutionsAsync(string? pipelineName = null, int limit = 50)
@@ -132,7 +143,7 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
                 results.Add(state);
                 if (results.Count >= limit) break;
             }
-            catch { /* skip corrupt files */ }
+            catch (Exception ex) when (BadEntry(ex)) { LogEntry(Path.GetFileName(file), ex); }
         }
 
         return results;
@@ -156,7 +167,7 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
         // a held claim: on Unix another process could otherwise lock a new inode.
         await using var access = await AtomicExecutionFile.LockAsync(guard);
         try { return new Claim(new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None), path, guard); }
-        catch (IOException ex) when ((ex.HResult & 0xFFFF) is 11 or 32 or 33) { return null; }
+        catch (IOException ex) when ((ex.HResult & 0xFFFF) is 11 or 32 or 33 or 35) { return null; }
     }
 
     private sealed class Claim(FileStream stream, string path, string guard) : IAsyncDisposable
@@ -175,12 +186,16 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
         if (Directory.Exists(directory))
             foreach (var path in Directory.EnumerateFiles(directory, "*.lock"))
             {
-                // Claims abandoned by crashed processes are released and removed.
-                await using var claim = await TryLockAsync(Path.GetFileNameWithoutExtension(path));
+                try
+                {
+                    // Claims abandoned by crashed processes are released and removed.
+                    await using var claim = await TryLockAsync(Path.GetFileNameWithoutExtension(path));
+                }
+                catch (Exception ex) when (BadEntry(ex)) { LogEntry(Path.GetFileName(path), ex); }
             }
-        AtomicExecutionFile.Cleanup(_baseDir);
+        AtomicExecutionFile.Cleanup(_baseDir, _logger);
         var indexes = SafePath.Within(_baseDir, "indexes");
-        if (Directory.Exists(indexes)) AtomicExecutionFile.Cleanup(indexes);
+        if (Directory.Exists(indexes)) AtomicExecutionFile.Cleanup(indexes, _logger);
     }
 
     public async Task<List<ExecutionState>> ListAllAsync()
@@ -188,11 +203,18 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
         var result = new List<ExecutionState>();
         foreach (var file in Directory.EnumerateFiles(_baseDir, "*.json"))
         {
-            var state = await GetExecutionAsync(Path.GetFileNameWithoutExtension(file));
-            if (state is not null) result.Add(state);
+            try
+            {
+                var state = await GetExecutionAsync(Path.GetFileNameWithoutExtension(file));
+                if (state is not null) result.Add(state);
+            }
+            catch (Exception ex) when (BadEntry(ex)) { LogEntry(Path.GetFileName(file), ex); }
         }
         return result;
     }
+
+    private static bool BadEntry(Exception ex) => ex is JsonException or ArgumentException or IOException or UnauthorizedAccessException;
+    private void LogEntry(string id, Exception ex) => _logger?.LogWarning("Skipping invalid or unavailable execution entry {Id}: {ErrorType}", id, ex.GetType().Name);
 
     public Task DeleteExecutionAsync(string executionId)
     {
@@ -302,12 +324,20 @@ internal static class AtomicExecutionFile
         catch (FileNotFoundException) { return null; }
     }
 
-    internal static void Cleanup(string directory)
+    internal static void Cleanup(string directory, ILogger? logger = null)
     {
         var cutoff = DateTime.UtcNow.AddDays(-1);
         foreach (var path in Directory.EnumerateFiles(directory))
-            if ((path.EndsWith(".tmp", StringComparison.Ordinal) || (path.EndsWith(".access.lock", StringComparison.Ordinal) && Path.GetFileName(path) is not ("claim-namespace.access.lock" or "index-initialization.access.lock"))) &&
-                File.GetLastWriteTimeUtc(path) < cutoff) TryDeleteArtifact(path);
+        {
+            try
+            {
+                SafePath.Within(directory, Path.GetFileName(path));
+                if ((path.EndsWith(".tmp", StringComparison.Ordinal) || (path.EndsWith(".access.lock", StringComparison.Ordinal) && Path.GetFileName(path) is not ("claim-namespace.access.lock" or "index-initialization.access.lock"))) &&
+                    File.GetLastWriteTimeUtc(path) < cutoff) TryDeleteArtifact(path);
+            }
+            catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+            { logger?.LogWarning("Skipping storage artifact {Name}: {ErrorType}", Path.GetFileName(path), ex.GetType().Name); }
+        }
     }
 
     internal static void TryDeleteArtifact(string path)
@@ -320,7 +350,7 @@ internal static class AtomicExecutionFile
             using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
         }
         catch (FileNotFoundException) { }
-        catch (IOException ex) when ((ex.HResult & 0xFFFF) is 11 or 32 or 33) { }
+        catch (IOException ex) when ((ex.HResult & 0xFFFF) is 11 or 32 or 33 or 35) { }
     }
 
     internal static async Task<FileStream> LockAsync(string path)
@@ -332,7 +362,7 @@ internal static class AtomicExecutionFile
             {
                 return new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             }
-            catch (IOException ex) when (retry < 1000 && (ex.HResult & 0xFFFF) is 11 or 32 or 33)
+            catch (IOException ex) when (retry < 1000 && (ex.HResult & 0xFFFF) is 11 or 32 or 33 or 35)
             {
                 await Task.Delay(5);
             }

@@ -97,6 +97,17 @@ Body previews are limited to 64 KiB per request/response by default. Configure `
 
 `elwood run` uses `PipelineExecutor` to transform supplied source files. It does not execute runtime connectors, retries, durable acceptance, destination delivery or recovery. Use the portal/API **Test draft** workflow when verifying runtime behavior, even for an async pipeline.
 
-The offline CLI and runtime share the DSL engine but supply different context bindings. In CLI source maps, `$source` comes from a supplied source envelope or minimal generated metadata; `$execution` is not supplied. At runtime, `$execution.id` identifies the retained execution, and fetched sources add HTTP/SQL/Blob metadata. Output maps and destination expressions must not assume a current `$source`: use the mapped IDM to carry required source metadata forward. A script that needs `$execution.id` must be tested through the runtime or receive an explicit binding in a standalone DSL test.
+The offline CLI and runtime share the DSL engine but supply different context bindings. The CLI also binds `$slice` for source `path` fan-out; the runtime rejects source fan-out rather than supplying this binding. In CLI source maps, `$source` comes from a supplied source envelope or minimal generated metadata; `$execution` is not supplied. At runtime, `$execution.id` identifies the retained execution, and fetched sources add HTTP/SQL/Blob metadata. Output maps and destination expressions must not assume a current `$source`: use the mapped IDM to carry required source metadata forward. A script that needs `$execution.id` must be tested through the runtime or receive an explicit binding in a standalone DSL test.
 
 The CLI's stored pipeline snapshot is an offline inspection artifact, not the durable runtime snapshot format. CLI executions cannot be resumed or replayed through the Runtime API. This distinction does not change DSL syntax or evaluation semantics.
+
+
+For API contract tests, stop dev servers first or build into an isolated directory and select that exact DLL. A running development process can hold a stale Debug build:
+
+```powershell
+dotnet build dotnet/src/Elwood.Runtime.Api -o ../.contract-runtime
+$env:ELWOOD_TEST_RUNTIME_DLL = (Resolve-Path ../.contract-runtime/Elwood.Runtime.Api.dll).Path
+node --test scripts/runtime-api.test.mjs scripts/durable-runtime.test.mjs scripts/connectors-api.test.mjs scripts/sync-cancellation.test.mjs
+```
+
+Draft tests have the same configurable sync time budget as HTTP executions. See [durable processing](durable-processing.md#synchronous-request-lifetime).

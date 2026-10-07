@@ -20,9 +20,13 @@ var pipelinesDir = builder.Configuration["Elwood:PipelinesDir"]
 var stateDir = builder.Configuration["Elwood:StateDir"]
     ?? Path.Combine(Directory.GetCurrentDirectory(), ".elwood", "state");
 
+var syncBudgetSeconds = builder.Configuration.GetValue("Elwood:Sync:ExecutionBudgetSeconds", 60d);
+if (!double.IsFinite(syncBudgetSeconds) || syncBudgetSeconds <= 0 || syncBudgetSeconds > 300)
+    throw new InvalidOperationException("Elwood:Sync:ExecutionBudgetSeconds must be positive and at most 300.");
+
 // Register services
 builder.Services.AddSingleton<IPipelineStore>(sp => new FileSystemPipelineStore(pipelinesDir, sp.GetRequiredService<ILogger<FileSystemPipelineStore>>()));
-builder.Services.AddSingleton<IStateStore>(new FileSystemStateStore(stateDir));
+builder.Services.AddSingleton<IStateStore>(sp => new FileSystemStateStore(stateDir, sp.GetRequiredService<ILogger<FileSystemStateStore>>()));
 builder.Services.AddSingleton<IDocumentStore>(new FileSystemDocumentStore(Path.Combine(stateDir, "documents")));
 builder.Services.AddSingleton<JsonNodeValueFactory>(_ => JsonNodeValueFactory.Instance);
 builder.Services.AddSingleton(sp => new FileSystemDeploymentStore(sp.GetRequiredService<IPipelineStore>(), Path.Combine(stateDir, "deployments"), sp.GetRequiredService<ILogger<FileSystemDeploymentStore>>()));
@@ -284,7 +288,8 @@ app.MapPost("/api/executions", async (ExecutionRequest body, FileSystemDeploymen
         context.RequestServices.GetRequiredService<IConfiguration>().GetValue("Elwood:Inspection:TestBodyLimitBytes", 64 * 1024));
     var payload = JsonNodeValueFactory.Instance.Parse(body.Payload.ValueKind == JsonValueKind.Undefined ? "{}" : body.Payload.GetRawText());
     // Management execution is always an explicit draft test, including async definitions.
-    var result = await Executor(context, body.PipelineId, isTest: true, testSession).ExecuteAsync(parsed, payload, isTest: true, cancellationToken: app.Lifetime.ApplicationStopping);
+    using var requestLifetime = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, app.Lifetime.ApplicationStopping);
+    var result = await Executor(context, body.PipelineId, isTest: true, testSession).ExecuteAsync(parsed, payload, isTest: true, cancellationToken: requestLifetime.Token);
     var state = await context.RequestServices.GetRequiredService<IStateStore>().GetExecutionAsync(result.ExecutionId!);
     var inspection = CanReadExecution(context, state!)
         ? await ExecutionInspection.LoadAsync(state!, context.RequestServices.GetRequiredService<IDocumentStore>()) : null;
@@ -360,7 +365,7 @@ app.MapPost("/api/v1/trigger/{**path}", async (string path, HttpContext context,
         return Results.Json(new { executionIds = accepted }, statusCode: 202);
     }
     using var reader = new StreamReader(context.Request.Body);
-    var json = await reader.ReadToEndAsync();
+    var json = await reader.ReadToEndAsync(context.RequestAborted);
     var payload = JsonNodeValueFactory.Instance.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
     context.Response.Headers["X-Elwood-Revision"] = bundle.RevisionId;
     if (!parsed.Config.IsSyncMode)
@@ -371,12 +376,13 @@ app.MapPost("/api/v1/trigger/{**path}", async (string path, HttpContext context,
         context.Response.Headers["X-Elwood-Revision"] = accepted!.RevisionId;
         return Results.Accepted($"/api/executions/{executionId}", new { executionId, revisionId = accepted.RevisionId, status = accepted.Status });
     }
-    var result = await Executor(context, id, false).ExecuteAsync(parsed, payload, triggerSourceName: sourceName, cancellationToken: app.Lifetime.ApplicationStopping);
+    using var requestLifetime = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, app.Lifetime.ApplicationStopping);
+    var result = await Executor(context, id, false).ExecuteAsync(parsed, payload, triggerSourceName: sourceName, cancellationToken: requestLifetime.Token);
     context.Response.Headers["X-Elwood-Revision"] = bundle.RevisionId;
     if (!result.IsSuccess)
     {
         if (result.FailureResponse is not null) return Results.Text(ExecutionJson(result.FailureResponse), "application/json", statusCode: result.ResponseStatusCode ?? 500);
-        return Results.Json(new { result.ExecutionId, errors = result.Errors }, statusCode: 500);
+        return Results.Json(new { result.ExecutionId, errors = result.Errors }, statusCode: result.ResponseStatusCode ?? 500);
     }
     if (parsed.Config.ResponseOutput is { } response && result.Outputs.TryGetValue(response.Name, out var value))
         return Results.Text(response.ContentType == "json" ? ExecutionJson(value) : value.GetStringValue(),
@@ -411,6 +417,7 @@ static ISecretProvider ScopedSecrets(HttpContext context, string id, bool test) 
     .Secrets(context.RequestServices.GetRequiredService<ISecretProvider>(), id, test);
 static SyncExecutor Executor(HttpContext context, string id, bool isTest, LocalTestSession? testSession = null) => new(
     testSession: testSession,
+    executionBudget: TimeSpan.FromSeconds(context.RequestServices.GetRequiredService<IConfiguration>().GetValue("Elwood:Sync:ExecutionBudgetSeconds", 60d)),
     secretProvider: testSession?.Mode == "mock" ? null : ScopedSecrets(context, id, isTest), stateStore: context.RequestServices.GetRequiredService<IStateStore>(),
     documentStore: context.RequestServices.GetRequiredService<IDocumentStore>(),
     sourceConnectors: context.RequestServices.GetRequiredService<RuntimeConnectors>().Sources(id, isTest), destinationConnectors: context.RequestServices.GetRequiredService<RuntimeConnectors>().Destinations(id, isTest),

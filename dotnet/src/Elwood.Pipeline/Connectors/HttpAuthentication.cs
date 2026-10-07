@@ -12,8 +12,8 @@ internal static class HttpAuthentication
     private sealed record CachedToken(string Value, DateTimeOffset ExpiresAt);
     private sealed class TokenCache
     {
-        public SemaphoreSlim Gate { get; } = new(1, 1);
-        public Dictionary<string, CachedToken> Tokens { get; } = [];
+        public object Gate { get; } = new();
+        public Dictionary<string, Lazy<Task<CachedToken>>> Tokens { get; } = [];
     }
     private static readonly ConditionalWeakTable<HttpClient, TokenCache> Caches = new();
 
@@ -32,16 +32,45 @@ internal static class HttpAuthentication
         // includes rotation, scope and client authentication; no secrets appear in keys.
         var key = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(oauth)));
         var cache = Caches.GetValue(client, _ => new TokenCache());
-        await cache.Gate.WaitAsync(token);
+        Lazy<Task<CachedToken>> pending;
+        lock (cache.Gate)
+        {
+            foreach (var expired in cache.Tokens.Where(p => p.Value.IsValueCreated && p.Value.Value.IsCompleted &&
+                (!p.Value.Value.IsCompletedSuccessfully || p.Value.Value.Result.ExpiresAt <= DateTimeOffset.UtcNow)).Select(p => p.Key).ToList())
+                cache.Tokens.Remove(expired);
+            if (!cache.Tokens.TryGetValue(key, out pending!))
+            {
+                // Evict completed entries only; in-flight identities stay coalesced.
+                if (cache.Tokens.Count >= 256)
+                {
+                    var completed = cache.Tokens.FirstOrDefault(p => p.Value.IsValueCreated && p.Value.Value.IsCompleted);
+                    if (completed.Key is not null) cache.Tokens.Remove(completed.Key);
+                    else throw new ConnectorException("OAuth2 token acquisition capacity reached. Retry later.", "oauth.capacity", true);
+                }
+                pending = new(() => Acquire(client, uri, oauth, token), LazyThreadSafetyMode.ExecutionAndPublication);
+                cache.Tokens[key] = pending;
+            }
+        }
         try
         {
-            var issuedAt = DateTimeOffset.UtcNow;
-            if (cache.Tokens.TryGetValue(key, out var cached) && cached.ExpiresAt > issuedAt)
-            {
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", cached.Value);
-                return;
-            }
-            cache.Tokens.Remove(key);
+            // No cache-wide lock spans network I/O. Each waiter can stop independently.
+            var cached = await pending.Value.WaitAsync(token);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", cached.Value);
+        }
+        catch
+        {
+            lock (cache.Gate)
+                if (pending.IsValueCreated && pending.Value.IsCompleted && !pending.Value.IsCompletedSuccessfully &&
+                    cache.Tokens.TryGetValue(key, out var current) && ReferenceEquals(current, pending)) cache.Tokens.Remove(key);
+            throw;
+        }
+    }
+
+    private static async Task<CachedToken> Acquire(HttpClient client, Uri uri, OAuth2Config oauth, CancellationToken token)
+    {
+        var issuedAt = DateTimeOffset.UtcNow;
+        try
+        {
             using var auth = new HttpRequestMessage(HttpMethod.Post, uri);
             var form = new Dictionary<string, string> { ["grant_type"] = "client_credentials" };
             if (oauth.Scope is not null) form["scope"] = oauth.Scope;
@@ -58,23 +87,19 @@ internal static class HttpAuthentication
             if (!json.RootElement.TryGetProperty("access_token", out var access) || string.IsNullOrEmpty(access.GetString()) ||
                 (json.RootElement.TryGetProperty("token_type", out var type) && !string.Equals(type.GetString(), "Bearer", StringComparison.OrdinalIgnoreCase)))
                 throw new ConnectorException("OAuth2 response did not contain a Bearer access token.", "oauth.response");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access.GetString());
+            var expiresAt = issuedAt;
             if (json.RootElement.TryGetProperty("expires_in", out var expiry) && expiry.ValueKind == JsonValueKind.Number &&
                 expiry.TryGetDouble(out var seconds) && double.IsFinite(seconds) && seconds > 0)
             {
                 seconds = Math.Min(seconds, 86400);
-                var expiresAt = issuedAt.AddSeconds(seconds - Math.Min(30, seconds / 10));
-                foreach (var expired in cache.Tokens.Where(p => p.Value.ExpiresAt <= issuedAt).Select(p => p.Key).ToList()) cache.Tokens.Remove(expired);
-                // Bound memory even when many rotated credentials/scopes share a client.
-                if (cache.Tokens.Count >= 256) cache.Tokens.Remove(cache.Tokens.MinBy(p => p.Value.ExpiresAt).Key);
-                cache.Tokens[key] = new(access.GetString()!, expiresAt);
+                expiresAt = issuedAt.AddSeconds(seconds - Math.Min(30, seconds / 10));
             }
+            return new(access.GetString()!, expiresAt);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (ConnectorException) { throw; }
         catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
         { throw new ConnectorException("OAuth2 token request could not complete.", "oauth.transport", true); }
         catch (Exception) { throw new ConnectorException("Invalid OAuth2 token response.", "oauth.response"); }
-        finally { cache.Gate.Release(); }
     }
 }

@@ -132,6 +132,40 @@ public static class HttpCallCapture
             name.Equals("Location", StringComparison.OrdinalIgnoreCase) || name.Equals("Content-Location", StringComparison.OrdinalIgnoreCase)
                 ? SafeUrl(value) ?? Redacted : value).ToArray();
 
+    internal static string RejectedBodyPreview(string body, IEnumerable<string?> secrets)
+    {
+        // Error strings are replicated into attempt/step/execution state. Persist a
+        // tiny structured preview only; arbitrary HTML/text and oversized bodies
+        // cannot be safely redacted as structured data and remain omitted.
+        var bytes = System.Text.Encoding.UTF8.GetByteCount(body);
+        if (bytes > 64 * 1024) return $"[response body omitted: {bytes} bytes]";
+        try
+        {
+            var json = System.Text.Json.Nodes.JsonNode.Parse(body);
+            void Redact(System.Text.Json.Nodes.JsonNode? node)
+            {
+                if (node is System.Text.Json.Nodes.JsonObject obj)
+                    foreach (var property in obj.ToList())
+                        if (Sensitive(property.Key)) obj[property.Key] = Redacted;
+                        else Redact(property.Value);
+                else if (node is System.Text.Json.Nodes.JsonArray array)
+                    foreach (var item in array) Redact(item);
+            }
+            Redact(json);
+            var text = json?.ToJsonString() ?? "null";
+            foreach (var secret in secrets.Where(v => !string.IsNullOrEmpty(v)).Distinct())
+            {
+                text = text.Replace(secret!, Redacted, StringComparison.Ordinal);
+                // JSON-escaped echoes must not bypass credential redaction.
+                var escaped = System.Text.Json.JsonSerializer.Serialize(secret);
+                text = text.Replace(escaped[1..^1], Redacted, StringComparison.Ordinal);
+            }
+            var preview = new HttpCallDetails { BodyLimit = 512, ResponseBody = text };
+            return preview.ResponseBody + (preview.ResponseBodyTruncated ? " [truncated]" : "");
+        }
+        catch (System.Text.Json.JsonException) { return $"[unstructured response body omitted: {bytes} bytes]"; }
+    }
+
     private static bool Sensitive(string name)
     {
         var key = name.Replace("-", "").Replace("_", "").ToLowerInvariant();

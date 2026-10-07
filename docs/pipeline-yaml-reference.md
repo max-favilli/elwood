@@ -53,7 +53,6 @@ outputs:
   - name: file-archive
     path: $.orders[*] | where o => o.status == "active"
     contentType: json
-    concurrency: 50
     destinations:
       azureFileShare:
         - connectionString: $secrets.fileShare.connectionString
@@ -376,10 +375,8 @@ An output defines what data to extract from the IDM, how to transform it, and wh
 outputs:
   - name: active-orders
     path: $.orders[*] | where o => o.status == "active"
-    outputId: $.orderId
     map: format-for-erp.elwood
     contentType: json
-    concurrency: 50
     destinations:
       restEndpoint:
         - url: https://erp.example.com/api/orders
@@ -391,60 +388,53 @@ outputs:
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | yes | Unique name |
-| `path` | string | no | Fan-out: slice the IDM, process once per slice |
-| `outputId` | string | no | Expression or script generating a unique ID per item |
+| `path` | string | no | Select data from the IDM once; the complete result becomes input to `map` |
+| `outputId` | string | no | Reserved; currently rejected as unimplemented |
 | `map` | string | no | Transformation: `.elwood` script or inline expression |
 | `contentType` | string | no | Output format. Default: `json` |
-| `concurrency` | int | no | Max parallel items. Default: `1` |
+| `concurrency` | int | no | Legacy field; does not enable per-item output processing or parallel delivery |
 | `destinations` | object | no | Where to deliver (see Destinations) |
 | `response` | bool | no | Sync mode only — marks this output as the HTTP response returned to the caller. Exactly one output must set this when `mode: sync`. Forbidden in async mode. See [Execution Mode](#execution-mode). |
 
-### Output Fan-Out (path)
+### Output Selection (`path`)
 
-The `path` property slices the IDM. The output is processed **once per slice**:
+Both runtime executors evaluate `path` once against the complete IDM, then evaluate `map` once against that whole result. An array stays an array; there is no per-item delivery loop. Use an explicit DSL `select` to transform its elements. Each configured destination receives the complete serialized output once per attempt (completed deliveries are checkpointed).
 
 ```yaml
-path: $.orders[*]                                     # One output per order
-path: $.orders[*] | where o => o.status == "active"   # One output per active order
-path: filter-orders.elwood                            # Script that returns the slices
+path: $.orders[*] | where o => o.status == "active"
+map: format-for-erp.elwood
 ```
 
 ### Context Bindings in Output Maps
 
-When an output map runs, these bindings are available:
-
 | Binding | What it contains |
 |---|---|
-| `$` | The current slice (one item from the fan-out) |
-| `$idm` | The complete IDM (all source data) |
-| `$output` | The full array selected by `path` (all slices, not just current) |
-| `$source` | Source metadata from the triggering source |
+| `$` | The entire result of `path`, or the IDM if `path` is absent |
+| `$idm` | The complete IDM (all mapped source data) |
+| `$output` | The entire `path` result; bound only when `path` is configured |
+| `$execution` | Runtime execution identity, step name and revision |
+
+`$source` is not an output binding. Preserve required source metadata in the IDM during source mapping.
 
 ```elwood
-// format-for-erp.elwood — Output map
-// $ = one active order (the current slice)
-// $idm = full IDM with all orders, products, etc.
-// $output = all active orders (the full filtered array)
-
+// format-for-erp.elwood: $ is the full array of active orders.
 let totalOrders = $output | count
-
-return {
-  OrderID: $.orderId,
-  Customer: $.customer.toUpper(),
-  Amount: $.total.toString(),
-  BatchSize: totalOrders,
-  Category: $idm.products[*] | first p => p.sku == $.sku | select p => p.category
+return $ | select o => {
+  OrderID: o.orderId,
+  Customer: o.customer.toUpper(),
+  Amount: o.total.toString(),
+  BatchSize: totalOrders
 }
 ```
 
 ### Output Processing Pipeline
 
-```
+```text
 IDM
-  → path (fan-out: slice the IDM into items)
-  → map (transform each item)
-  → contentType (serialize: json, csv, xml, etc.)
-  → destinations (deliver each item)
+  → path (select once)
+  → map (transform the whole selection once)
+  → contentType (serialize JSON, or a string as text/XML)
+  → destinations (each receives the complete output)
 ```
 
 ---
@@ -455,22 +445,19 @@ Destinations define where output data is delivered. An output can have multiple 
 
 ### Destination Types
 
-Runtime API M5 implements `http`/`restEndpoint`, `sql` and `blobStorage`. Remaining table entries describe planned interfaces; they must not be used as evidence of an installed connector. Authored SOAP/XML uses an HTTP destination and a raw XML string, not a `soap` block.
+The Runtime API implements these destinations:
 
 | Type | Description |
 |---|---|
-| `restEndpoint` | REST API call (POST, PUT, PATCH) |
-| `azureFileShare` | Azure File Share |
-| `sftp` | SFTP file delivery |
-| `blobStorage` | Azure Blob Storage |
-| `serviceBus` | Azure Service Bus queue/topic |
-| `sql` | SQL database (stored procedure) |
-| `soap` | SOAP web service |
-| `emailCommService` | Azure Email Communication Services |
-| `servicePoint` | HTTP endpoint for pull retrieval |
-| `request` | Response body for http-request trigger (sync flow) |
+| `http` / `restEndpoint` | HTTP request with JSON, text or XML body; Basic and OAuth2 client credentials |
+| `sql` | SQL Server stored procedure; complete mapped JSON parameter and receipt |
+| `blobStorage` | Azure Blob output; text/JSON/XML serialization and conditional writes |
 
-### REST API
+Authored SOAP/XML uses an HTTP destination with a raw XML string. A trusted embedded/file host may install local file delivery (`fileShare` / `azureFileShare`, literal local filenames only); the Runtime API disables filesystem connectors. The name `azureFileShare` does not implement remote Azure File Share access.
+
+**Planned, unavailable destination types:** `serviceBus`, `soap`, `emailCommService`, `servicePoint`, `request` and `sftp`. They have no implemented runtime destination connector. Depending on the key, parsing or execution validation rejects them. Use `response: true` for a sync HTTP response, not `request`. Do not put planned keys in deployable bundles.
+
+### HTTP
 
 ```yaml
 destinations:
@@ -480,24 +467,6 @@ destinations:
       headers:
         Authorization: Bearer $secrets.target.token
         Content-Type: application/json
-```
-
-### Azure File Share
-
-```yaml
-destinations:
-  azureFileShare:
-    - connectionString: $secrets.fileShare.connectionString
-      filename: /exports/{$.orderId}.json
-```
-
-### SFTP
-
-```yaml
-destinations:
-  sftp:
-    - connectionString: $secrets.sftp.connectionString
-      filename: /incoming/{$.code}.xml
 ```
 
 ### Blob Storage
@@ -528,9 +497,10 @@ destinations:
   restEndpoint:
     - url: https://erp.example.com/api/orders
       method: POST
-  azureFileShare:
-    - connectionString: $secrets.fs.connectionString
-      filename: /archive/{$.orderId}.json
+  blobStorage:
+    - connectionString: $secrets.blob.connectionString
+      container: snapshots
+      filename: archive/{$execution.id}.json
 ```
 
 ### Retry Policy
@@ -559,15 +529,15 @@ Service Bus and email destinations are deferred; `serviceBus` and `emailCommServ
 
 ### Dynamic Expressions in Destinations
 
-All string properties in destinations support inline Elwood expressions:
+Supported dynamic fields such as HTTP URLs and Blob filenames accept inline Elwood expressions. See [connector configuration](connectors.md) for the supported fields:
 
 ```yaml
-filename: /exports/{$.category}/{$.orderId}.json     # Data from current slice
+filename: /exports/{$.category}/{$.orderId}.json     # Data from the complete mapped output
 url: https://api.example.com/orders/{$.orderId}      # Dynamic URL
 ```
 
 In destination expressions:
-- `$` is the current output slice
+- `$` is the complete mapped output (possibly an array)
 - `$execution.id` is the runtime execution ID
 - `$idm` is the full IDM
 - Carry required source metadata into the IDM in the source map; outputs do not have a current `$source`.

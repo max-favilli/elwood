@@ -199,7 +199,7 @@ public sealed class DurableExecutionTests
     public async Task ReplayRequiresAcknowledgementOfUncertainWrite()
     {
         var states = new InMemoryStateStore(); var docs = new InMemoryDocumentStore(); var queue = new InMemoryStepQueue();
-        var connector = new Source(_ => throw new HttpRequestException("Connection lost after sending"));
+        var connector = new Source(n => n == 1 ? throw new HttpRequestException("Connection lost after sending") : Task.FromResult(new SourceFetchResult("{}")));
         var runner = new AsyncExecutor(states, docs, queue, sourceConnectors: [connector]);
         var id = await runner.StartAsync(Pipeline("retry: { mode: manual }", "POST"), Factory.Parse("{}"));
         await Drain(runner, queue);
@@ -209,6 +209,10 @@ public sealed class DurableExecutionTests
         var replay = await runner.ReplayAsync(id, acknowledgeUncertain: true);
         Assert.Equal(id, (await states.GetExecutionAsync(replay))!.ReplayOf);
         Assert.Equal(1, connector.Count);
+        await Drain(runner, queue);
+        Assert.Equal(ExecutionStatus.Completed, (await states.GetExecutionAsync(replay))!.Status);
+        Assert.Equal(ExecutionStatus.AwaitingReview, (await states.GetExecutionAsync(id))!.Status);
+        Assert.Equal(2, connector.Count);
     }
 
     [Fact]

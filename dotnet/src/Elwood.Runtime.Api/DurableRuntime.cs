@@ -32,7 +32,7 @@ public sealed class DurableRuntime(IStateStore states, IDocumentStore documents,
     ManagementSecurity security, ISecretProvider secrets, RuntimeConnectors connectors)
 {
     public AsyncExecutor Runner(string? pipelineId = null) => new(states, documents, queue,
-        secretProvider: pipelineId is null ? null : security.Secrets(secrets, pipelineId, false),
+        secretProvider: pipelineId is null ? new ScopedSecretProvider(secrets, []) : security.Secrets(secrets, pipelineId, false),
         sourceConnectors: connectors.Sources(pipelineId ?? "", false), destinationConnectors: connectors.Destinations(pipelineId ?? "", false));
 }
 

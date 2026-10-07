@@ -121,9 +121,9 @@ public class ParquetTests
     }
 
     [Fact]
-    public void RoundTrip_GenerateFixture()
+    public void RoundTrip_TemporaryFixture()
     {
-        // Generate the shared fixture for TS cross-platform testing
+        // Exercise fixture serialization without rewriting the committed shared sample.
         var engine = CreateEngine();
         var input = Factory.Parse("""[{"name":"Alice","age":30},{"name":"Bob","age":25}]""");
         var result = engine.Evaluate(
@@ -131,22 +131,14 @@ public class ParquetTests
             input);
         Assert.True(result.Success);
 
-        var fixtureDir = FindFixtureDir();
-        Directory.CreateDirectory(fixtureDir);
-        File.WriteAllText(
-            Path.Combine(fixtureDir, "sample.parquet.b64"),
-            result.Value!.GetStringValue()!);
-    }
-
-    private static string FindFixtureDir()
-    {
-        var dir = AppContext.BaseDirectory;
-        for (var i = 0; i < 10; i++)
+        var fixture = Path.Combine(Path.GetTempPath(), "elwood-parquet-" + Guid.NewGuid().ToString("N") + ".b64");
+        try
         {
-            var candidate = Path.Combine(dir, "spec", "fixtures");
-            if (Directory.Exists(Path.Combine(dir, "spec"))) return candidate;
-            dir = Path.GetDirectoryName(dir)!;
+            File.WriteAllText(fixture, result.Value!.GetStringValue()!);
+            var restored = engine.Evaluate("$.fromParquet()", Factory.CreateString(File.ReadAllText(fixture)));
+            Assert.True(restored.Success);
+            Assert.Equal(2, restored.Value!.GetArrayLength());
         }
-        return Path.Combine(Directory.GetCurrentDirectory(), "spec", "fixtures");
+        finally { File.Delete(fixture); }
     }
 }

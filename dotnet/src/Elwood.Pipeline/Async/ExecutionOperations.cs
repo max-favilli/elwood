@@ -83,12 +83,13 @@ internal sealed class ExecutionOperations
                         parameter.ResolvedValue = JsonSerializer.Deserialize<JsonElement>(Json(_evaluator.Evaluate(parameter.Value, idm, Bindings(state, config.Name, idm), pipeline.Scripts, step.Diagnostics)));
                 async Task<SourceFetchResult> Real()
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var connector = _sources.FirstOrDefault(c => c.CanHandle(from)) ?? throw new InvalidOperationException("No source connector available.");
                     ResolveSource(from, idm, Bindings(state, config.Name, idm));
                     return await connector.FetchAsync(from, idm, cancellationToken);
                 }
                 fetched = await Call(state, attempt, config.Name, null, from.Sql is { ReadOnly: false } ? "WRITE" : from.Http?.Method ?? "GET",
-                    () => _test is null ? Real() : _test.FetchAsync(config.Name, from, Real));
+                    () => _test is null ? Real() : _test.FetchAsync(config.Name, from, Real), cancellationToken);
                 // Commit a successful external response before mapping. A failed map/resume must not repeat the write.
                 var checkpoint = new SourceFetchResult(fetched.Content, fetched.ContentType,
                     fetched.Headers?.ToDictionary(h => h.Key, h => string.Join(", ", HttpCallCapture.SafeHeader(h.Key, [h.Value]))),
@@ -162,13 +163,14 @@ internal sealed class ExecutionOperations
             var (type, destination) = destinations[i];
             async Task<DeliveryResult> Real()
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var connector = _destinations.FirstOrDefault(c => c.CanHandle(type)) ?? throw new InvalidOperationException($"No connector for destination '{type}'.");
                 var resolved = ResolveDestination(destination, outputData, Bindings(state, config.Name, idm), pipeline, step.Diagnostics);
                 return await connector.DeliverAsync(type, resolved, deliveryContent, config.ContentType, cancellationToken: cancellationToken);
             }
             var index = i;
             var result = await Call(state, attempt, config.Name, i, (destination as HttpDestinationConfig)?.Method ?? "POST",
-                () => _test is null ? Real() : _test.DeliverAsync(config.Name, index, type, destination, deliveryContent, config.ContentType, Real));
+                () => _test is null ? Real() : _test.DeliverAsync(config.Name, index, type, destination, deliveryContent, config.ContentType, Real), cancellationToken);
             if (!result.Success) throw new ConnectorFailure(result.Error ?? "Delivery failed.", result.StatusCode);
             if (result.Receipt is not null) step.Receipts[i] = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/receipt/{i}", result.Receipt);
             step.CompletedDestinations.Add(i); step.DeliveredCount = step.CompletedDestinations.Count;
@@ -177,8 +179,9 @@ internal sealed class ExecutionOperations
         }
     }
 
-    private async Task<T> Call<T>(ExecutionState state, StepAttempt attempt, string name, int? index, string method, Func<Task<T>> action)
+    private async Task<T> Call<T>(ExecutionState state, StepAttempt attempt, string name, int? index, string method, Func<Task<T>> action, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var call = new ConnectorCall { Step = name, Kind = index is null ? "source" : "output", DestinationIndex = index, BodyLimit = 0 };
         var previous = _test?.Calls.Count ?? 0;
         attempt.ExternalCallStarted = true;

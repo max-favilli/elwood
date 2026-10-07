@@ -13,6 +13,8 @@ public sealed class ExecutionState
     public string PipelineName { get; set; } = "";
     public ExecutionStatus Status { get; set; } = ExecutionStatus.Pending;
     public DateTime StartedAt { get; set; } = DateTime.UtcNow;
+    /// <summary>Persisted HTTP execution budget; queued recovery must not continue synchronous work.</summary>
+    public DateTime? ExecutionDeadlineAt { get; set; }
     public DateTime? CompletedAt { get; set; }
     public long DurationMs => CompletedAt.HasValue
         ? (long)(CompletedAt.Value - StartedAt).TotalMilliseconds

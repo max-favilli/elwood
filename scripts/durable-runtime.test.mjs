@@ -177,9 +177,15 @@ outputs:
     assert.equal(uncertain.sources.remote.outcomeUncertain, true); assert.equal(crashCalls, 1);
     assert.equal((await request(`/api/executions/${crash.executionId}/replay/`, 'POST', {})).status, 409);
     assert.equal(uncertain.sources.remote.attempts[0].status, 'Interrupted');
+    const approvedReplayResponse = await request(`/api/executions/${crash.executionId}/replay`, 'POST', { acknowledgeUncertain: true });
+    assert.equal(approvedReplayResponse.status, 202);
+    const approvedReplay = await approvedReplayResponse.json();
+    assert.equal((await stateWhen(approvedReplay.executionId, 2)).replayOf, crash.executionId);
+    assert.equal((await stateWhen(crash.executionId, 5)).sources.remote.outcomeUncertain, true);
+    assert.equal(crashCalls, 2);
     assert.equal((await request(`/api/executions/${crash.executionId}/resume`, 'POST', {})).status, 409);
     assert.equal((await request(`/api/executions/${crash.executionId}/resume`, 'POST', { acknowledgeUncertain: true })).status, 202);
-    await stateWhen(crash.executionId, 2); assert.equal(crashCalls, 2);
+    await stateWhen(crash.executionId, 2); assert.equal(crashCalls, 3);
 
     const failure = { yaml: `name: sync-failure
 mode: sync

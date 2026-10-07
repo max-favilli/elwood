@@ -15,11 +15,15 @@ public sealed class SyncExecutor
 {
     private readonly AsyncExecutor _runner;
     private readonly bool _durable;
+    private readonly TimeSpan _executionBudget;
     public SyncExecutor(ISecretProvider? secretProvider = null, IStateStore? stateStore = null,
         IDocumentStore? documentStore = null, IEnumerable<ISourceConnector>? sourceConnectors = null,
         IEnumerable<IDestinationConnector>? destinationConnectors = null, ILogger<SyncExecutor>? logger = null,
-        ElwoodEngine? engine = null, LocalTestSession? testSession = null)
+        ElwoodEngine? engine = null, LocalTestSession? testSession = null, TimeSpan? executionBudget = null)
     {
+        _executionBudget = executionBudget ?? TimeSpan.FromSeconds(60);
+        if (_executionBudget <= TimeSpan.Zero || _executionBudget > TimeSpan.FromMinutes(5))
+            throw new ArgumentOutOfRangeException(nameof(executionBudget), "Sync execution budget must be positive and at most five minutes.");
         _durable = stateStore is IRecoverableStateStore && stateStore is not InMemoryStateStore && documentStore is not null;
         var states = stateStore ?? new InMemoryStateStore();
         _runner = new AsyncExecutor(states is IRecoverableStateStore ? states : new SynchronousStore(states),
@@ -31,9 +35,13 @@ public sealed class SyncExecutor
         IElwoodValue? triggerMetadata = null, string? triggerSourceName = null, bool isTest = false, CancellationToken cancellationToken = default)
     {
         if (!pipeline.IsValid) return PipelineResult.Failed(pipeline.Errors.ToList());
+        cancellationToken.ThrowIfCancellationRequested();
+        var deadline = DateTime.UtcNow.Add(_executionBudget);
+        using var budget = new CancellationTokenSource(_executionBudget);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, budget.Token);
         var id = await _runner.StartAsync(pipeline, triggerPayload, triggerSourceName, isTest: isTest,
-            triggerMetadata: triggerMetadata, durable: _durable);
-        return await _runner.RunToCompletion(id, cancellationToken);
+            triggerMetadata: triggerMetadata, durable: _durable, executionDeadlineAt: deadline);
+        return await _runner.RunToCompletion(id, lifetime.Token, budget.Token);
     }
 
     // Compatibility for sync-only embedding adapters. Never advertised as durable acceptance.

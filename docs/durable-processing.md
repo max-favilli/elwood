@@ -89,3 +89,14 @@ Build the backend, then run `node --test scripts/runtime-api.test.mjs scripts/du
 DSL semantics are unchanged. No exactly-once remote-effect guarantee, source fan-out, new protocol connector, enterprise login or all-cloud readiness is implied by this milestone.
 
 Replay of an execution with any uncertain write requires `acknowledgeUncertain: true`, just like resume; omitting it returns HTTP 409. Production attempt traces contain operation metadata, redacted headers, timings and sizes, with bodies omitted. Source payloads, prepared outputs and delivery receipts remain separate documents referenced by state. Retention runs separately over the terminal index once per minute. A pre-index filesystem store is indexed once on upgrade.
+
+
+## Synchronous request lifetime
+
+`Elwood:Sync:ExecutionBudgetSeconds` sets the host's total sync execution budget, including connector calls and retry waits (default 60 seconds; positive, at most 300). It also applies to management draft tests, including tests of async definitions. Set it below the deployment gateway's response deadline. The deadline is persisted before execution, and the HTTP request's cancellation and host shutdown are linked to connector cancellation.
+
+Cancellation stops further attempts and deliveries. Budget expiry records an error and HTTP status 504; client/host cancellation records 499 (a disconnected client cannot receive it). In-flight writes are conservatively marked `AwaitingReview`; cancellation does not prove a remote write was undone. No automatic retries continue beyond this lifetime, even if the normal retry policy permits uncertain writes. Explicit acknowledged resume clears the old HTTP deadline and runs detached from the original request. Completed checkpoints remain reusable. Fresh replay creates a distinct execution and may repeat external effects.
+
+The sync owner holds the execution claim across retry waits. Queue hints cannot run a sync execution, and recovery settles an abandoned sync execution when its persisted deadline expires. Existing asynchronous acceptance remains independent of the caller after durable acknowledgement. CPU-bound DSL evaluation and storage checkpoints are cooperative: a budget is not process preemption, but cancellation is checked before each subsequent connector call.
+
+HTTP destination failure messages use a maximum 512-byte JSON preview with credential fields and configured credentials redacted. Oversized (over 64 KiB), invalid or unstructured response bodies are omitted from errors. Full payload documents and explicit local-test body captures follow their separate inspection policy. Execution errors never embed an unbounded rejected response body.

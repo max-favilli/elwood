@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-10-07 — Public lexer entry point (.NET v0.7.26)
+
+`Elwood.Core` now packages the public `Lexer.FirstToken()` API used by pipeline script/expression classification. Publish Core 0.7.26 before packages that depend on this member; NuGet 0.7.25 does not expose it. This is a .NET API/package correction with no DSL syntax or evaluation changes; the TypeScript package remains 0.7.25.
+
 ## 2026-10-05 — `indexBy` for lookups by key; the repeated-scan warning covers `first` and `where`, and only real repeats (v0.7.25)
 
 0.7.24 warned about a quadratic `any`. The map that prompted it had a second quadratic that the warning did not see:

@@ -40,7 +40,7 @@ public sealed class AsyncExecutor
     }
 
     public async Task<string> StartAsync(ParsedPipeline pipeline, IElwoodValue triggerPayload, string? triggerSourceName = null,
-        string? idempotencyKey = null, string? replayOf = null, bool isTest = false, IElwoodValue? triggerMetadata = null, bool durable = true)
+        string? idempotencyKey = null, string? replayOf = null, bool isTest = false, IElwoodValue? triggerMetadata = null, bool durable = true, DateTime? executionDeadlineAt = null)
     {
         pipeline = PipelineSnapshot.Detach(pipeline);
         if (idempotencyKey is { Length: > 200 }) throw new ArgumentException("Idempotency-Key must be at most 200 characters.");
@@ -61,6 +61,7 @@ public sealed class AsyncExecutor
             PipelineName = pipeline.Config.Name ?? "unknown", Status = ExecutionStatus.Running, StartedAt = Now,
             Durable = durable && !isTest && _test is null, IsTest = isTest || _test is not null, TestMode = _test?.Mode,
             TriggerSourceName = triggerSourceName, ReplayOf = replayOf, InputHash = Hash(input),
+            ExecutionDeadlineAt = executionDeadlineAt,
             RetentionSeconds = pipeline.Config.TtlSeconds ?? 30 * 24 * 60 * 60,
         };
         foreach (var source in pipeline.Config.Sources) state.Sources[source.Name] = new() { SourceName = source.Name };
@@ -89,6 +90,17 @@ public sealed class AsyncExecutor
         cancellationToken.ThrowIfCancellationRequested();
         await using var claim = await _states.TryLockAsync(message.ExecutionId);
         if (claim is null) return;
+        var state = await _states.GetExecutionAsync(message.ExecutionId);
+        if (state?.ExecutionDeadlineAt is not null)
+        {
+            if (state.ExecutionDeadlineAt <= Now) await StopSync(state, expired: true);
+            return; // The HTTP owner alone runs synchronous work, never a queue hint.
+        }
+        await ExecuteClaimedStepAsync(message, cancellationToken);
+    }
+
+    private async Task ExecuteClaimedStepAsync(StepMessage message, CancellationToken cancellationToken)
+    {
         var state = await _states.GetExecutionAsync(message.ExecutionId);
         if (state is null || state.Deleting || state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) return;
         var step = Step(state, message);
@@ -126,13 +138,14 @@ public sealed class AsyncExecutor
             attempt.Status = "Completed"; attempt.CompletedAt = Now;
             attempt.Diagnostics = [.. step.Diagnostics]; step.Status = ExecutionStatus.Completed; step.CompletedAt = Now;
             await Save(state);
+            cancellationToken.ThrowIfCancellationRequested();
             await Advance(state, pipeline);
         }
         catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
             // Preserve the pre-call durable checkpoint. Recovery must classify any
             // interrupted write as uncertain, never assume cancellation rolled it back.
-            if (!state.Durable)
+            if (!state.Durable && state.ExecutionDeadlineAt is null)
             {
                 step.Status = ExecutionStatus.Failed; step.CompletedAt = Now;
                 step.OutcomeUncertain = attempt.ExternalCallStarted && attempt.MayHaveWritten;
@@ -140,6 +153,7 @@ public sealed class AsyncExecutor
                 state.Errors = ["Execution canceled by the caller or host."];
                 Terminal(state, ExecutionStatus.Failed); await Save(state);
             }
+            else if (state.ExecutionDeadlineAt is not null) await Save(state); // Preserve aborted call inspection for the sync owner.
             throw new OperationCanceledException(cancellationToken);
         }
         catch (Exception ex)
@@ -205,6 +219,11 @@ public sealed class AsyncExecutor
             if (claim is null) continue;
             var state = await _states.GetExecutionAsync(snapshot.ExecutionId);
             if (state is null || state.Deleting || state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) continue;
+            if (state.ExecutionDeadlineAt is not null)
+            {
+                if (state.ExecutionDeadlineAt <= Now) await StopSync(state, expired: true);
+                continue;
+            }
             try
             {
                 var pipeline = await Load(state);
@@ -258,6 +277,7 @@ public sealed class AsyncExecutor
             step.Status = ExecutionStatus.Pending; step.NextAttemptAt = null; step.CompletedAt = null; step.RetryBase = step.Attempts.Count;
             step.OutcomeUncertain = false; step.Errors.Clear();
         }
+        state.ExecutionDeadlineAt = null; // Explicit operator recovery is detached from the expired HTTP request.
         state.Errors.Clear(); state.Status = ExecutionStatus.Running; state.CompletedAt = null; state.ExpiresAt = null; state.FailureResponseRef = null; state.ResponseStatusCode = null;
         await Save(state);
         await Notify(Ready(state, Stages(pipeline)));
@@ -313,30 +333,90 @@ public sealed class AsyncExecutor
         return deleted;
     }
 
-    internal async Task<PipelineResult> RunToCompletion(string id, CancellationToken cancellationToken = default)
+    internal async Task<PipelineResult> RunToCompletion(string id, CancellationToken cancellationToken = default, CancellationToken budgetCancellation = default)
     {
-        List<List<string>>? stages = null;
-        while (true)
+        // Hold ownership across retry waits as well as connector calls. Recovery cannot
+        // steal a pending sync step or escape the request's cancellation token.
+        IAsyncDisposable? claim;
+        while ((claim = await _states.TryLockAsync(id)) is null)
         {
-            var state = await _states.GetExecutionAsync(id) ?? throw new InvalidOperationException("Execution disappeared.");
-            if (state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview)
+            if (cancellationToken.IsCancellationRequested)
             {
-                if (state.Status != ExecutionStatus.Completed) return PipelineResult.Failed(state.Errors, id, state.ResponseStatusCode,
-                    state.FailureResponseRef is null ? null : await _operations.Read(state.FailureResponseRef, "failure response"));
-                var outputs = new Dictionary<string, IElwoodValue>();
-                foreach (var (name, step) in state.Outputs) outputs[name] = await _operations.Read(step.DocumentRef, "output");
-                return PipelineResult.Success(outputs, id, state.ResponseStatusCode);
+                var waiting = await _states.GetExecutionAsync(id) ?? throw new InvalidOperationException("Execution disappeared.");
+                // Do not mutate another owner's state. Recovery will settle its persisted
+                // deadline after the claim is released; no queued sync writes can start.
+                return PipelineResult.Failed(["Synchronous execution could not acquire ownership before cancellation or its budget; recovery will settle the persisted deadline."],
+                    id, budgetCancellation.IsCancellationRequested || waiting.ExecutionDeadlineAt <= Now ? 504 : 499);
             }
-            stages ??= Stages(await Load(state));
-            var ready = Ready(state, stages).ToList();
-            foreach (var message in ready) { cancellationToken.ThrowIfCancellationRequested(); await ExecuteStepAsync(message, cancellationToken); }
-            if (ready.Count == 0)
+            await Task.Delay(25);
+        }
+        await using var ownership = claim;
+        List<List<string>>? stages = null;
+        try
+        {
+            while (true)
             {
-                var next = state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values)
-                    .Where(step => step.NextAttemptAt > Now).Select(step => step.NextAttemptAt!.Value).DefaultIfEmpty(Now.AddSeconds(1)).Min();
-                await Task.Delay(TimeSpan.FromMilliseconds(Math.Clamp((next - Now).TotalMilliseconds, 25, 1000)), cancellationToken);
+                var state = await _states.GetExecutionAsync(id) ?? throw new InvalidOperationException("Execution disappeared.");
+                if (state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview)
+                {
+                    if (state.Status != ExecutionStatus.Completed) return PipelineResult.Failed(state.Errors, id, state.ResponseStatusCode,
+                        state.FailureResponseRef is null ? null : await _operations.Read(state.FailureResponseRef, "failure response"));
+                    var outputs = new Dictionary<string, IElwoodValue>();
+                    foreach (var (name, step) in state.Outputs) outputs[name] = await _operations.Read(step.DocumentRef, "output");
+                    return PipelineResult.Success(outputs, id, state.ResponseStatusCode);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                if (state.ExecutionDeadlineAt <= Now)
+                {
+                    await StopSync(state, expired: true);
+                    continue;
+                }
+                stages ??= Stages(await Load(state));
+                var ready = Ready(state, stages).ToList();
+                foreach (var message in ready) { cancellationToken.ThrowIfCancellationRequested(); await ExecuteClaimedStepAsync(message, cancellationToken); }
+                if (ready.Count == 0)
+                {
+                    var next = state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values)
+                        .Where(step => step.NextAttemptAt > Now).Select(step => step.NextAttemptAt!.Value).DefaultIfEmpty(Now.AddSeconds(1)).Min();
+                    await Task.Delay(TimeSpan.FromMilliseconds(Math.Clamp((next - Now).TotalMilliseconds, 25, 1000)), cancellationToken);
+                }
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Settle with an uncanceled token: a vanished client must not leave work
+            // that a recovery scan can automatically retry after the response deadline.
+            var state = await _states.GetExecutionAsync(id) ?? throw new InvalidOperationException("Execution disappeared.");
+            await StopSync(state, budgetCancellation.IsCancellationRequested || state.ExecutionDeadlineAt <= Now);
+            return PipelineResult.Failed(state.Errors, id, state.ResponseStatusCode);
+        }
+    }
+
+    private async Task StopSync(ExecutionState state, bool expired)
+    {
+        if (state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) return;
+        var message = expired ? "Synchronous execution budget exceeded; no further automatic attempts will run."
+            : "Synchronous execution canceled by the caller or host; no further automatic attempts will run.";
+        var uncertain = false;
+        foreach (var step in state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values).Where(s => s.Status != ExecutionStatus.Completed))
+        {
+            var attempt = step.Attempts.LastOrDefault();
+            step.OutcomeUncertain |= attempt is { ExternalCallStarted: true, MayHaveWritten: true, Status: "Running" or "Interrupted" };
+            uncertain |= step.OutcomeUncertain;
+            step.Status = step.OutcomeUncertain ? ExecutionStatus.AwaitingReview : ExecutionStatus.Failed;
+            step.CompletedAt = Now; step.NextAttemptAt = null; step.Errors = [message];
+            step.Diagnostics.Add(new() { Reference = "execution", Severity = "error", Message = message });
+            if (attempt is not null && attempt.Status == "Running")
+            {
+                attempt.Status = "Interrupted"; attempt.CompletedAt = Now; attempt.Error = message;
+                attempt.Diagnostics = [.. step.Diagnostics];
+            }
+        }
+        state.Errors = [message];
+        if (uncertain) state.Errors.Add("An external write may have completed. Review before explicitly resuming or replaying.");
+        state.ResponseStatusCode = expired ? 504 : 499;
+        Terminal(state, uncertain ? ExecutionStatus.AwaitingReview : ExecutionStatus.Failed);
+        await Save(state);
     }
 
     private int _savedTestCallCount = -1;

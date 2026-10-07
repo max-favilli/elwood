@@ -58,7 +58,10 @@ public sealed class HttpDestinationConnector : IDestinationConnector
 
             return response.IsSuccessStatusCode
                 ? DeliveryResult.Ok(statusCode, await response.Content.ReadAsStringAsync(deadline.Token))
-                : DeliveryResult.Fail($"HTTP {statusCode}: {await response.Content.ReadAsStringAsync(deadline.Token)}", statusCode);
+                : DeliveryResult.Fail($"HTTP {statusCode}: " + HttpCallCapture.RejectedBodyPreview(
+                    await response.Content.ReadAsStringAsync(deadline.Token),
+                    new[] { config.User, config.Password, config.Oauth2?.ClientSecret, request.Headers.Authorization?.Parameter }
+                        .Concat((config.Headers ?? []).Values).Concat(_httpClient.DefaultRequestHeaders.SelectMany(h => h.Value))), statusCode);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (ConnectorException) { throw; }

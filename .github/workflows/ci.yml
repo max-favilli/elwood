@@ -26,7 +26,7 @@ jobs:
         with:
           node-version: '22'
       - name: Runtime API contract
-        run: node --test scripts/runtime-api.test.mjs scripts/durable-runtime.test.mjs scripts/connectors-api.test.mjs
+        run: node --test scripts/runtime-api.test.mjs scripts/durable-runtime.test.mjs scripts/connectors-api.test.mjs scripts/sync-cancellation.test.mjs
 
   connectors:
     name: SQL, Blob and RabbitMQ connectors

@@ -266,6 +266,26 @@ public class ConnectorTests
         Assert.Equal(2, tokens);
     }
 
+    [Fact]
+    public async Task HangingIdentityProviderDoesNotBlockOtherCredentialsOnTheSharedClient()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var client = new HttpClient(new Handler(async request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/slow-token") { entered.TrySetResult(); await release.Task; }
+            return new(HttpStatusCode.OK) { Content = new StringContent(request.RequestUri.AbsolutePath.EndsWith("token")
+                ? "{\"access_token\":\"good\",\"expires_in\":3600}" : "{}") };
+        }));
+        var connector = new HttpSourceConnector(client);
+        PullSourceConfig Config(string endpoint) => new() { Http = new() { Url = "https://crm.test/data", Oauth2 = new()
+            { TokenUrl = "https://crm.test/" + endpoint, ClientId = "client", ClientSecret = "secret" } } };
+        var slow = connector.FetchAsync(Config("slow-token"));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try { await connector.FetchAsync(Config("fast-token")).WaitAsync(TimeSpan.FromSeconds(2)); }
+        finally { release.TrySetResult(); await slow; }
+    }
+
     private sealed class Handler(Func<HttpRequestMessage, Task<HttpResponseMessage>> send) : HttpMessageHandler
     { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => send(request); }
     private sealed class FailSecondInput : IDocumentStore
