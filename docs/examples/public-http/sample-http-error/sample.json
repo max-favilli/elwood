@@ -1,0 +1,7 @@
+{
+  "id": "sample-http-error",
+  "title": "HTTP 503 failure",
+  "description": "Observe a failed HTTP source and an output that remains pending.",
+  "expectedOutcome": "Fails intentionally at source remote with HTTP 503. The response output stays pending.",
+  "realNotes": "Real systems calls httpbin /status/503. This checks failure reporting; retries belong to M4."
+}

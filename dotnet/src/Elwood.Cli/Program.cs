@@ -114,6 +114,7 @@ static int RunPipeline(string[] args, JsonNodeValueFactory factory)
     if (subCommand == "validate")
     {
         var allErrors = new List<string>(pipeline.Errors);
+        allErrors.AddRange(Elwood.Pipeline.PipelineParser.ValidateExecutionConfig(pipeline.Config, fileInputs: true));
 
         // Validate dependencies
         allErrors.AddRange(Elwood.Pipeline.DependencyResolver.ValidateDependencies(pipeline.Config.Sources));
@@ -162,6 +163,9 @@ static int RunPipeline(string[] args, JsonNodeValueFactory factory)
             Console.Error.WriteLine($"  {err}");
         return 1;
     }
+
+    if (pipeline.Config.Sources.Any(s => s.Retry is not null) || pipeline.Config.Outputs.Any(o => o.Retry is not null))
+        Console.Error.WriteLine("Note: offline file-input execution does not call connectors or apply their retry policies.");
 
     // Parse arguments
     var sourceInputs = new Dictionary<string, Elwood.Pipeline.SourceInput>();

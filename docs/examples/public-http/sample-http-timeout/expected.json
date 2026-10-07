@@ -1,0 +1,5 @@
+{
+  "success": false,
+  "failedSource": "remote",
+  "errorContains": "timeout"
+}

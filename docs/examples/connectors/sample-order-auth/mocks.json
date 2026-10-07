@@ -1,0 +1,25 @@
+{
+  "sources": {
+    "crm": {
+      "body": {
+        "id": "CRM-42"
+      },
+      "expectBody": {
+        "orderId": "ORDER-42"
+      }
+    }
+  },
+  "outputs": {
+    "emarsys": [
+      {
+        "body": {
+          "accepted": true
+        },
+        "expectBody": {
+          "orderId": "ORDER-42",
+          "crmId": "CRM-42"
+        }
+      }
+    ]
+  }
+}

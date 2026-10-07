@@ -1,0 +1,13 @@
+{
+  "success": true,
+  "outputs": {
+    "response": {
+      "received": {
+        "orderId": "DEMO-42",
+        "customer": "Ada Example",
+        "total": 39.98
+      },
+      "httpStatus": 200
+    }
+  }
+}

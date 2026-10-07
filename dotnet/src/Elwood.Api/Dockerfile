@@ -4,6 +4,7 @@ WORKDIR /src
 # Copy project files for restore
 COPY Elwood.Core/Elwood.Core.csproj Elwood.Core/
 COPY Elwood.Json/Elwood.Json.csproj Elwood.Json/
+COPY Elwood.Pipeline/Elwood.Pipeline.csproj Elwood.Pipeline/
 COPY Elwood.Api/Elwood.Api.csproj Elwood.Api/
 RUN dotnet restore Elwood.Api/Elwood.Api.csproj
 

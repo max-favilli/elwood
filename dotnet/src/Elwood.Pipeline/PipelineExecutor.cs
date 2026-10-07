@@ -16,17 +16,17 @@ namespace Elwood.Pipeline;
 /// </summary>
 public sealed class PipelineExecutor
 {
-    private readonly ElwoodEngine _engine;
+    private readonly StepEvaluator _evaluator;
     private readonly JsonNodeValueFactory _factory;
     private readonly StringResolver _stringResolver;
     private readonly IStateStore? _stateStore;
     private readonly IDocumentStore? _documentStore;
 
     public PipelineExecutor(ISecretProvider? secretProvider = null,
-        IStateStore? stateStore = null, IDocumentStore? documentStore = null)
+        IStateStore? stateStore = null, IDocumentStore? documentStore = null, ElwoodEngine? engine = null)
     {
         _factory = JsonNodeValueFactory.Instance;
-        _engine = new ElwoodEngine(_factory);
+        _evaluator = new StepEvaluator(engine ?? new ElwoodEngine(_factory));
         _stringResolver = new StringResolver(secretProvider);
         _stateStore = stateStore;
         _documentStore = documentStore;
@@ -37,138 +37,130 @@ public sealed class PipelineExecutor
     /// </summary>
     public PipelineResult Execute(ParsedPipeline pipeline, Dictionary<string, SourceInput> sourceInputs)
     {
-        if (!pipeline.IsValid)
-            return PipelineResult.Failed(pipeline.Errors.ToList());
-
-        var errors = new List<string>();
-
-        // Validate dependencies
-        var depErrors = DependencyResolver.ValidateDependencies(pipeline.Config.Sources);
-        if (depErrors.Count > 0)
-            return PipelineResult.Failed(depErrors);
-
-        // Resolve execution stages
-        List<List<Schema.SourceConfig>> stages;
-        try { stages = DependencyResolver.ResolveStages(pipeline.Config.Sources); }
-        catch (InvalidOperationException ex)
-        {
-            return PipelineResult.Failed([ex.Message]);
-        }
-
-        // Initialize execution state
+        if (!pipeline.IsValid) return PipelineResult.Failed(pipeline.Errors.ToList());
+        pipeline = PipelineSnapshot.Detach(pipeline);
         var executionId = Guid.NewGuid().ToString();
         var execState = new ExecutionState
         {
-            ExecutionId = executionId,
-            PipelineName = pipeline.Config.Name ?? "unknown",
+            PipelineId = pipeline.PipelineId, RevisionId = pipeline.RevisionId,
+            ExecutionId = executionId, PipelineName = pipeline.Config.Name ?? "unknown",
             Status = ExecutionStatus.Running,
-            StartedAt = DateTime.UtcNow,
+            RetentionSeconds = pipeline.Config.TtlSeconds ?? 30 * 24 * 60 * 60,
         };
         foreach (var source in pipeline.Config.Sources)
             execState.Sources[source.Name] = new SourceStepState { SourceName = source.Name };
         foreach (var output in pipeline.Config.Outputs)
             execState.Outputs[output.Name] = new OutputStepState { OutputName = output.Name };
-        _stateStore?.SaveExecutionAsync(execState).GetAwaiter().GetResult();
-
-        // The IDM starts empty and is built up by sources
-        var idm = _factory.CreateObject([]);
-
-        // Step 1: Process sources stage by stage
-        foreach (var stage in stages)
-        {
-            foreach (var source in stage)
-            {
-                var stepState = execState.Sources[source.Name];
-                stepState.Status = ExecutionStatus.Running;
-                stepState.StartedAt = DateTime.UtcNow;
-
-                var sourceResult = ProcessSource(source, sourceInputs, idm, pipeline, errors);
-                if (sourceResult is not null)
-                {
-                    idm = MergeIntoIdm(idm, source.Name, sourceResult);
-                    stepState.Status = ExecutionStatus.Completed;
-                }
-                else
-                {
-                    stepState.Status = ExecutionStatus.Failed;
-                    stepState.Errors.AddRange(errors.TakeLast(1));
-                }
-                stepState.CompletedAt = DateTime.UtcNow;
-                _stateStore?.UpdateSourceStepAsync(executionId, source.Name, stepState).GetAwaiter().GetResult();
-            }
-        }
-
-        if (errors.Count > 0)
-        {
-            execState.Status = ExecutionStatus.Failed;
-            execState.Errors = errors;
-            execState.CompletedAt = DateTime.UtcNow;
-            _stateStore?.SaveExecutionAsync(execState).GetAwaiter().GetResult();
-            return PipelineResult.Failed(errors, executionId);
-        }
-
-        // Step 2: Process each output
+        var errors = execState.Errors;
         var outputs = new Dictionary<string, IElwoodValue>();
-        foreach (var output in pipeline.Config.Outputs)
+        _stateStore?.SaveExecutionAsync(execState).GetAwaiter().GetResult();
+        try
         {
-            // Apply path (fan-out selection from IDM)
-            IElwoodValue data = idm;
-            IElwoodValue? outputArray = null;
-            if (!string.IsNullOrWhiteSpace(output.Path))
+            if (_documentStore is not null)
+                execState.PipelineSnapshotRef = _documentStore.StoreAsync($"exec/{executionId}/pipeline", PipelineSnapshot.Serialize(pipeline)).GetAwaiter().GetResult();
+
+            var depErrors = PipelineParser.ValidateExecutionConfig(pipeline.Config, fileInputs: true);
+            if (depErrors.Count > 0) throw new InvalidOperationException(string.Join("; ", depErrors));
+            var stages = DependencyResolver.ResolveStages(pipeline.Config.Sources);
+            var idm = _factory.CreateObject([]);
+            foreach (var stage in stages)
             {
-                var pathBindings = new Dictionary<string, IElwoodValue>
+                foreach (var source in stage)
                 {
-                    ["$idm"] = idm,
-                };
-                var filtered = EvaluateReference(output.Path, idm, pathBindings, pipeline);
-                if (filtered is not null)
+                    var step = execState.Sources[source.Name];
+                    step.Status = ExecutionStatus.Running;
+                    step.StartedAt = DateTime.UtcNow;
+                    _stateStore?.UpdateSourceStepAsync(executionId, source.Name, step).GetAwaiter().GetResult();
+                    try
+                    {
+                        var value = ProcessSource(source, sourceInputs, idm, pipeline, step.Diagnostics);
+                        if (_documentStore is not null)
+                            step.DocumentRef = _documentStore.StoreAsync($"exec/{executionId}/source/{source.Name}", SerializeValue(value)).GetAwaiter().GetResult();
+                        idm = MergeIntoIdm(idm, source.Name, value);
+                        step.Status = ExecutionStatus.Completed;
+                    }
+                    catch (Exception ex)
+                    {
+                        var error = $"Source '{source.Name}': {ex.Message}";
+                        step.Errors.Add(error);
+                        errors.Add(error);
+                        step.Status = ExecutionStatus.Failed;
+                    }
+                    finally
+                    {
+                        step.CompletedAt = DateTime.UtcNow;
+                        _stateStore?.UpdateSourceStepAsync(executionId, source.Name, step).GetAwaiter().GetResult();
+                    }
+                }
+                if (errors.Count > 0) break;
+            }
+            if (errors.Count == 0)
+            {
+                if (_documentStore is not null)
+                    execState.IdmRef = _documentStore.StoreAsync($"exec/{executionId}/idm", SerializeValue(idm)).GetAwaiter().GetResult();
+                foreach (var output in pipeline.Config.Outputs)
                 {
-                    outputArray = filtered;
-                    data = filtered;
+                    var step = execState.Outputs[output.Name];
+                    step.Status = ExecutionStatus.Running;
+                    step.StartedAt = DateTime.UtcNow;
+                    _stateStore?.UpdateOutputStepAsync(executionId, output.Name, step).GetAwaiter().GetResult();
+                    try
+                    {
+                        var data = idm;
+                        var bindings = new Dictionary<string, IElwoodValue> { ["$idm"] = idm };
+                        if (!string.IsNullOrWhiteSpace(output.Path))
+                        {
+                            data = _evaluator.Evaluate(output.Path, idm, bindings, pipeline.Scripts, step.Diagnostics);
+                            bindings["$output"] = data;
+                        }
+                        if (!string.IsNullOrWhiteSpace(output.Map))
+                            data = _evaluator.Evaluate(output.Map, data, bindings, pipeline.Scripts, step.Diagnostics);
+                        if (_documentStore is not null)
+                            step.DocumentRef = _documentStore.StoreAsync($"exec/{executionId}/output/{output.Name}", SerializeValue(data)).GetAwaiter().GetResult();
+                        outputs[output.Name] = data;
+                        step.ItemCount = data.Kind == ElwoodValueKind.Array ? data.GetArrayLength() : 1;
+                        step.Status = ExecutionStatus.Completed;
+                    }
+                    catch (Exception ex)
+                    {
+                        var error = $"Output '{output.Name}': {ex.Message}";
+                        step.Errors.Add(error);
+                        errors.Add(error);
+                        step.Status = ExecutionStatus.Failed;
+                    }
+                    finally
+                    {
+                        step.CompletedAt = DateTime.UtcNow;
+                        _stateStore?.UpdateOutputStepAsync(executionId, output.Name, step).GetAwaiter().GetResult();
+                    }
                 }
             }
-
-            // Apply output map
-            if (!string.IsNullOrWhiteSpace(output.Map))
-            {
-                var mapBindings = new Dictionary<string, IElwoodValue>
-                {
-                    ["$idm"] = idm,
-                };
-                if (outputArray is not null)
-                    mapBindings["$output"] = outputArray;
-
-                var mapped = EvaluateReference(output.Map, data, mapBindings, pipeline);
-                if (mapped is not null) data = mapped;
-            }
-
-            outputs[output.Name] = data;
-
-            var outStep = execState.Outputs[output.Name];
-            outStep.Status = ExecutionStatus.Completed;
-            outStep.CompletedAt = DateTime.UtcNow;
-            outStep.ItemCount = data.Kind == ElwoodValueKind.Array ? data.GetArrayLength() : 1;
-            _stateStore?.UpdateOutputStepAsync(executionId, output.Name, outStep).GetAwaiter().GetResult();
         }
-
-        execState.Status = ExecutionStatus.Completed;
-        execState.CompletedAt = DateTime.UtcNow;
-        _stateStore?.SaveExecutionAsync(execState).GetAwaiter().GetResult();
-
-        return PipelineResult.Success(outputs, executionId);
+        catch (Exception ex) { errors.Add(ex.Message); }
+        finally
+        {
+            execState.Status = errors.Count > 0 ? ExecutionStatus.Failed : ExecutionStatus.Completed;
+            execState.CompletedAt = DateTime.UtcNow;
+            execState.ExpiresAt = execState.CompletedAt.Value.AddSeconds(execState.RetentionSeconds);
+            _stateStore?.SaveExecutionAsync(execState).GetAwaiter().GetResult();
+        }
+        return errors.Count > 0 ? PipelineResult.Failed(errors, executionId) : PipelineResult.Success(outputs, executionId);
     }
+
+    private static string SerializeValue(IElwoodValue value)
+        => ((JsonNodeValue)value).Node?.ToJsonString() ?? "null";
 
     /// <summary>
     /// Process a single source — handle fan-out via path, apply map, return result.
     /// </summary>
-    private IElwoodValue? ProcessSource(Schema.SourceConfig source,
+    private IElwoodValue ProcessSource(Schema.SourceConfig source,
         Dictionary<string, SourceInput> sourceInputs, IElwoodValue idm,
-        ParsedPipeline pipeline, List<string> errors)
+        ParsedPipeline pipeline, List<StepDiagnostic> diagnostics)
     {
         // Fan-out: if source has path, slice the IDM and process per slice
         if (!string.IsNullOrWhiteSpace(source.Path))
         {
-            return ProcessSourceFanOut(source, sourceInputs, idm, pipeline, errors);
+            return ProcessSourceFanOut(source, sourceInputs, idm, pipeline, diagnostics);
         }
 
         // Normal (non-fan-out) source processing
@@ -176,8 +168,7 @@ public sealed class PipelineExecutor
         {
             // Pull sources don't need input files — they'll fetch data at runtime.
             // For CLI executor, they must be provided as files.
-            errors.Add($"No input provided for source '{source.Name}'");
-            return null;
+            throw new InvalidOperationException($"No input provided for source '{source.Name}'");
         }
 
         var payload = input.Payload;
@@ -191,13 +182,7 @@ public sealed class PipelineExecutor
                 ["$idm"] = idm,
             };
 
-            var mapped = EvaluateReference(source.Map, payload, bindings, pipeline);
-            if (mapped is null)
-            {
-                errors.Add($"Source map '{source.Map}' failed for source '{source.Name}'");
-                return null;
-            }
-            return mapped;
+            return _evaluator.Evaluate(source.Map, payload, bindings, pipeline.Scripts, diagnostics);
         }
 
         return payload;
@@ -208,16 +193,15 @@ public sealed class PipelineExecutor
     /// Slices the IDM by evaluating the path expression, then processes the source
     /// once per slice (applying the map to each). Results are collected back.
     /// </summary>
-    private IElwoodValue? ProcessSourceFanOut(Schema.SourceConfig source,
+    private IElwoodValue ProcessSourceFanOut(Schema.SourceConfig source,
         Dictionary<string, SourceInput> sourceInputs, IElwoodValue idm,
-        ParsedPipeline pipeline, List<string> errors)
+        ParsedPipeline pipeline, List<StepDiagnostic> diagnostics)
     {
         // Evaluate the path expression against the IDM to get slices
-        var slicesResult = EvaluateReference(source.Path!, idm, null, pipeline);
+        var slicesResult = _evaluator.Evaluate(source.Path!, idm, new() { ["$idm"] = idm }, pipeline.Scripts, diagnostics);
         if (slicesResult is null || slicesResult.Kind != ElwoodValueKind.Array)
         {
-            errors.Add($"Source '{source.Name}' path '{source.Path}' did not produce an array");
-            return null;
+            throw new InvalidOperationException($"Source '{source.Name}' path '{source.Path}' did not produce an array");
         }
 
         var slices = slicesResult.EnumerateArray().ToList();
@@ -245,9 +229,8 @@ public sealed class PipelineExecutor
                     ["$slice"] = slice, // The current fan-out slice from the IDM
                 };
 
-                var mapped = EvaluateReference(source.Map, payload, bindings, pipeline);
-                if (mapped is not null)
-                    results.Add(mapped);
+                var mapped = _evaluator.Evaluate(source.Map, payload, bindings, pipeline.Scripts, diagnostics);
+                results.Add(mapped);
             }
             else
             {
@@ -292,36 +275,6 @@ public sealed class PipelineExecutor
         allProps.RemoveAll(p => p.Key == sourceName);
         allProps.Add(new KeyValuePair<string, IElwoodValue>(sourceName, sourceOutput));
         return _factory.CreateObject(allProps);
-    }
-
-    /// <summary>
-    /// Evaluate an expression or script reference with bindings.
-    /// </summary>
-    private IElwoodValue? EvaluateReference(string reference, IElwoodValue input,
-        Dictionary<string, IElwoodValue>? bindings, ParsedPipeline pipeline)
-    {
-        string expression;
-
-        if (reference.EndsWith(".elwood", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!pipeline.Scripts.TryGetValue(reference, out var script))
-                return null;
-            expression = script;
-        }
-        else
-        {
-            expression = reference;
-        }
-
-        var isScript = expression.TrimStart().StartsWith("let ") ||
-                       expression.Contains("\nlet ") ||
-                       expression.Contains("return ");
-
-        var result = isScript
-            ? _engine.Execute(expression, input, bindings)
-            : _engine.Evaluate(expression.Trim(), input, bindings);
-
-        return result.Success ? result.Value : null;
     }
 
     private IElwoodValue CreateDefaultMetadata(SourceConfig source)
@@ -400,6 +353,7 @@ public sealed class PipelineResult
     /// <c>responseStatusCode</c> expression on the response output. Null = 200.
     /// </summary>
     public int? ResponseStatusCode { get; init; }
+    public IElwoodValue? FailureResponse { get; init; }
 
     private PipelineResult(bool success, Dictionary<string, IElwoodValue>? outputs, List<string>? errors, string? executionId = null)
     {
@@ -411,6 +365,6 @@ public sealed class PipelineResult
 
     public static PipelineResult Success(Dictionary<string, IElwoodValue> outputs, string? executionId = null, int? responseStatusCode = null)
         => new(true, outputs, null, executionId) { ResponseStatusCode = responseStatusCode };
-    public static PipelineResult Failed(List<string> errors, string? executionId = null)
-        => new(false, null, errors, executionId);
+    public static PipelineResult Failed(List<string> errors, string? executionId = null, int? responseStatusCode = null, IElwoodValue? failureResponse = null)
+        => new(false, null, errors, executionId) { ResponseStatusCode = responseStatusCode, FailureResponse = failureResponse };
 }

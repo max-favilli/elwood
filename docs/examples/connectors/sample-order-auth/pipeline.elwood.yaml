@@ -1,0 +1,31 @@
+# sample: sample-order-auth
+version: 2
+name: sample-order-auth
+mode: sync
+sources:
+  - name: order
+    trigger: http
+    endpoint: /samples/sample-order-auth
+    map: '{ order: $ }'
+  - name: crm
+    trigger: pull
+    depends: order
+    from:
+      http:
+        url: $secrets.crm.url
+        method: POST
+        body: '{ orderId: $idm.order.id }'
+        oauth2:
+          tokenUrl: $secrets.crm.tokenUrl
+          clientId: $secrets.crm.clientId
+          clientSecret: $secrets.crm.clientSecret
+    map: '{ crm: $ }'
+outputs:
+  - name: emarsys
+    response: true
+    map: '{ orderId: $.order.id, crmId: $.crm.id }'
+    destinations:
+      http:
+        - url: $secrets.emarsys.url
+          user: $secrets.emarsys.user
+          password: $secrets.emarsys.password

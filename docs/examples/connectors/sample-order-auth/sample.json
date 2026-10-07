@@ -1,0 +1,7 @@
+{
+  "id": "sample-order-auth",
+  "title": "Authenticated order chain",
+  "description": "OAuth2 CRM call followed by a Basic-authenticated HTTP delivery using its result.",
+  "expectedOutcome": "Completes with the supplied mocks; inspect each connector call and receipt.",
+  "realNotes": "Real mode writes to your configured endpoints. Configure and grant crm.* and emarsys.* credentials; use controlled test services."
+}

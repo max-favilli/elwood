@@ -1,0 +1,34 @@
+{
+  "sources": {
+    "file": {
+      "body": "EAN;ARTICLE;BRAND;PROFILE;WIDTH;HEIGHT;RIM;LOADINDEX;SPEEDINDEX;SEASON;RUNFLAT;QTY;PRICE\n4019238000001;MI205551691V;Michelin;Primacy 4;205;55;16;91;V;S;N;120;78,50\n4019238000002;CO225451794W;Continental;WinterContact TS 870;225;45;17;94;W;W;N;36;112,90\n4019238000003;BR195651591H;Bridgestone;Turanza T005;195;65;15;91;H;S;N;0;61,20\n4019238000004;PI245401897Y;Pirelli;P Zero;245;40;18;97;Y;S;RF;8;189.00\n4019238000006;HA175651484T;Hankook;Kinergy 4S2;175;65;14;84;T;ZZ;N;14;49,90\n;XX000000000000;Unknown;No EAN;205;55;16;91;V;S;N;5;10,00\n4019238000005;GY185601584T;Goodyear;Vector 4Seasons Gen-3;185;60;15;84;T;4S;N;52;\n12345;BAD-EAN;Nokian;Short EAN;205;55;16;91;V;S;N;3;70,00\n4019238000007;VR205551691V;Vredestein;Garbage price;205;55;16;91;V;S;N;3;n/a\n4019238000008;FA205551691V;Falken;Fractional qty;205;55;16;91;V;S;N;2,5;55,00\n4019238000009;KU205551691V;Kumho;Zero price;205;55;16;91;V;S;N;9;0\n",
+      "contentType": "text/plain",
+      "metadata": {
+        "blob": {
+          "etag": "0x8D4BCC2E4835CD0"
+        }
+      }
+    }
+  },
+  "outputs": {
+    "offers-to-sql": [
+      {
+        "body": [
+          {
+            "import_id": 1,
+            "status": "loaded",
+            "offers_loaded": 5
+          }
+        ]
+      }
+    ],
+    "snapshot": [
+      {
+        "body": {
+          "etag": "snapshot-version-1",
+          "size": 1234
+        }
+      }
+    ]
+  }
+}

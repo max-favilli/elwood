@@ -1,0 +1,27 @@
+{
+  "sources": {
+    "product": {
+      "body": [
+        {
+          "id": 42,
+          "sku": "DEMO-42",
+          "quantity": 10
+        }
+      ]
+    }
+  },
+  "outputs": {
+    "sap": [
+      {
+        "body": {
+          "accepted": true
+        },
+        "expectBody": {
+          "productId": 42,
+          "sku": "DEMO-42",
+          "quantity": 10
+        }
+      }
+    ]
+  }
+}

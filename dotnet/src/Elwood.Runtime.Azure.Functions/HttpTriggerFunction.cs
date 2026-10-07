@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -28,6 +29,8 @@ public class HttpTriggerFunction
     private readonly IStateStore _stateStore;
     private readonly ISecretProvider _secretProvider;
     private readonly PipelineParser _parser;
+    private readonly IDocumentStore _documents;
+    private readonly IConfiguration _configuration;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger _logger;
 
@@ -37,8 +40,10 @@ public class HttpTriggerFunction
         IStateStore stateStore,
         ISecretProvider secretProvider,
         PipelineParser parser,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory, IDocumentStore documents, IConfiguration configuration)
     {
+        _documents = documents;
+        _configuration = configuration;
         _registry = registry;
         _pipelineStore = pipelineStore;
         _stateStore = stateStore;
@@ -76,16 +81,12 @@ public class HttpTriggerFunction
                 new { error = $"Pipeline content not found for '{match.PipelineId}'" });
         }
 
-        // 3. Parse the pipeline (write to temp dir for parser)
-        var tempDir = Path.Combine(Path.GetTempPath(), "elwood-func-" + Guid.NewGuid().ToString()[..8]);
-        Directory.CreateDirectory(tempDir);
-        try
+        // Parse the complete content snapshot in memory; no script-controlled filesystem writes.
         {
-            File.WriteAllText(Path.Combine(tempDir, "pipeline.elwood.yaml"), content.Yaml);
-            foreach (var (name, script) in content.Scripts)
-                File.WriteAllText(Path.Combine(tempDir, name), script);
-
-            var parsed = _parser.Parse(Path.Combine(tempDir, "pipeline.elwood.yaml"));
+            var parsed = _parser.ParseContent(content, match.PipelineId, PipelineBundle.Hash(content));
+            var scopedSecrets = new ScopedSecretProvider(_secretProvider, _configuration
+                .GetSection($"Elwood:SecretGrants:{match.PipelineId}:Run").GetChildren()
+                .Select(c => c.Value).OfType<string>());
             if (!parsed.IsValid)
             {
                 return await CreateJsonResponse(req, HttpStatusCode.BadRequest,
@@ -94,12 +95,15 @@ public class HttpTriggerFunction
 
             // 4. Validate trigger auth (basic auth)
             var triggerSource = parsed.Config.Sources.FirstOrDefault(s =>
-                s.Trigger is "http" or "http-request" && s.Auth is not null);
+                s.Name == match.SourceName && s.Auth is not null);
             if (triggerSource?.Auth is not null && triggerSource.Auth.Type == "basic")
             {
-                var authResult = ValidateBasicAuth(req, triggerSource.Auth);
+                var authResult = ValidateBasicAuth(req, triggerSource.Auth, scopedSecrets);
                 if (authResult is not null) return authResult;
             }
+
+            if (triggerSource?.Auth is { Type: not "basic" })
+                return await CreateJsonResponse(req, HttpStatusCode.Forbidden, new { error = "Unsupported trigger authentication." });
 
             // 5. Read request body
             var factory = JsonNodeValueFactory.Instance;
@@ -111,11 +115,12 @@ public class HttpTriggerFunction
             // 6. Execute the pipeline (sync mode)
             var executorLogger = _loggerFactory.CreateLogger<SyncExecutor>();
             var executor = new SyncExecutor(
-                secretProvider: _secretProvider,
+                secretProvider: scopedSecrets,
+                documentStore: _documents,
                 stateStore: _stateStore,
                 logger: executorLogger);
 
-            var result = await executor.ExecuteAsync(parsed, payload);
+            var result = await executor.ExecuteAsync(parsed, payload, triggerSourceName: match.SourceName);
 
             // 7. Return the response
             if (!result.IsSuccess)
@@ -150,13 +155,9 @@ public class HttpTriggerFunction
             return await CreateJsonResponse(req, (HttpStatusCode)statusCode,
                 new { executionId = result.ExecutionId, outputs });
         }
-        finally
-        {
-            try { Directory.Delete(tempDir, true); } catch { /* best effort */ }
-        }
     }
 
-    private HttpResponseData? ValidateBasicAuth(HttpRequestData req, SourceAuthConfig auth)
+    private HttpResponseData? ValidateBasicAuth(HttpRequestData req, SourceAuthConfig auth, ISecretProvider secretProvider)
     {
         var authHeader = req.Headers.TryGetValues("Authorization", out var values)
             ? values.FirstOrDefault() : null;
@@ -169,7 +170,7 @@ public class HttpTriggerFunction
             return resp;
         }
 
-        var resolver = new StringResolver(_secretProvider);
+        var resolver = new StringResolver(secretProvider);
         var expectedUser = resolver.Resolve(auth.User ?? "");
         var expectedPass = resolver.Resolve(auth.Password ?? "");
 

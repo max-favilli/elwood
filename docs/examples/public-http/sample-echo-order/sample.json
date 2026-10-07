@@ -1,0 +1,7 @@
+{
+  "id": "sample-echo-order",
+  "title": "Order echo",
+  "description": "Transform a synthetic order, POST it to Postman Echo and return the echoed JSON.",
+  "expectedOutcome": "Succeeds. Response contains orderId DEMO-42 and customer Ada Example.",
+  "realNotes": "Real systems sends synthetic order data to Postman Echo. No credentials are required."
+}

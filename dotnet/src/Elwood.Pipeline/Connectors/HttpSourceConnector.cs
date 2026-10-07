@@ -17,7 +17,7 @@ public sealed class HttpSourceConnector : ISourceConnector
 
     public HttpSourceConnector(HttpClient? httpClient = null)
     {
-        _httpClient = httpClient ?? new HttpClient();
+        _httpClient = httpClient ?? HttpAuthentication.Client();
     }
 
     public bool CanHandle(Schema.PullSourceConfig config) => config.Http is not null;
@@ -27,26 +27,13 @@ public sealed class HttpSourceConnector : ISourceConnector
     {
         var http = config.Http ?? throw new InvalidOperationException("HTTP config is null");
 
-        var request = new HttpRequestMessage(
+        using var request = new HttpRequestMessage(
             new HttpMethod(http.Method ?? "GET"),
             http.Url);
 
-        // Basic auth — user/password → Authorization: Basic <base64(user:password)>
-        if (!string.IsNullOrEmpty(http.User) && !string.IsNullOrEmpty(http.Password))
-        {
-            var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{http.User}:{http.Password}"));
-            request.Headers.TryAddWithoutValidation("Authorization", $"Basic {credentials}");
-        }
-
-        if (http.Headers is not null)
-        {
-            foreach (var (key, value) in http.Headers)
-                request.Headers.TryAddWithoutValidation(key, value);
-        }
-
         // POST/PUT body: the executor pre-evaluates the body expression against the IDM
         // and passes the serialized JSON string in the BodyContent property.
-        if (!string.IsNullOrEmpty(http.BodyContent))
+        if (http.BodyContent is not null)
         {
             request.Content = new StringContent(
                 http.BodyContent,
@@ -54,11 +41,20 @@ public sealed class HttpSourceConnector : ISourceConnector
                 http.BodyContentType ?? "application/json");
         }
 
+        if (http.Headers is not null)
+            foreach (var (key, value) in http.Headers)
+                if (!request.Headers.TryAddWithoutValidation(key, value) && request.Content is not null)
+                {
+                    request.Content.Headers.Remove(key);
+                    request.Content.Headers.TryAddWithoutValidation(key, value);
+                }
+
         // Apply per-request timeout if configured
         using var cts = http.ConnectionTimeout is > 0
             ? new CancellationTokenSource(TimeSpan.FromMilliseconds(http.ConnectionTimeout.Value))
             : null;
-        var response = await _httpClient.SendAsync(request, cts?.Token ?? default);
+        await HttpAuthentication.Apply(_httpClient, request, http.User, http.Password, http.Oauth2, cts?.Token ?? default);
+        using var response = await HttpCallCapture.SendAsync(_httpClient, request, cts?.Token ?? default, http.ConnectionTimeout);
         var statusCode = (int)response.StatusCode;
 
         // Check if the status code is accepted

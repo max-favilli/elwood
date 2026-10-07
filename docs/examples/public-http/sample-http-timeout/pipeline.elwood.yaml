@@ -1,0 +1,21 @@
+version: 2
+name: sample-http-timeout
+# sample: sample-http-timeout
+description: An intentional HTTP timeout
+mode: sync
+sources:
+  - name: input
+    trigger: http
+    endpoint: /samples/sample-http-timeout
+  - name: remote
+    trigger: pull
+    depends: input
+    from:
+      http:
+        url: https://httpbin.org/delay/5
+        method: GET
+        connectionTimeout: 1000
+outputs:
+  - name: response
+    response: true
+    map: '{ message: "This output must not run after a timeout" }'

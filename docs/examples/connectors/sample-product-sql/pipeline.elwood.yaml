@@ -1,0 +1,33 @@
+# sample: sample-product-sql
+version: 2
+name: sample-product-sql
+mode: async
+sources:
+  - name: event
+    trigger: queue
+    rabbitmq:
+      connectionString: $secrets.products.rabbitmq
+      queue: product-changes
+      requireMessageId: true
+    map: '{ event: $ }'
+  - name: product
+    trigger: pull
+    depends: event
+    from:
+      sql:
+        connectionString: $secrets.products.sql
+        storedProcedure: dbo.GetProduct
+        readOnly: true
+        parameters:
+          id: { type: int, value: '$idm.event.productId' }
+    map: '{ product: $[0], event: $idm.event }'
+outputs:
+  - name: sap
+    map: '{ productId: $.event.productId, sku: $.product.sku, quantity: $.product.quantity }'
+    retry: { mode: manual }
+    destinations:
+      http:
+        - url: $secrets.sap.url
+          user: $secrets.sap.user
+          password: $secrets.sap.password
+          connectionTimeout: 30000

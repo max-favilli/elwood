@@ -243,6 +243,38 @@ public class CliIntegrationTests : IClassFixture<CliFixture>
     // ── error handling ──
 
     [Fact]
+    public async Task Pipeline_OfflineRunAcceptsValidRetryPolicyAndValidatesInvalidPolicy()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "elwood-cli-retry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var yaml = Path.Combine(root, "pipeline.elwood.yaml");
+            var input = Path.Combine(root, "input.json");
+            const string config = """
+                version: 2
+                name: offline-retry
+                mode: async
+                sources:
+                  - name: event
+                    trigger: http
+                    retry: {mode: automatic, maxAttempts: 3}
+                outputs: [{name: result}]
+                """;
+            await File.WriteAllTextAsync(yaml, config);
+            await File.WriteAllTextAsync(input, "{\"ok\":true}");
+            var validated = await _fixture.Run("pipeline", "validate", yaml);
+            Assert.Equal(0, validated.ExitCode);
+            var result = await _fixture.Run("pipeline", "run", yaml, "--source", $"event={input}");
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("retry", result.Stderr, StringComparison.OrdinalIgnoreCase);
+            await File.WriteAllTextAsync(yaml, config.Replace("maxAttempts: 3", "maxAttempts: 0"));
+            Assert.NotEqual(0, (await _fixture.Run("pipeline", "validate", yaml)).ExitCode);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public async Task Eval_InvalidExpression_ReturnsError()
     {
         var result = await _fixture.Run("eval", "$.@@@", "--json", "{}");
@@ -286,7 +318,7 @@ public class CliFixture : IDisposable
         // after the build exits, deadlocking ReadToEnd in RunProcess.
         var buildResult = RunProcess("dotnet", $"build \"{cliProject}\" -c Release --nologo -v q /nodeReuse:false");
         if (buildResult.ExitCode != 0)
-            throw new Exception($"CLI build failed: {buildResult.Stderr}");
+            throw new Exception($"CLI build failed: {buildResult.Stdout}\n{buildResult.Stderr}");
 
         // Find the built DLL
         var cliDir = System.IO.Path.Combine(repoRoot, "dotnet", "src", "Elwood.Cli", "bin", "Release");

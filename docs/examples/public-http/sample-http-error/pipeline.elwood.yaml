@@ -1,0 +1,20 @@
+version: 2
+name: sample-http-error
+# sample: sample-http-error
+description: An intentional HTTP 503 source failure
+mode: sync
+sources:
+  - name: input
+    trigger: http
+    endpoint: /samples/sample-http-error
+  - name: remote
+    trigger: pull
+    depends: input
+    from:
+      http:
+        url: https://httpbin.org/status/503
+        method: GET
+outputs:
+  - name: response
+    response: true
+    map: '{ message: "This output must not run after the source fails" }'

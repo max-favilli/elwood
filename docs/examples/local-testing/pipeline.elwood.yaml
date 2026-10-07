@@ -1,0 +1,27 @@
+version: 2
+name: m3-order-test
+description: Order to CRM and Emarsys - local test example
+mode: async
+sources:
+  - name: order
+    trigger: queue
+    map: '{ order: $ }'
+  - name: crm
+    trigger: pull
+    depends: order
+    from:
+      http:
+        url: $secrets.crmUrl
+        method: POST
+        headers:
+          Authorization: $secrets.crmToken
+        body: '{ externalId: $idm.order.id }'
+    map: '{ crm: $ }'
+outputs:
+  - name: emarsys
+    map: '{ orderId: $idm.order.id, crmId: $idm.crm.id }'
+    destinations:
+      http:
+        - url: $secrets.emarsysUrl
+          headers:
+            Authorization: $secrets.emarsysToken

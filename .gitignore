@@ -35,7 +35,8 @@ Thumbs.db
 .DS_Store
 
 ## Elwood runtime state (local execution state from dev/test runs)
-.elwood/state/
+# Applies inside runtime project directories too, including management credentials.
+.elwood/
 
 ## Build
 TestResults/

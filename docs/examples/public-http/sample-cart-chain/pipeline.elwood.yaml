@@ -1,0 +1,27 @@
+version: 2
+name: sample-cart-chain
+# sample: sample-cart-chain
+description: Create a simulated cart and deliver the combined order
+mode: async
+sources:
+  - name: order
+    trigger: http
+    endpoint: /samples/sample-cart-chain
+    map: '{ order: $ }'
+  - name: cart
+    trigger: pull
+    depends: order
+    from:
+      http:
+        url: https://dummyjson.com/carts/add
+        method: POST
+        body: '{ userId: $idm.order.userId, products: $idm.order.items | select item => { id: item.productId, quantity: item.quantity } }'
+    map: '{ cart: $ }'
+outputs:
+  - name: delivery
+    map: '{ orderId: $idm.order.id, cartId: $idm.cart.id, cartTotal: $idm.cart.total }'
+    destinations:
+      http:
+        # Optional: replace this URL with your receiving URL from Webhook.site.
+        - url: https://postman-echo.com/post
+          method: POST

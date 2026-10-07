@@ -1,0 +1,48 @@
+// Event Grid BlobCreated notification → { event: {...} }.
+//
+// Event Grid may batch events and does not guarantee order; the ingress adapter is
+// expected to hand this pipeline exactly ONE event per execution (docs/elwood-requests.md
+// §4). Anything else is rejected here, never silently reduced to $[0].
+// The Event Grid subscription is filtered on the deldo/ subject prefix and BlobCreated,
+// but filters are configuration, so the script re-checks what it depends on.
+
+let supplier = "deldo"
+let blobsPrefix = "/blobServices/default/containers/inbound/blobs/"
+let commitApis = ["PutBlob", "PutBlockList", "FlushWithClose", "CopyBlob"]
+
+let events = $ | where e => true            // normalise: $ is the delivered array
+let n = events | count
+let ev = if n == 1 then events.first() else {}
+
+let problems = [
+  if n != 1 then "expected exactly one event per execution, got " + n.toString() else null,
+  if n == 1 && ev?.eventType != "Microsoft.Storage.BlobCreated" then "eventType is not BlobCreated" else null,
+  if n == 1 && !ev?.subject.isNullOrEmpty() && !ev.subject.startsWith(blobsPrefix + supplier + "/") then "subject is outside inbound/" + supplier + "/" else null,
+  if n == 1 && ev?.subject.isNullOrEmpty() then "subject missing" else null,
+  if n == 1 && !ev?.data?.api.in(commitApis) then "data.api is not a blob commit" else null,
+  if n == 1 && ev?.data?.eTag.isNullOrEmpty() then "data.eTag missing: cannot identify the file version" else null
+] | where p => !p.isNull()
+
+// Abort the step when invalid. Elwood has no fail(message) yet (docs/elwood-requests.md §8)
+// and strict access does not throw on literals or on $[0].x, so the only dependable abort
+// is "Division by zero". `let` is lazy: the guard must be referenced in the result.
+let guard = 1 / (if problems.isEmpty() then 1 else 0)
+
+let blobPath = ev.subject.replace(blobsPrefix, "")
+let parts = blobPath.split("/")
+
+return {
+  event: {
+    valid: guard == 1,
+    id: ev.id,
+    type: ev.eventType,
+    time: ev.eventTime,
+    supplier: parts.first(),
+    blobPath: blobPath,
+    fileName: parts.last(),
+    url: ev.data.url,
+    etag: ev.data.eTag,
+    contentLength: ev.data.contentLength,
+    api: ev.data.api
+  }
+}

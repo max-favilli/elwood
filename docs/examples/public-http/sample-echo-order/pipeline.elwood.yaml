@@ -1,0 +1,23 @@
+version: 2
+name: sample-echo-order
+# sample: sample-echo-order
+description: Transform an order and inspect the HTTP echo
+mode: sync
+sources:
+  - name: order
+    trigger: http
+    endpoint: /samples/sample-echo-order
+    map: '{ order: $ }'
+  - name: echo
+    trigger: pull
+    depends: order
+    from:
+      http:
+        url: https://postman-echo.com/post
+        method: POST
+        body: '{ orderId: $idm.order.id, customer: $idm.order.customer.name, total: $idm.order.total }'
+    map: '{ echoed: $.json, httpStatus: $source.http.statusCode }'
+outputs:
+  - name: response
+    response: true
+    map: '{ received: $idm.echoed, httpStatus: $idm.httpStatus }'

@@ -1,3 +1,4 @@
+using Elwood.Pipeline.Storage;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -95,6 +96,7 @@ public sealed class GitPipelineStore : IPipelineStore
 
     public async Task<List<PipelineRevision>> GetRevisionsAsync(string id, int limit = 20)
     {
+        SafePath.Id(id);
         var entries = await _git.LogAsync(relativePath: id, limit: limit);
         return entries.Select(e => new PipelineRevision
         {
@@ -109,7 +111,8 @@ public sealed class GitPipelineStore : IPipelineStore
     {
         await _git.EnsureRepoAsync();
 
-        var pipelineDir = Path.Combine(_repoDir, id);
+        var pipelineDir = SafePath.Within(_repoDir, SafePath.Id(id));
+        if (!System.Text.RegularExpressions.Regex.IsMatch(revisionId, @"\A[0-9a-fA-F]{7,64}\z")) throw new ArgumentException("Invalid revision ID.");
 
         // 1. Read the pipeline's files at the target revision
         var files = await _git.ListFilesAtRevisionAsync(revisionId, id);
@@ -121,7 +124,7 @@ public sealed class GitPipelineStore : IPipelineStore
         if (Directory.Exists(pipelineDir))
         {
             foreach (var file in Directory.GetFiles(pipelineDir))
-                File.Delete(file);
+                File.Delete(SafePath.Within(pipelineDir, Path.GetFileName(file)));
         }
         else
         {
@@ -133,7 +136,7 @@ public sealed class GitPipelineStore : IPipelineStore
         {
             var content = await _git.ShowFileAtRevisionAsync(revisionId, $"{id}/{fileName}");
             if (content is not null)
-                File.WriteAllText(Path.Combine(pipelineDir, fileName), content);
+                File.WriteAllText(SafePath.Within(pipelineDir, fileName), content);
         }
 
         // 4. Stage and commit the restore

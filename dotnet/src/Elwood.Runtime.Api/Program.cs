@@ -1,3 +1,7 @@
+using Elwood.Runtime.Api;
+using Elwood.Pipeline.Testing;
+using Elwood.Pipeline.Connectors;
+using Elwood.Pipeline.Async;
 using System.Buffers;
 using System.Text.Json;
 using Elwood.Core;
@@ -19,9 +23,14 @@ var stateDir = builder.Configuration["Elwood:StateDir"]
 // Register services
 builder.Services.AddSingleton<IPipelineStore>(new FileSystemPipelineStore(pipelinesDir));
 builder.Services.AddSingleton<IStateStore>(new FileSystemStateStore(stateDir));
-builder.Services.AddSingleton<InMemoryDocumentStore>();
+builder.Services.AddSingleton<IDocumentStore>(new FileSystemDocumentStore(Path.Combine(stateDir, "documents")));
 builder.Services.AddSingleton<JsonNodeValueFactory>(_ => JsonNodeValueFactory.Instance);
-builder.Services.AddSingleton(sp => new EndpointRouteCache(sp.GetRequiredService<IPipelineStore>()));
+builder.Services.AddSingleton(sp => new FileSystemDeploymentStore(sp.GetRequiredService<IPipelineStore>(), Path.Combine(stateDir, "deployments")));
+builder.Services.AddSingleton(new ManagementSecurity(builder.Configuration, stateDir));
+builder.Services.AddSingleton<RuntimeStepQueue>();
+builder.Services.AddSingleton<DurableRuntime>();
+builder.Services.AddHostedService<ExecutionRecoveryWorker>();
+builder.Services.AddHostedService<ExecutionRetentionWorker>();
 // Secrets resolution chain: secrets.json → Azure App Configuration → env vars.
 // Each layer is optional. First non-null value wins.
 var secretProviders = new List<ISecretProvider>();
@@ -76,386 +85,341 @@ if (!string.IsNullOrEmpty(aiConnectionString))
     Console.WriteLine("Telemetry: Application Insights connected");
 }
 
-// CORS — allow the Elwood Portal (localhost:3000) to call the API
-builder.Services.AddCors(options =>
-{
-    options.AddDefaultPolicy(policy =>
-        policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
-});
-
+// CORS origins are host configuration, never reflected from the request.
+var origins = builder.Configuration.GetSection("Elwood:Management:Origins").Get<string[]>() ?? ["http://localhost:3000"];
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy
+    .WithOrigins(origins).AllowAnyMethod().AllowAnyHeader()
+    .WithExposedHeaders("X-Elwood-Warnings", "X-Elwood-Revision", "ETag", "Location")));
+builder.Services.AddSingleton<RuntimeConnectors>();
+builder.Services.AddHostedService<RabbitMqTriggerWorker>();
 var app = builder.Build();
-
 app.UseCors();
-
-var jsonOpts = new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-
-// ── Health ──
+app.Use(async (context, next) =>
+{
+    try
+    {
+        var path = context.Request.Path.Value ?? "";
+        if (path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) &&
+            !path.Equals("/api/health", StringComparison.OrdinalIgnoreCase) &&
+            !path.StartsWith("/api/v1/trigger/", StringComparison.OrdinalIgnoreCase))
+        {
+            var identity = context.RequestServices.GetRequiredService<ManagementSecurity>().Authenticate(context);
+            if (identity is null)
+            {
+                context.Response.StatusCode = 401;
+                context.Response.Headers.WWWAuthenticate = "Bearer";
+                await context.Response.WriteAsJsonAsync(new { error = "Management authentication required." });
+                return;
+            }
+            context.Items["identity"] = identity;
+            var operation = context.Request.Method == "GET" ? "read" :
+                path.EndsWith("/resume", StringComparison.OrdinalIgnoreCase) || path.EndsWith("/replay", StringComparison.OrdinalIgnoreCase) ? "recover" :
+                path.EndsWith("/deploy", StringComparison.OrdinalIgnoreCase) || path.EndsWith("/migrate", StringComparison.OrdinalIgnoreCase) || (context.Request.Method == "DELETE" && !path.Contains("/scripts/", StringComparison.OrdinalIgnoreCase)) ? "deploy" :
+                path.EndsWith("/test", StringComparison.OrdinalIgnoreCase) || path.EndsWith("/test-template", StringComparison.OrdinalIgnoreCase) || path.Equals("/api/executions", StringComparison.OrdinalIgnoreCase) ? "test" : "write";
+            var pipeline = context.Request.RouteValues.TryGetValue("id", out var id) && path.StartsWith("/api/pipelines/", StringComparison.OrdinalIgnoreCase) ? id?.ToString() : null;
+            if (pipeline is not null) SafePath.Id(pipeline);
+            if (!path.Equals("/api/session", StringComparison.OrdinalIgnoreCase) && !identity.Can(operation, pipeline))
+                throw new UnauthorizedAccessException("This identity does not have permission for this operation.");
+        }
+        await next(context);
+    }
+    catch (Exception ex) when (ex is ArgumentException or JsonException or DeploymentConflictException or RecoveryConflictException or KeyNotFoundException or UnauthorizedAccessException)
+    {
+        context.Response.StatusCode = ex switch
+        {
+            UnauthorizedAccessException => 403, DeploymentConflictException or RecoveryConflictException => 409,
+            KeyNotFoundException => 404, _ => 400,
+        };
+        await context.Response.WriteAsJsonAsync(new { error = ex.Message });
+    }
+});
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
-
-// ── Pipelines ──
-
-app.MapGet("/api/pipelines", async (IPipelineStore store, string? name) =>
+app.MapGet("/api/session", (HttpContext context) =>
 {
-    var pipelines = await store.ListPipelinesAsync(name);
-    return Results.Ok(pipelines);
+    var identity = ManagementSecurity.Identity(context);
+    return Results.Ok(new { identity.Name, identity.Permissions, identity.Pipelines });
 });
 
-app.MapGet("/api/pipelines/{id}", async (string id, IPipelineStore store) =>
+app.MapGet("/api/pipelines", async (FileSystemDeploymentStore store, HttpContext context, string? name) =>
 {
-    var pipeline = await store.GetPipelineAsync(id);
-    return pipeline is null ? Results.NotFound() : Results.Ok(pipeline);
+    var identity = ManagementSecurity.Identity(context);
+    var definitions = (await store.ListAsync()).Where(d => identity.Can("read", d.Id));
+    var results = definitions.Select(d =>
+    {
+        var config = new PipelineParser().ParseContent(d.Content).Config;
+        return new { d.Id, name = config.Name ?? d.Id, config.Description, sourceCount = config.Sources.Count,
+            outputCount = config.Outputs.Count, d.LastModified, d.DraftRevisionId, d.ActiveRevisionId, d.MigrationRequired };
+    });
+    return Results.Ok(results.Where(d => name is null || d.name.Contains(name, StringComparison.OrdinalIgnoreCase) || d.Id.Contains(name, StringComparison.OrdinalIgnoreCase)));
 });
-
-app.MapPost("/api/pipelines/{id}", async (string id, PipelineContent content,
-    IPipelineStore store, EndpointRouteCache routeCache) =>
+app.MapGet("/api/pipelines/{id}", async (string id, FileSystemDeploymentStore store, HttpContext context) =>
 {
-    // POST = create only. Reject if the pipeline already exists.
-    var existing = await store.GetPipelineAsync(id);
-    if (existing is not null)
-        return Results.Conflict(new { error = $"Pipeline '{id}' already exists. Use PUT to update." });
-
-    await store.SavePipelineAsync(id, content);
-    await routeCache.UpdatePipelineAsync(id);
-    return Results.Created($"/api/pipelines/{id}", new { id });
+    var definition = await store.GetAsync(id);
+    if (definition is null) return Results.NotFound();
+    context.Response.Headers.ETag = $"\"{definition.DraftRevisionId}\"";
+    return Results.Ok(definition);
 });
-
-app.MapPut("/api/pipelines/{id}", async (string id, PipelineContent content,
-    IPipelineStore store, EndpointRouteCache routeCache) =>
+app.MapPost("/api/pipelines/{id}", async (string id, PipelineContent content, FileSystemDeploymentStore store) =>
+    Results.Created($"/api/pipelines/{id}", await store.SaveDraftAsync(id, content, null, create: true)));
+app.MapPut("/api/pipelines/{id}", async (string id, PipelineContent content, FileSystemDeploymentStore store, HttpRequest request) =>
+    Results.Ok(await store.SaveDraftAsync(id, content, Expected(request))));
+app.MapDelete("/api/pipelines/{id}", async (string id, FileSystemDeploymentStore store, HttpRequest request) =>
 {
-    var existing = await store.GetPipelineAsync(id);
-    if (existing is null) return Results.NotFound();
-    await store.SavePipelineAsync(id, content);
-    await routeCache.UpdatePipelineAsync(id);
-    return Results.Ok(new { id });
-});
-
-app.MapDelete("/api/pipelines/{id}", async (string id, IPipelineStore store,
-    EndpointRouteCache routeCache) =>
-{
-    await store.DeletePipelineAsync(id);
-    routeCache.RemovePipeline(id);
+    await store.DeleteAsync(id, Expected(request));
     return Results.NoContent();
 });
-
-app.MapGet("/api/pipelines/{id}/revisions", async (string id, IPipelineStore store) =>
+app.MapPost("/api/pipelines/{id}/migrate", async (string id, RevisionRequest body, FileSystemDeploymentStore store, HttpContext context) =>
+    Results.Ok(await store.MigrateAsync(id, body.ExpectedRevisionId, ManagementSecurity.Identity(context).Name)));
+app.MapPost("/api/pipelines/{id}/deploy", async (string id, RevisionRequest body, FileSystemDeploymentStore store, HttpContext context) =>
 {
-    var revisions = await store.GetRevisionsAsync(id);
-    return Results.Ok(revisions);
+    var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
+    var errors = RuntimeErrors(new PipelineParser().ParseContent(draft.Content));
+    if (errors.Count > 0) return Results.BadRequest(new { errors });
+    return Results.Ok(await store.DeployAsync(id, body.ExpectedRevisionId, ManagementSecurity.Identity(context).Name));
 });
-
-// ── Scripts ──
-
-app.MapGet("/api/pipelines/{id}/scripts", async (string id, IPipelineStore store) =>
+app.MapGet("/api/pipelines/{id}/revisions", async (string id, FileSystemDeploymentStore store) =>
+    Results.Ok((await store.RevisionsAsync(id)).Select(b => new { b.RevisionId, b.Author, timestamp = b.CreatedAt })));
+app.MapGet("/api/pipelines/{id}/revisions/{revision}", async (string id, string revision, FileSystemDeploymentStore store) =>
 {
-    var pipeline = await store.GetPipelineAsync(id);
-    if (pipeline is null) return Results.NotFound();
-    var scripts = pipeline.Content.Scripts.Select(s => new { name = s.Key, length = s.Value.Length });
-    return Results.Ok(scripts);
+    var bundle = (await store.RevisionsAsync(id)).FirstOrDefault(b => b.RevisionId == revision);
+    return bundle is null ? Results.NotFound() : Results.Ok(bundle);
 });
-
-app.MapGet("/api/pipelines/{id}/scripts/{name}", async (string id, string name, IPipelineStore store) =>
+app.MapGet("/api/pipelines/{id}/scripts", async (string id, FileSystemDeploymentStore store) =>
 {
-    var pipeline = await store.GetPipelineAsync(id);
-    if (pipeline is null) return Results.NotFound();
-    return pipeline.Content.Scripts.TryGetValue(name, out var script)
-        ? Results.Text(script, "text/plain")
-        : Results.NotFound();
+    var draft = await store.GetAsync(id);
+    return draft is null ? Results.NotFound() : Results.Ok(draft.Content.Scripts.Select(s => new { name = s.Key, length = s.Value.Length }));
 });
-
-app.MapPut("/api/pipelines/{id}/scripts/{name}", async (string id, string name, HttpRequest req, IPipelineStore store) =>
+app.MapGet("/api/pipelines/{id}/scripts/{name}", async (string id, string name, FileSystemDeploymentStore store) =>
 {
-    var pipeline = await store.GetPipelineAsync(id);
-    if (pipeline is null) return Results.NotFound();
-
-    using var reader = new StreamReader(req.Body);
-    var scriptContent = await reader.ReadToEndAsync();
-    pipeline.Content.Scripts[name] = scriptContent;
-    await store.SavePipelineAsync(id, pipeline.Content);
-    return Results.Ok(new { id, script = name });
+    SafePath.Script(name);
+    var draft = await store.GetAsync(id);
+    return draft is not null && draft.Content.Scripts.TryGetValue(name, out var script) ? Results.Text(script, "text/plain") : Results.NotFound();
 });
-
-app.MapDelete("/api/pipelines/{id}/scripts/{name}", async (string id, string name, IPipelineStore store) =>
+app.MapPut("/api/pipelines/{id}/scripts/{name}", async (string id, string name, HttpRequest request, FileSystemDeploymentStore store) =>
 {
-    var pipeline = await store.GetPipelineAsync(id);
-    if (pipeline is null) return Results.NotFound();
-    pipeline.Content.Scripts.Remove(name);
-    await store.SavePipelineAsync(id, pipeline.Content);
-    return Results.NoContent();
+    SafePath.Script(name);
+    var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
+    using var reader = new StreamReader(request.Body);
+    draft.Content.Scripts[name] = await reader.ReadToEndAsync();
+    return Results.Ok(await store.SaveDraftAsync(id, draft.Content, Expected(request)));
 });
-
-// ── Script testing ──
-
-app.MapPost("/api/pipelines/{id}/scripts/{name}/test", async (string id, string name,
-    HttpRequest req, IPipelineStore store) =>
+app.MapDelete("/api/pipelines/{id}/scripts/{name}", async (string id, string name, HttpRequest request, FileSystemDeploymentStore store) =>
 {
-    var pipeline = await store.GetPipelineAsync(id);
-    if (pipeline is null) return Results.NotFound();
-    if (!pipeline.Content.Scripts.TryGetValue(name, out var script))
-        return Results.NotFound();
-
-    var factory = JsonNodeValueFactory.Instance;
-    var engine = new ElwoodEngine(factory);
-
-    // Read the body as UTF-8 bytes: ParseUtf8 avoids a UTF-16 copy of the whole document.
-    using var bodyBuffer = new MemoryStream();
-    await req.Body.CopyToAsync(bodyBuffer);
-    bodyBuffer.Position = 0;
-    var input = factory.ParseUtf8(bodyBuffer);
-
-    var isScript = script.TrimStart().StartsWith("let ") ||
-                   script.Contains("\nlet ") || script.Contains("return ");
-
-    // Stream the result into a buffer instead of materialising a JsonNode graph and then
-    // serialising it. Buffer-then-flush: nothing is sent until evaluation has succeeded, so a
-    // failure cannot leave a truncated body behind a 200.
+    SafePath.Script(name);
+    var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
+    draft.Content.Scripts.Remove(name);
+    return Results.Ok(await store.SaveDraftAsync(id, draft.Content, Expected(request)));
+});
+app.MapPost("/api/pipelines/{id}/scripts/{name}/test", async (string id, string name, HttpRequest request, FileSystemDeploymentStore store) =>
+{
+    SafePath.Script(name);
+    var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
+    if (request.Headers.ContainsKey("If-Match") && Expected(request) != draft.DraftRevisionId)
+        throw new DeploymentConflictException("The saved draft changed. Reload before testing.");
+    if (!draft.Content.Scripts.TryGetValue(name, out var script)) return Results.NotFound();
+    using var buffer = new MemoryStream();
+    await request.Body.CopyToAsync(buffer);
+    buffer.Position = 0;
+    var input = JsonNodeValueFactory.Instance.ParseUtf8(buffer);
+    var engine = new ElwoodEngine(JsonNodeValueFactory.Instance);
     var output = new ArrayBufferWriter<byte>();
-    var writerOptions = new JsonWriterOptions { Indented = jsonOpts.WriteIndented };
-    var source = isScript ? script : script.Trim();
-    var result = isScript
-        ? engine.ExecuteTo(source, input, v => ElwoodJsonWriter.Write(output, v, writerOptions))
-        : engine.EvaluateTo(source, input, v => ElwoodJsonWriter.Write(output, v, writerOptions));
-
-    if (!result.Success)
-        return Results.BadRequest(new { errors = result.Diagnostics.Select(d => d.ToString()) });
-
-    // The body is the result alone, so warnings travel beside it: a JSON array of strings,
-    // ASCII-escaped by the serializer and therefore safe as a header value.
+    var result = StepEvaluator.IsScript(script)
+        ? engine.ExecuteTo(script, input, v => ElwoodJsonWriter.Write(output, v))
+        : engine.EvaluateTo(script.Trim(), input, v => ElwoodJsonWriter.Write(output, v));
+    request.HttpContext.Response.Headers["X-Elwood-Revision"] = draft.DraftRevisionId;
+    if (!result.Success) return Results.BadRequest(new { errors = result.Diagnostics.Select(d => d.ToString()) });
     if (result.Diagnostics.Count > 0)
-        req.HttpContext.Response.Headers["X-Elwood-Warnings"] =
-            JsonSerializer.Serialize(result.Diagnostics.Select(d => d.ToString()));
-
+        request.HttpContext.Response.Headers["X-Elwood-Warnings"] = JsonSerializer.Serialize(result.Diagnostics.Select(d => d.ToString()));
     return Results.Bytes(output.WrittenMemory, "application/json");
 });
-
-// ── Validate ──
-
-app.MapPost("/api/pipelines/{id}/validate", async (string id, IPipelineStore store) =>
+app.MapPost("/api/pipelines/{id}/validate", async (string id, DraftRequest body, FileSystemDeploymentStore store) =>
 {
-    var pipeline = await store.GetPipelineAsync(id);
-    if (pipeline is null) return Results.NotFound();
+    var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
+    var content = body.Content ?? draft.Content;
+    SafePath.Content(content);
+    var errors = RuntimeErrors(new PipelineParser().ParseContent(content));
+    return Results.Ok(new { valid = errors.Count == 0, errors, revisionId = PipelineBundle.Hash(content) });
+});
 
-    // Write to temp dir for parser
-    var tempDir = Path.Combine(Path.GetTempPath(), "elwood-validate-" + Guid.NewGuid().ToString()[..8]);
-    Directory.CreateDirectory(tempDir);
-    try
+app.MapPost("/api/pipelines/{id}/test-template", async (string id, DraftRequest body, FileSystemDeploymentStore store) =>
+{
+    var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
+    var content = body.Content ?? draft.Content;
+    SafePath.Content(content);
+    var parsed = new PipelineParser().ParseContent(content, id);
+    var errors = RuntimeErrors(parsed);
+    if (errors.Count > 0) return Results.BadRequest(new { errors });
+    return Results.Ok(new { revisionId = parsed.RevisionId, mocks = LocalTestSession.Template(parsed) });
+});
+app.MapGet("/api/executions/{id}/inspection", async (string id, IStateStore store, IDocumentStore documents, HttpContext context) =>
+{
+    var execution = await store.GetExecutionAsync(id);
+    return execution is null || !CanReadExecution(context, execution) ? Results.NotFound()
+        : Results.Ok(await ExecutionInspection.LoadAsync(execution, documents));
+});
+app.MapGet("/api/executions", async (IStateStore store, HttpContext context, string? pipeline, int? limit) =>
+    Results.Ok((await store.ListExecutionsAsync(pipeline, Math.Clamp(limit ?? 50, 1, 500))).Where(e => CanReadExecution(context, e))));
+app.MapGet("/api/executions/{id}", async (string id, IStateStore store, HttpContext context) =>
+{
+    var execution = await store.GetExecutionAsync(id);
+    return execution is null || !CanReadExecution(context, execution) ? Results.NotFound() : Results.Ok(execution);
+});
+app.MapPost("/api/executions", async (ExecutionRequest body, FileSystemDeploymentStore store, HttpContext context) =>
+{
+    SafePath.Id(body.PipelineId);
+    if (!ManagementSecurity.Identity(context).Can("test", body.PipelineId)) throw new UnauthorizedAccessException("Pipeline test permission required.");
+    var draft = await store.GetAsync(body.PipelineId) ?? throw new KeyNotFoundException("Pipeline not found.");
+    if (body.ExpectedRevisionId is not null && body.Content is null && body.ExpectedRevisionId != draft.DraftRevisionId)
+        throw new DeploymentConflictException("The saved draft changed. Reload before testing.");
+    var content = body.Content ?? draft.Content;
+    SafePath.Content(content);
+    var parsed = new PipelineParser().ParseContent(content, body.PipelineId);
+    var errors = RuntimeErrors(parsed);
+    if (errors.Count > 0) return Results.BadRequest(new { errors });
+    var testSession = new LocalTestSession(body.TestMode, body.Mocks, parsed);
+    var payload = JsonNodeValueFactory.Instance.Parse(body.Payload.ValueKind == JsonValueKind.Undefined ? "{}" : body.Payload.GetRawText());
+    // Management execution is always an explicit draft test, including async definitions.
+    var result = await Executor(context, body.PipelineId, isTest: true, testSession).ExecuteAsync(parsed, payload, isTest: true);
+    var state = await context.RequestServices.GetRequiredService<IStateStore>().GetExecutionAsync(result.ExecutionId!);
+    var inspection = CanReadExecution(context, state!)
+        ? await ExecutionInspection.LoadAsync(state!, context.RequestServices.GetRequiredService<IDocumentStore>()) : null;
+    return Results.Ok(new { result.ExecutionId, success = result.IsSuccess, errors = result.Errors,
+        outputs = Outputs(result), result.ResponseStatusCode, revisionId = parsed.RevisionId, isTest = true, testMode = testSession.Mode, inspection });
+});
+app.MapPost("/api/executions/{id}/resume", async (string id, ResumeRequest body, IStateStore states, DurableRuntime runtime, HttpContext context) =>
+{
+    var state = await RecoveryExecution(id, states, context);
+    await runtime.Runner(state.PipelineId).ResumeAsync(id, body.AcknowledgeUncertain);
+    return Results.Accepted($"/api/executions/{id}", new { executionId = id });
+});
+app.MapPost("/api/executions/{id}/replay", async (string id, ReplayRequest body, IStateStore states, FileSystemDeploymentStore store, DurableRuntime runtime, HttpContext context) =>
+{
+    var state = await RecoveryExecution(id, states, context);
+    ParsedPipeline? revision = null;
+    if (body.RevisionId is not null && body.RevisionId != state.RevisionId)
     {
-        File.WriteAllText(Path.Combine(tempDir, "pipeline.elwood.yaml"), pipeline.Content.Yaml);
-        foreach (var (name, script) in pipeline.Content.Scripts)
-            File.WriteAllText(Path.Combine(tempDir, name), script);
-
-        var parser = new PipelineParser();
-        var parsed = parser.Parse(Path.Combine(tempDir, "pipeline.elwood.yaml"));
-
-        var errors = new List<string>(parsed.Errors);
-        errors.AddRange(DependencyResolver.ValidateDependencies(parsed.Config.Sources));
-        try { DependencyResolver.ResolveStages(parsed.Config.Sources); }
-        catch (InvalidOperationException ex) { errors.Add(ex.Message); }
-
-        return errors.Count > 0
-            ? Results.Ok(new { valid = false, errors })
-            : Results.Ok(new { valid = true, errors = Array.Empty<string>(),
-                sources = parsed.Config.Sources.Count, outputs = parsed.Config.Outputs.Count });
+        if (state.PipelineId is null) return Results.BadRequest(new { error = "This execution has no pipeline identity." });
+        var bundle = (await store.RevisionsAsync(state.PipelineId)).FirstOrDefault(r => r.RevisionId == body.RevisionId)
+            ?? throw new KeyNotFoundException("Published revision not found for this pipeline.");
+        revision = new PipelineParser().ParseContent(bundle.Content, state.PipelineId, bundle.RevisionId);
+        var errors = RuntimeErrors(revision);
+        if (errors.Count > 0) return Results.BadRequest(new { errors });
     }
-    finally { Directory.Delete(tempDir, true); }
+    var replay = await runtime.Runner(state.PipelineId).ReplayAsync(id, revision);
+    return Results.Accepted($"/api/executions/{replay}", new { executionId = replay, replayOf = id });
 });
-
-// ── Executions ──
-
-app.MapGet("/api/executions", async (IStateStore stateStore, string? pipeline, int? limit) =>
+app.MapPost("/api/v1/trigger/{**path}", async (string path, HttpContext context, FileSystemDeploymentStore store) =>
 {
-    var executions = await stateStore.ListExecutionsAsync(pipeline, limit ?? 50);
-    return Results.Ok(executions);
-});
-
-app.MapGet("/api/executions/{id}", async (string id, IStateStore stateStore) =>
-{
-    var execution = await stateStore.GetExecutionAsync(id);
-    return execution is null ? Results.NotFound() : Results.Ok(execution);
-});
-
-// ── Trigger ──
-
-app.MapPost("/api/executions", async (HttpRequest req, IPipelineStore pipelineStore, IStateStore stateStore) =>
-{
-    // Expect: { "pipelineId": "...", "payload": { ... } }
-    using var reader = new StreamReader(req.Body);
-    var body = await reader.ReadToEndAsync();
-    var doc = JsonDocument.Parse(body);
-
-    if (!doc.RootElement.TryGetProperty("pipelineId", out var pidEl))
-        return Results.BadRequest(new { error = "Missing pipelineId" });
-
-    var pipelineId = pidEl.GetString()!;
-    var pipelineDef = await pipelineStore.GetPipelineAsync(pipelineId);
-    if (pipelineDef is null)
-        return Results.NotFound(new { error = $"Pipeline '{pipelineId}' not found" });
-
-    // Write to temp dir for parser
-    var tempDir = Path.Combine(Path.GetTempPath(), "elwood-exec-" + Guid.NewGuid().ToString()[..8]);
-    Directory.CreateDirectory(tempDir);
-    try
+    var match = await store.MatchAsync("/" + path);
+    if (match is null) return Results.NotFound(new { error = "No deployed pipeline matches this endpoint." });
+    var (id, sourceName, bundle) = match.Value;
+    var parsed = new PipelineParser().ParseContent(bundle.Content, id, bundle.RevisionId);
+    var source = parsed.Config.Sources.Single(s => s.Name == sourceName);
+    if (source.Auth is { } auth)
     {
-        File.WriteAllText(Path.Combine(tempDir, "pipeline.elwood.yaml"), pipelineDef.Content.Yaml);
-        foreach (var (name, script) in pipelineDef.Content.Scripts)
-            File.WriteAllText(Path.Combine(tempDir, name), script);
-
-        var parser = new PipelineParser();
-        var parsed = parser.Parse(Path.Combine(tempDir, "pipeline.elwood.yaml"));
-        if (!parsed.IsValid)
-            return Results.BadRequest(new { errors = parsed.Errors });
-
-        var factory = JsonNodeValueFactory.Instance;
-        var payloadJson = doc.RootElement.TryGetProperty("payload", out var payloadEl)
-            ? payloadEl.GetRawText() : "{}";
-        var payload = factory.Parse(payloadJson);
-
-        var isTest = doc.RootElement.TryGetProperty("isTest", out var testEl) && testEl.GetBoolean();
-
-        var secretProvider = req.HttpContext.RequestServices.GetRequiredService<ISecretProvider>();
-        var logger = req.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
-            .CreateLogger<SyncExecutor>();
-        var executor = new SyncExecutor(secretProvider: secretProvider, stateStore: stateStore,
-            logger: logger);
-        var result = await executor.ExecuteAsync(parsed, payload, isTest: isTest);
-
-        if (!result.IsSuccess)
-            return Results.Ok(new { executionId = result.ExecutionId, success = false, errors = result.Errors });
-
-        // Serialize outputs
-        var outputs = new Dictionary<string, object?>();
-        foreach (var (name, value) in result.Outputs)
-        {
-            if (value is JsonNodeValue jnv)
-                outputs[name] = JsonSerializer.Deserialize<object>(jnv.Node?.ToJsonString() ?? "null");
-            else
-                outputs[name] = value.GetStringValue();
-        }
-
-        return Results.Ok(new { executionId = result.ExecutionId, success = true, outputs });
-    }
-    finally { Directory.Delete(tempDir, true); }
-});
-
-// ── HTTP Trigger (catch-all) ──
-// Matches incoming requests against pipeline endpoint fields.
-// POST /api/v1/trigger/crm/newsletter → finds pipeline with endpoint: /crm/newsletter
-// Validates trigger auth, executes pipeline, returns response output with dynamic status code.
-// This simulates the production HTTP trigger function (Step 6d) for local development.
-
-app.MapPost("/api/v1/trigger/{**path}", async (string path, HttpRequest req,
-    IPipelineStore pipelineStore, IStateStore stateStore, EndpointRouteCache routeCache) =>
-{
-    var requestPath = "/" + path;
-
-    // Look up pipeline from the in-memory route cache (built on first request, updated on save)
-    var match = await routeCache.MatchAsync(requestPath);
-    if (match is null)
-        return Results.NotFound(new { error = $"No pipeline matches endpoint '{requestPath}'" });
-
-    var (matchedPipelineId, _) = match.Value;
-
-    // Parse the matched pipeline's config for auth validation
-    var parser = new PipelineParser();
-    var matchedDef = await pipelineStore.GetPipelineAsync(matchedPipelineId);
-    if (matchedDef is null) return Results.NotFound();
-
-    Elwood.Pipeline.Schema.PipelineConfig matchedConfig;
-    try { matchedConfig = parser.ParseYaml(matchedDef.Content.Yaml); }
-    catch { return Results.BadRequest(new { error = "Pipeline YAML is invalid" }); }
-
-    // Validate trigger auth (basic auth)
-    var triggerSource = matchedConfig.Sources.FirstOrDefault(s =>
-        s.Trigger is "http" or "http-request" && s.Auth is not null);
-    if (triggerSource?.Auth is not null && triggerSource.Auth.Type == "basic")
-    {
-        var authHeader = req.Headers.Authorization.FirstOrDefault();
-        if (string.IsNullOrEmpty(authHeader) || !authHeader.StartsWith("Basic "))
-            return Results.Json(new { error = "Authentication required" }, statusCode: 401);
-
-        var secretProvider = req.HttpContext.RequestServices.GetRequiredService<ISecretProvider>();
-        var resolver = new Elwood.Pipeline.StringResolver(secretProvider);
-        var expectedUser = resolver.Resolve(triggerSource.Auth.User ?? "");
-        var expectedPass = resolver.Resolve(triggerSource.Auth.Password ?? "");
-
+        if (auth.Type != "basic") return Results.Json(new { error = "Unsupported trigger authentication." }, statusCode: 403);
+        var resolver = new StringResolver(ScopedSecrets(context, id, false));
+        var user = resolver.Resolve(auth.User ?? "");
+        var password = resolver.Resolve(auth.Password ?? "");
+        var header = context.Request.Headers.Authorization.ToString();
         try
         {
-            var credBytes = Convert.FromBase64String(authHeader["Basic ".Length..]);
-            var cred = System.Text.Encoding.UTF8.GetString(credBytes);
-            var parts = cred.Split(':', 2);
-            if (parts.Length != 2 || parts[0] != expectedUser || parts[1] != expectedPass)
-                return Results.Json(new { error = "Invalid credentials" }, statusCode: 401);
+            var decoded = header.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase)
+                ? System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(header[6..])) : "";
+            if (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(password) || decoded != user + ":" + password)
+                return Results.Json(new { error = "Invalid trigger credentials." }, statusCode: 401);
         }
-        catch
-        {
-            return Results.Json(new { error = "Invalid Authorization header" }, statusCode: 401);
-        }
+        catch (FormatException) { return Results.Json(new { error = "Invalid trigger credentials." }, statusCode: 401); }
     }
-
-    // Parse the full pipeline (with scripts)
-    var tempDir = Path.Combine(Path.GetTempPath(), "elwood-trigger-" + Guid.NewGuid().ToString()[..8]);
-    Directory.CreateDirectory(tempDir);
-    try
+    var errors = RuntimeErrors(parsed);
+    if (errors.Count > 0) return Results.Json(new { errors }, statusCode: 500);
+    if (source.EventGrid is { } grid)
     {
-        File.WriteAllText(Path.Combine(tempDir, "pipeline.elwood.yaml"), matchedDef.Content.Yaml);
-        foreach (var (name, script) in matchedDef.Content.Scripts)
-            File.WriteAllText(Path.Combine(tempDir, name), script);
-
-        var parsed = parser.Parse(Path.Combine(tempDir, "pipeline.elwood.yaml"));
-        if (!parsed.IsValid)
-            return Results.BadRequest(new { errors = parsed.Errors });
-
-        // Read request body as payload
-        var factory = JsonNodeValueFactory.Instance;
-        using var reader = new StreamReader(req.Body);
-        var bodyJson = await reader.ReadToEndAsync();
-        var payload = string.IsNullOrWhiteSpace(bodyJson) ? factory.CreateObject([]) : factory.Parse(bodyJson);
-
-        var secretProv = req.HttpContext.RequestServices.GetRequiredService<ISecretProvider>();
-        var logger = req.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
-            .CreateLogger<SyncExecutor>();
-        var executor = new SyncExecutor(secretProvider: secretProv, stateStore: stateStore, logger: logger);
-        var result = await executor.ExecuteAsync(parsed, payload);
-
-        if (!result.IsSuccess)
-            return Results.Json(new { errors = result.Errors }, statusCode: 500);
-
-        // Return the response output with dynamic status code
-        var responseOutput = parsed.Config.ResponseOutput;
-        if (responseOutput is not null && result.Outputs.TryGetValue(responseOutput.Name, out var responseData))
+        if (context.Request.ContentLength > grid.MaxRequestBytes) return Results.StatusCode(413);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[8192];
+        int count;
+        while ((count = await context.Request.Body.ReadAsync(chunk, context.RequestAborted)) > 0)
         {
-            var statusCode = result.ResponseStatusCode ?? 200;
-            if (responseData is JsonNodeValue jnv)
-            {
-                var json = jnv.Node?.ToJsonString(jsonOpts) ?? "null";
-                return Results.Text(json, "application/json", statusCode: statusCode);
-            }
-            return Results.Text(responseData.GetStringValue() ?? "null", "application/json", statusCode: statusCode);
+            if (buffer.Length + count > grid.MaxRequestBytes) return Results.StatusCode(413);
+            buffer.Write(chunk, 0, count);
         }
-
-        // No response output — return all outputs
-        var outputs = new Dictionary<string, object?>();
-        foreach (var (name, value) in result.Outputs)
-        {
-            if (value is JsonNodeValue jnv2)
-                outputs[name] = JsonSerializer.Deserialize<object>(jnv2.Node?.ToJsonString() ?? "null");
-            else
-                outputs[name] = value.GetStringValue();
-        }
-        return Results.Ok(new { executionId = result.ExecutionId, outputs });
+        var events = System.Text.Json.Nodes.JsonNode.Parse(buffer.ToArray()) ?? throw new ArgumentException("Event Grid requires a JSON payload.");
+        var eventType = context.Request.Headers["aeg-event-type"].ToString();
+        var validation = EventGridIngress.Validation(events, eventType);
+        if (validation is not null) return Results.Ok(new { validationResponse = validation });
+        if (eventType != "Notification") throw new ArgumentException("Expected an Event Grid Notification header.");
+        var accepted = await EventGridIngress.AcceptAsync(context.RequestServices.GetRequiredService<DurableRuntime>().Runner(id), parsed, source, events);
+        return Results.Json(new { executionIds = accepted }, statusCode: 202);
     }
-    finally { Directory.Delete(tempDir, true); }
+    using var reader = new StreamReader(context.Request.Body);
+    var json = await reader.ReadToEndAsync();
+    var payload = JsonNodeValueFactory.Instance.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
+    context.Response.Headers["X-Elwood-Revision"] = bundle.RevisionId;
+    if (!parsed.Config.IsSyncMode)
+    {
+        var runner = context.RequestServices.GetRequiredService<DurableRuntime>().Runner(id);
+        var executionId = await runner.StartAsync(parsed, payload, sourceName, context.Request.Headers["Idempotency-Key"].FirstOrDefault());
+        var accepted = await context.RequestServices.GetRequiredService<IStateStore>().GetExecutionAsync(executionId);
+        context.Response.Headers["X-Elwood-Revision"] = accepted!.RevisionId;
+        return Results.Accepted($"/api/executions/{executionId}", new { executionId, revisionId = accepted.RevisionId, status = accepted.Status });
+    }
+    var result = await Executor(context, id, false).ExecuteAsync(parsed, payload, triggerSourceName: sourceName);
+    context.Response.Headers["X-Elwood-Revision"] = bundle.RevisionId;
+    if (!result.IsSuccess)
+    {
+        if (result.FailureResponse is not null) return Results.Text(ExecutionJson(result.FailureResponse), "application/json", statusCode: result.ResponseStatusCode ?? 500);
+        return Results.Json(new { result.ExecutionId, errors = result.Errors }, statusCode: 500);
+    }
+    if (parsed.Config.ResponseOutput is { } response && result.Outputs.TryGetValue(response.Name, out var value))
+        return Results.Text(response.ContentType == "json" ? ExecutionJson(value) : value.GetStringValue(),
+            response.ContentType switch { "xml" => "application/xml", "text" => "text/plain", _ => "application/json" }, statusCode: result.ResponseStatusCode ?? 200);
+    return Results.Ok(new { result.ExecutionId, outputs = Outputs(result) });
 });
-
-// ── Metrics ──
-
-app.MapGet("/api/metrics", async (IStateStore stateStore) =>
+app.MapGet("/api/metrics", async (IStateStore store, HttpContext context) =>
 {
-    var recent = await stateStore.ListExecutionsAsync(limit: 100);
-    var running = recent.Count(e => e.Status == Elwood.Pipeline.State.ExecutionStatus.Running);
-    var completed = recent.Count(e => e.Status == Elwood.Pipeline.State.ExecutionStatus.Completed);
-    var failed = recent.Count(e => e.Status == Elwood.Pipeline.State.ExecutionStatus.Failed);
-    return Results.Ok(new { running, completed, failed, total = recent.Count });
+    var recent = (await store.ListExecutionsAsync(limit: 100)).Where(e => CanReadExecution(context, e)).ToList();
+    return Results.Ok(new { running = recent.Count(e => e.Status == Elwood.Pipeline.State.ExecutionStatus.Running),
+        completed = recent.Count(e => e.Status == Elwood.Pipeline.State.ExecutionStatus.Completed),
+        failed = recent.Count(e => e.Status == Elwood.Pipeline.State.ExecutionStatus.Failed), total = recent.Count });
 });
-
 app.Run();
+
+static string Expected(HttpRequest request) => request.Headers.IfMatch.ToString().Trim('"');
+static bool CanReadExecution(HttpContext context, Elwood.Pipeline.State.ExecutionState execution)
+{
+    if (execution.Deleting || execution.ExpiresAt <= DateTime.UtcNow) return false;
+    var identity = ManagementSecurity.Identity(context);
+    return identity.Can("read") && (execution.PipelineId is null ? identity.Pipelines.Contains("*") : identity.Can("read", execution.PipelineId));
+}
+static async Task<Elwood.Pipeline.State.ExecutionState> RecoveryExecution(string id, IStateStore store, HttpContext context)
+{
+    var state = await store.GetExecutionAsync(id);
+    if (state is null || !CanReadExecution(context, state)) throw new KeyNotFoundException("Execution not found.");
+    if (!ManagementSecurity.Identity(context).Can("recover", state.PipelineId)) throw new UnauthorizedAccessException("Pipeline recovery permission required.");
+    return state;
+}
+static string ExecutionJson(Elwood.Core.Abstractions.IElwoodValue value) => value is JsonNodeValue node ? node.Node?.ToJsonString() ?? "null" : JsonSerializer.Serialize(value.GetStringValue());
+static ISecretProvider ScopedSecrets(HttpContext context, string id, bool test) => context.RequestServices.GetRequiredService<ManagementSecurity>()
+    .Secrets(context.RequestServices.GetRequiredService<ISecretProvider>(), id, test);
+static SyncExecutor Executor(HttpContext context, string id, bool isTest, LocalTestSession? testSession = null) => new(
+    testSession: testSession,
+    secretProvider: testSession?.Mode == "mock" ? null : ScopedSecrets(context, id, isTest), stateStore: context.RequestServices.GetRequiredService<IStateStore>(),
+    documentStore: context.RequestServices.GetRequiredService<IDocumentStore>(),
+    sourceConnectors: context.RequestServices.GetRequiredService<RuntimeConnectors>().Sources(id, isTest), destinationConnectors: context.RequestServices.GetRequiredService<RuntimeConnectors>().Destinations(id, isTest),
+    logger: context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger<SyncExecutor>());
+static List<string> RuntimeErrors(ParsedPipeline parsed)
+{
+    var errors = FileSystemDeploymentStore.ValidationErrors(parsed);
+    if (parsed.Config.Sources.Any(s => s.From?.FileShare is not null) || parsed.Config.Outputs.Any(o => o.Destinations?.FileShare?.Count > 0))
+        errors.Add("Host filesystem connectors are disabled in the management runtime. Use the trusted CLI for local files.");
+    return errors;
+}
+static Dictionary<string, object?> Outputs(PipelineResult result) => result.Outputs.ToDictionary(kv => kv.Key,
+    kv => kv.Value is JsonNodeValue node ? JsonSerializer.Deserialize<object>(node.Node?.ToJsonString() ?? "null") : (object?)kv.Value.GetStringValue());
+record RevisionRequest(string ExpectedRevisionId);
+record DraftRequest(PipelineContent? Content);
+record ExecutionRequest(string PipelineId, JsonElement Payload, PipelineContent? Content, string? ExpectedRevisionId, string? TestMode, MockFixtures? Mocks);
+record ResumeRequest(bool AcknowledgeUncertain = false);
+record ReplayRequest(string? RevisionId = null);

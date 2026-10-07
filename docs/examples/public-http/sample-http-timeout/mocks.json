@@ -1,0 +1,8 @@
+{
+  "sources": {
+    "remote": {
+      "error": "Simulated HTTP timeout after 1000 ms"
+    }
+  },
+  "outputs": {}
+}

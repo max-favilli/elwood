@@ -1,0 +1,10 @@
+{
+  "success": true,
+  "outputs": {
+    "delivery": {
+      "orderId": "DEMO-42",
+      "cartId": 51,
+      "cartTotal": 19.98
+    }
+  }
+}

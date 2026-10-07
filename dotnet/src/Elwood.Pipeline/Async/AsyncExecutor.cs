@@ -1,549 +1,367 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Elwood.Core;
 using Elwood.Core.Abstractions;
 using Elwood.Json;
 using Elwood.Pipeline.Connectors;
+using Elwood.Pipeline.Registry;
 using Elwood.Pipeline.Schema;
 using Elwood.Pipeline.Secrets;
 using Elwood.Pipeline.State;
 using Elwood.Pipeline.Storage;
+using Elwood.Pipeline.Testing;
 
 namespace Elwood.Pipeline.Async;
 
 /// <summary>
-/// Async Executor — processes pipelines one step per invocation, designed for
-/// queue-triggered Functions where each invocation is short-lived.
+/// Durable step runner. Persisted pending steps are the scheduling intent; queue messages
+/// are replaceable wake-up hints. One execution lock covers a complete attempt, including
+/// external effects and its checkpoint. Independent executions can run concurrently.
 /// </summary>
-/// <remarks>
-/// Unlike <see cref="SyncExecutor"/> (processes everything in one call), the
-/// AsyncExecutor works step-by-step:
-///
-/// 1. <see cref="StartAsync"/> (called by the HTTP trigger):
-///    Creates execution state, stores trigger payload + pipeline content in
-///    <see cref="IDocumentStore"/>, queues the first source steps.
-///
-/// 2. <see cref="ExecuteStepAsync"/> (called by the queue trigger):
-///    Processes one source or one output. After completing a source, checks if
-///    all sources in the current stage are done — if so, queues the next stage
-///    (or outputs if it was the last stage).
-///
-/// Fan-in uses idempotent steps instead of atomic counters: after completing a
-/// source, all sources in the stage are checked. If another worker also completes
-/// a source and sees "all done", both queue the next stage — but duplicate messages
-/// are caught by the idempotency check at the top of ExecuteStepAsync (if a source
-/// is already Completed, it's a no-op). This is the standard at-least-once
-/// processing pattern for queue-based systems.
-/// </remarks>
 public sealed class AsyncExecutor
 {
-    private readonly ElwoodEngine _engine;
-    private readonly JsonNodeValueFactory _factory;
-    private readonly StringResolver _stringResolver;
-    private readonly IStateStore _stateStore;
-    private readonly IDocumentStore _documentStore;
-    private readonly IStepQueue _stepQueue;
-    private readonly List<ISourceConnector> _sourceConnectors;
-    private readonly List<IDestinationConnector> _destinationConnectors;
+    private readonly IRecoverableStateStore _states;
+    private readonly IDocumentStore _documents;
+    private readonly IStepQueue _queue;
+    private readonly ExecutionOperations _operations;
+    private readonly LocalTestSession? _test;
+    private readonly TimeProvider _time;
+    private DateTime Now => _time.GetUtcNow().UtcDateTime;
 
-    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false };
-
-    public AsyncExecutor(
-        IStateStore stateStore,
-        IDocumentStore documentStore,
-        IStepQueue stepQueue,
-        ISecretProvider? secretProvider = null,
-        IEnumerable<ISourceConnector>? sourceConnectors = null,
-        IEnumerable<IDestinationConnector>? destinationConnectors = null)
+    public AsyncExecutor(IStateStore stateStore, IDocumentStore documentStore, IStepQueue stepQueue,
+        ISecretProvider? secretProvider = null, IEnumerable<ISourceConnector>? sourceConnectors = null,
+        IEnumerable<IDestinationConnector>? destinationConnectors = null, ElwoodEngine? engine = null,
+        LocalTestSession? testSession = null, TimeProvider? timeProvider = null)
     {
-        _factory = JsonNodeValueFactory.Instance;
-        _engine = new ElwoodEngine(_factory);
-        _stringResolver = new StringResolver(secretProvider);
-        _stateStore = stateStore;
-        _documentStore = documentStore;
-        _stepQueue = stepQueue;
-        _sourceConnectors = sourceConnectors?.ToList() ?? [new HttpSourceConnector(), new FileSourceConnector()];
-        _destinationConnectors = destinationConnectors?.ToList() ?? [new HttpDestinationConnector(), new FileDestinationConnector()];
+        _states = stateStore as IRecoverableStateStore ?? throw new ArgumentException("Queued execution requires a recoverable state store with cross-worker exclusion.");
+        _documents = documentStore; _queue = stepQueue; _test = testSession; _time = timeProvider ?? TimeProvider.System;
+        _operations = new(stateStore, documentStore, secretProvider, sourceConnectors, destinationConnectors, engine, testSession);
     }
 
-    /// <summary>
-    /// Start an async pipeline execution. Creates state, stores payload + pipeline
-    /// content, queues the first source steps. Returns the execution ID.
-    /// Called by the HTTP trigger function.
-    /// </summary>
-    public async Task<string> StartAsync(
-        ParsedPipeline pipeline,
-        IElwoodValue triggerPayload,
-        string? triggerSourceName = null)
+    public async Task<string> StartAsync(ParsedPipeline pipeline, IElwoodValue triggerPayload, string? triggerSourceName = null,
+        string? idempotencyKey = null, string? replayOf = null, bool isTest = false, IElwoodValue? triggerMetadata = null, bool durable = true)
     {
-        var executionId = Guid.NewGuid().ToString();
-        var pipelineId = pipeline.Config.Name ?? "unknown";
-
-        // Resolve stages up-front so we know the execution plan
-        var stages = DependencyResolver.ResolveStages(pipeline.Config.Sources);
-
-        // Create execution state
-        var execState = new ExecutionState
+        pipeline = PipelineSnapshot.Detach(pipeline);
+        if (idempotencyKey is { Length: > 200 }) throw new ArgumentException("Idempotency-Key must be at most 200 characters.");
+        var id = string.IsNullOrWhiteSpace(idempotencyKey) ? Guid.NewGuid().ToString() :
+            "event-" + Hash((pipeline.PipelineId ?? pipeline.Config.Name) + "\n" + triggerSourceName + "\n" + idempotencyKey);
+        await using var claim = await _states.TryLockAsync(id) ?? throw new RecoveryConflictException("This execution is busy. Retry the request.");
+        var input = ExecutionOperations.Json(triggerPayload);
+        var existing = await _states.GetExecutionAsync(id);
+        if (existing is not null)
         {
-            ExecutionId = executionId,
-            PipelineName = pipelineId,
-            Status = ExecutionStatus.Running,
+            if (existing.Deleting || existing.ExpiresAt <= Now) throw new RecoveryConflictException("The idempotency record is expiring. Use a new event key.");
+            if (existing.InputHash != Hash(input)) throw new RecoveryConflictException("Idempotency-Key was already used with a different payload.");
+            return id;
+        }
+        var state = new ExecutionState
+        {
+            ExecutionId = id, PipelineId = pipeline.PipelineId, RevisionId = pipeline.RevisionId,
+            PipelineName = pipeline.Config.Name ?? "unknown", Status = ExecutionStatus.Running, StartedAt = Now,
+            Durable = durable && !isTest && _test is null, IsTest = isTest || _test is not null, TestMode = _test?.Mode,
+            TriggerSourceName = triggerSourceName, ReplayOf = replayOf, InputHash = Hash(input),
+            RetentionSeconds = pipeline.Config.TtlSeconds ?? 30 * 24 * 60 * 60,
         };
-        // Initialize all source and output steps as Pending
-        foreach (var source in pipeline.Config.Sources)
-            execState.Sources[source.Name] = new SourceStepState { SourceName = source.Name };
-        foreach (var output in pipeline.Config.Outputs)
-            execState.Outputs[output.Name] = new OutputStepState { OutputName = output.Name };
-
-        await _stateStore.SaveExecutionAsync(execState);
-
-        // Store trigger payload so queue workers can load it
-        var payloadJson = SerializeValue(triggerPayload);
-        await _documentStore.StoreAsync($"exec/{executionId}/trigger", payloadJson);
-
-        // Store pipeline content (YAML + scripts) so workers don't need a git clone
-        var pipelineContentJson = JsonSerializer.Serialize(new PipelineContentDto
+        foreach (var source in pipeline.Config.Sources) state.Sources[source.Name] = new() { SourceName = source.Name };
+        foreach (var output in pipeline.Config.Outputs) state.Outputs[output.Name] = new() { OutputName = output.Name };
+        // All recovery inputs exist before the atomic state write makes this accepted work visible.
+        state.TriggerRef = await _documents.StoreAsync($"exec/{id}/trigger", input);
+        state.PipelineSnapshotRef = await _documents.StoreAsync($"exec/{id}/pipeline", JsonSerializer.Serialize(new PipelineContentDto
         {
-            Yaml = pipeline.Config,
-            Scripts = pipeline.Scripts.ToDictionary(kvp => kvp.Key, kvp => kvp.Value),
-            TriggerSourceName = triggerSourceName,
-        }, JsonOpts);
-        await _documentStore.StoreAsync($"exec/{executionId}/pipeline", pipelineContentJson);
-
-        // Store the stage plan (list of source names per stage)
-        var stagePlan = stages.Select(s => s.Select(src => src.Name).ToList()).ToList();
-        await _documentStore.StoreAsync($"exec/{executionId}/stages",
-            JsonSerializer.Serialize(stagePlan, JsonOpts));
-
-        // Queue stage 0 sources
-        var messages = stages[0].Select(src => new StepMessage
-        {
-            ExecutionId = executionId,
-            PipelineId = pipelineId,
-            Type = StepType.Source,
-            StepName = src.Name,
-            StageIndex = 0,
-        });
-        await _stepQueue.EnqueueBatchAsync(messages);
-
-        return executionId;
+            PipelineId = pipeline.PipelineId, RevisionId = pipeline.RevisionId, Content = pipeline.Content,
+            Yaml = pipeline.Config, Scripts = new(pipeline.Scripts), TriggerMetadata = triggerMetadata is null ? null : ExecutionOperations.Json(triggerMetadata),
+        }));
+        List<List<string>> stages = [];
+        var errors = pipeline.Errors.Concat(PipelineParser.ValidateExecutionConfig(pipeline.Config)).ToList();
+        try { stages = DependencyResolver.ResolveStages(pipeline.Config.Sources).Select(stage => stage.Select(s => s.Name).ToList()).ToList(); }
+        catch (InvalidOperationException ex) { errors.Add(ex.Message); }
+        await _documents.StoreAsync($"exec/{id}/stages", JsonSerializer.Serialize(stages));
+        if (errors.Count > 0) { state.Errors.AddRange(errors); Terminal(state, ExecutionStatus.Failed); }
+        await Save(state);
+        // Failure to publish cannot undo acceptance. A recovery scan will find the saved pending steps.
+        if (errors.Count == 0) await Notify(Ready(state, stages));
+        return id;
     }
 
-    /// <summary>
-    /// Process one step (source or output). Called by the queue trigger function.
-    /// </summary>
     public async Task ExecuteStepAsync(StepMessage message)
     {
-        switch (message.Type)
-        {
-            case StepType.Source:
-                await ProcessSourceStepAsync(message);
-                break;
-            case StepType.Output:
-                await ProcessOutputStepAsync(message);
-                break;
-        }
-    }
-
-    // ── source step ──
-
-    private async Task ProcessSourceStepAsync(StepMessage message)
-    {
-        var state = await _stateStore.GetExecutionAsync(message.ExecutionId);
-        if (state is null) return;
-
-        // Idempotency: skip if already completed (duplicate message)
-        if (state.Sources.TryGetValue(message.StepName, out var existing) &&
-            existing.Status == ExecutionStatus.Completed)
-            return;
-
-        // Mark running
-        await _stateStore.UpdateSourceStepAsync(message.ExecutionId, message.StepName,
-            new SourceStepState
-            {
-                SourceName = message.StepName,
-                Status = ExecutionStatus.Running,
-                StartedAt = DateTime.UtcNow,
-            });
-
-        // Load pipeline content + trigger payload + current IDM
-        var pipelineDto = await LoadPipelineContentAsync(message.ExecutionId);
-        if (pipelineDto is null) return;
-
-        var sourceConfig = pipelineDto.Yaml.Sources.FirstOrDefault(s => s.Name == message.StepName);
-        if (sourceConfig is null) return;
-
-        var idm = await LoadIdmAsync(message.ExecutionId);
-
+        await using var claim = await _states.TryLockAsync(message.ExecutionId);
+        if (claim is null) return;
+        var state = await _states.GetExecutionAsync(message.ExecutionId);
+        if (state is null || state.Deleting || state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) return;
+        var step = Step(state, message);
+        if (step is null || step.Status == ExecutionStatus.Completed) return;
+        if (step.NextAttemptAt > Now) return;
+        PipelineContentDto? pipeline = null;
+        IElwoodValue idm = JsonNodeValueFactory.Instance.CreateObject([]);
+        var attempt = new StepAttempt { Number = step.Attempts.Count + 1, StartedAt = Now };
         try
         {
-            IElwoodValue payload;
-            SourceFetchResult? fetchResult = null;
-
-            // Determine if this is the trigger source or a pull source
-            var isTrigger = sourceConfig.Name == pipelineDto.TriggerSourceName ||
-                            (pipelineDto.TriggerSourceName is null &&
-                             sourceConfig.Trigger is "http" or "http-request" or "queue");
-
-            if (isTrigger)
+            pipeline = await Load(state);
+            var stages = Stages(pipeline);
+            if (step.Status == ExecutionStatus.Running)
             {
-                var triggerJson = await _documentStore.GetAsync($"exec/{message.ExecutionId}/trigger");
-                payload = triggerJson is not null ? _factory.Parse(triggerJson) : _factory.CreateObject([]);
+                RecoverInterrupted(state, step, Policy(pipeline, message));
+                await Save(state);
+                if (step.Status is ExecutionStatus.AwaitingReview or ExecutionStatus.Failed || step.NextAttemptAt > Now) return;
             }
-            else if (sourceConfig.From is not null)
+            if (!Ready(state, stages).Any(m => m.Type == message.Type && m.StepName == message.StepName)) return;
+            step.Status = ExecutionStatus.Running; step.StartedAt ??= Now; step.CompletedAt = null;
+            step.NextAttemptAt = null; step.Errors.Clear(); step.Diagnostics.Clear(); step.OutcomeUncertain = false;
+            step.Attempts.Add(attempt); state.Status = ExecutionStatus.Running; state.CompletedAt = null; state.ExpiresAt = null;
+            await Save(state);
+            if (message.Type == StepType.Source)
             {
-                var connector = _sourceConnectors.FirstOrDefault(c => c.CanHandle(sourceConfig.From));
-                if (connector is null)
-                    throw new InvalidOperationException($"No connector for source '{message.StepName}'");
-
-                // Evaluate POST/PUT body expression against the IDM if present
-                if (sourceConfig.From.Http is not null && !string.IsNullOrWhiteSpace(sourceConfig.From.Http.Body))
-                {
-                    var bodyBindings = new Dictionary<string, IElwoodValue> { ["$idm"] = idm };
-                    var bodyResult = EvaluateReference(sourceConfig.From.Http.Body, idm, bodyBindings, pipelineDto.Scripts);
-                    if (bodyResult is not null)
-                        sourceConfig.From.Http.BodyContent = SerializeValue(bodyResult);
-                }
-
-                // Resolve inline expressions and secret references in HTTP config
-                if (sourceConfig.From.Http is not null)
-                {
-                    sourceConfig.From.Http.Url = _stringResolver.Resolve(sourceConfig.From.Http.Url, idm);
-                    if (!string.IsNullOrEmpty(sourceConfig.From.Http.User))
-                        sourceConfig.From.Http.User = _stringResolver.Resolve(sourceConfig.From.Http.User, idm);
-                    if (!string.IsNullOrEmpty(sourceConfig.From.Http.Password))
-                        sourceConfig.From.Http.Password = _stringResolver.Resolve(sourceConfig.From.Http.Password, idm);
-                }
-
-                fetchResult = await connector.FetchAsync(sourceConfig.From, idm);
-                payload = fetchResult.ContentType is "csv" or "txt" or "xml" or "text"
-                    ? _factory.CreateString(fetchResult.Content)
-                    : _factory.Parse(fetchResult.Content);
+                var stageIndex = stages.FindIndex(stage => stage.Contains(message.StepName));
+                idm = await _operations.Assemble(state, stages.Take(stageIndex).SelectMany(s => s));
+                await _operations.Source(state, pipeline, pipeline.Yaml.Sources.Single(s => s.Name == message.StepName), idm, attempt);
             }
             else
             {
-                throw new InvalidOperationException(
-                    $"Source '{message.StepName}' has no trigger data and no pull configuration");
+                idm = await _operations.Read(state.IdmRef, "IDM");
+                await _operations.Output(state, pipeline, pipeline.Yaml.Outputs.Single(o => o.Name == message.StepName), idm, attempt);
             }
-
-            // Apply source map
-            if (!string.IsNullOrWhiteSpace(sourceConfig.Map))
-            {
-                var sourceMetadata = fetchResult is not null
-                    ? CreatePullMetadata(sourceConfig, fetchResult)
-                    : CreateSourceMetadata(sourceConfig);
-                var bindings = new Dictionary<string, IElwoodValue>
-                {
-                    ["$source"] = sourceMetadata,
-                    ["$idm"] = idm,
-                };
-                var mapped = EvaluateReference(sourceConfig.Map, payload, bindings, pipelineDto.Scripts);
-                if (mapped is not null) payload = mapped;
-            }
-
-            // Merge into IDM and store
-            idm = MergeIntoIdm(idm, sourceConfig.Name, payload);
-            await _documentStore.StoreAsync($"exec/{message.ExecutionId}/idm", SerializeValue(idm));
-
-            // Mark completed
-            await _stateStore.UpdateSourceStepAsync(message.ExecutionId, message.StepName,
-                new SourceStepState
-                {
-                    SourceName = message.StepName,
-                    Status = ExecutionStatus.Completed,
-                    StartedAt = existing?.StartedAt ?? DateTime.UtcNow,
-                    CompletedAt = DateTime.UtcNow,
-                });
+            attempt.Status = "Completed"; attempt.CompletedAt = Now;
+            attempt.Diagnostics = [.. step.Diagnostics]; step.Status = ExecutionStatus.Completed; step.CompletedAt = Now;
+            await Save(state);
+            await Advance(state, pipeline);
         }
         catch (Exception ex)
         {
-            await _stateStore.UpdateSourceStepAsync(message.ExecutionId, message.StepName,
-                new SourceStepState
-                {
-                    SourceName = message.StepName,
-                    Status = ExecutionStatus.Failed,
-                    Errors = [ex.Message],
-                });
-            return; // don't advance the pipeline on failure
-        }
-
-        // Fan-in: check if all sources in this stage are complete → advance
-        await TryAdvanceAsync(message);
-    }
-
-    // ── output step ──
-
-    private async Task ProcessOutputStepAsync(StepMessage message)
-    {
-        var state = await _stateStore.GetExecutionAsync(message.ExecutionId);
-        if (state is null) return;
-
-        // Idempotency
-        if (state.Outputs.TryGetValue(message.StepName, out var existing) &&
-            existing.Status == ExecutionStatus.Completed)
-            return;
-
-        var pipelineDto = await LoadPipelineContentAsync(message.ExecutionId);
-        if (pipelineDto is null) return;
-
-        var outputConfig = pipelineDto.Yaml.Outputs.FirstOrDefault(o => o.Name == message.StepName);
-        if (outputConfig is null) return;
-
-        var idm = await LoadIdmAsync(message.ExecutionId);
-
-        try
-        {
-            IElwoodValue data = idm;
-            IElwoodValue? outputArray = null;
-
-            // Apply path filter
-            if (!string.IsNullOrWhiteSpace(outputConfig.Path))
+            if (!step.Attempts.Contains(attempt)) step.Attempts.Add(attempt);
+            attempt.CompletedAt = Now; attempt.Error = ex.Message; attempt.Status = "Failed"; attempt.Diagnostics = [.. step.Diagnostics];
+            step.Errors = [$"{message.Type} '{message.StepName}': {ex.Message}"]; step.CompletedAt = Now;
+            var policy = pipeline is null ? null : Policy(pipeline, message);
+            var status = ex is HttpRequestException http ? (int?)http.StatusCode : (ex as ConnectorFailure)?.StatusCode;
+            var transport = ex is HttpRequestException or OperationCanceledException || ex is ConnectorFailure && status is null;
+            var uncertain = attempt.ExternalCallStarted && attempt.MayHaveWritten && status is null &&
+                (transport || ex is IOException);
+            if (ex is ConnectorException classified) uncertain = classified.OutcomeUncertain;
+            step.OutcomeUncertain = uncertain;
+            var retryable = status is not null ? policy?.StatusCodes.Contains(status.Value) == true : transport && policy?.TransportErrors == true;
+            if (ex is ConnectorException failure) retryable = failure.Retryable && policy?.TransportErrors == true;
+            if (uncertain && policy?.AllowUncertainWrites != true)
             {
-                var filtered = EvaluateReference(outputConfig.Path, idm,
-                    new Dictionary<string, IElwoodValue> { ["$idm"] = idm }, pipelineDto.Scripts);
-                if (filtered is not null) { outputArray = filtered; data = filtered; }
+                step.Status = ExecutionStatus.AwaitingReview; attempt.Status = "Uncertain";
+                state.Errors = [.. step.Errors, "The external write may have completed. Review it before resuming."];
+                Terminal(state, ExecutionStatus.AwaitingReview);
             }
-
-            // Apply map
-            if (!string.IsNullOrWhiteSpace(outputConfig.Map))
+            else if (retryable && CanRetry(step, policy)) ScheduleRetry(state, step, policy!);
+            else if (retryable && policy?.Mode == "manual")
+            { step.Status = ExecutionStatus.AwaitingReview; state.Errors = [.. step.Errors, "The pipeline retry policy requires operator approval."]; Terminal(state, ExecutionStatus.AwaitingReview); }
+            else { step.Status = ExecutionStatus.Failed; state.Errors = [.. step.Errors]; Terminal(state, ExecutionStatus.Failed); }
+            if (pipeline is not null && state.Status is ExecutionStatus.Failed or ExecutionStatus.AwaitingReview)
             {
-                var mapBindings = new Dictionary<string, IElwoodValue> { ["$idm"] = idm };
-                if (outputArray is not null) mapBindings["$output"] = outputArray;
-                var mapped = EvaluateReference(outputConfig.Map, data, mapBindings, pipelineDto.Scripts);
-                if (mapped is not null) data = mapped;
+                try { await _operations.FailureResponse(state, pipeline, message.StepName, message.Type.ToString().ToLowerInvariant(), idm); }
+                catch (Exception responseError) { state.Errors.Add("Failure response: " + responseError.Message); }
             }
+            attempt.Diagnostics = [.. step.Diagnostics];
+            await Save(state);
+        }
+    }
 
-            // Store the output
-            await _documentStore.StoreAsync(
-                $"exec/{message.ExecutionId}/output/{message.StepName}",
-                SerializeValue(data));
+    private async Task Advance(ExecutionState state, PipelineContentDto pipeline)
+    {
+        var stages = Stages(pipeline);
+        if (state.Sources.Values.All(s => s.Status == ExecutionStatus.Completed) && state.IdmRef is null)
+        {
+            var idm = await _operations.Assemble(state, stages.SelectMany(s => s));
+            state.IdmRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/idm", ExecutionOperations.Json(idm));
+        }
+        if (state.Sources.Values.All(s => s.Status == ExecutionStatus.Completed) && state.Outputs.Values.All(s => s.Status == ExecutionStatus.Completed))
+        {
+            state.ResponseStatusCode = pipeline.Yaml.ResponseOutput is { } response ? state.Outputs[response.Name].ResponseStatusCode : null;
+            Terminal(state, ExecutionStatus.Completed);
+        }
+        await Save(state);
+        if (state.Status is ExecutionStatus.Running or ExecutionStatus.Retrying) await Notify(Ready(state, stages));
+    }
 
-            // Deliver to destinations
-            var errors = new List<string>();
-            if (outputConfig.Destinations is not null)
+    /// <summary>Recover dropped queue hints, checkpoint-to-publish gaps and interrupted attempts.</summary>
+    public async Task RecoverAsync(CancellationToken cancellationToken = default)
+    {
+        foreach (var snapshot in await _states.ListAllAsync())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!snapshot.Durable || snapshot.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview || snapshot.Deleting) continue;
+            await using var claim = await _states.TryLockAsync(snapshot.ExecutionId);
+            if (claim is null) continue;
+            var state = await _states.GetExecutionAsync(snapshot.ExecutionId);
+            if (state is null || state.Deleting || state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) continue;
+            try
             {
-                var serialized = SerializeValue(data);
-                await DeliverToDestinationsAsync(outputConfig, serialized, outputConfig.ContentType, errors);
+                var pipeline = await Load(state);
+                foreach (var (name, step) in state.Sources.Where(s => s.Value.Status == ExecutionStatus.Running))
+                    RecoverInterrupted(state, step, pipeline.Yaml.Sources.Single(s => s.Name == name).Retry);
+                foreach (var (name, step) in state.Outputs.Where(s => s.Value.Status == ExecutionStatus.Running))
+                    RecoverInterrupted(state, step, pipeline.Yaml.Outputs.Single(s => s.Name == name).Retry);
+                if (state.Status is ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) await Save(state);
+                else await Advance(state, pipeline);
             }
-
-            await _stateStore.UpdateOutputStepAsync(message.ExecutionId, message.StepName,
-                new OutputStepState
-                {
-                    OutputName = message.StepName,
-                    Status = errors.Count > 0 ? ExecutionStatus.Failed : ExecutionStatus.Completed,
-                    CompletedAt = DateTime.UtcNow,
-                    Errors = errors,
-                });
+            catch (Exception ex) { state.Errors.Add("Recovery: " + ex.Message); Terminal(state, ExecutionStatus.Failed); await Save(state); }
         }
-        catch (Exception ex)
-        {
-            await _stateStore.UpdateOutputStepAsync(message.ExecutionId, message.StepName,
-                new OutputStepState
-                {
-                    OutputName = message.StepName,
-                    Status = ExecutionStatus.Failed,
-                    Errors = [ex.Message],
-                });
-        }
-
-        // Check if all outputs are complete → mark execution done
-        await TryCompleteExecutionAsync(message.ExecutionId);
     }
 
-    // ── fan-in + advancement ──
-
-    private async Task TryAdvanceAsync(StepMessage message)
+    private void RecoverInterrupted(ExecutionState state, StepState step, RetryPolicy? policy)
     {
-        var state = await _stateStore.GetExecutionAsync(message.ExecutionId);
-        if (state is null) return;
-
-        // Load stage plan
-        var stagesJson = await _documentStore.GetAsync($"exec/{message.ExecutionId}/stages");
-        if (stagesJson is null) return;
-        var stages = JsonSerializer.Deserialize<List<List<string>>>(stagesJson, JsonOpts)!;
-
-        // Check if all sources in the current stage are complete
-        if (message.StageIndex >= stages.Count) return;
-        var currentStage = stages[message.StageIndex];
-        var allDone = currentStage.All(name =>
-            state.Sources.TryGetValue(name, out var s) && s.Status == ExecutionStatus.Completed);
-
-        if (!allDone) return;
-
-        var nextStageIndex = message.StageIndex + 1;
-        if (nextStageIndex < stages.Count)
+        var attempt = step.Attempts.LastOrDefault();
+        if (attempt is not null)
         {
-            // Queue next stage's sources
-            var messages = stages[nextStageIndex].Select(name => new StepMessage
+            attempt.Status = "Interrupted"; attempt.CompletedAt = Now; attempt.Error = "Worker stopped before checkpointing the step.";
+        }
+        var uncertain = attempt?.ExternalCallStarted == true && attempt.MayHaveWritten;
+        step.OutcomeUncertain = uncertain;
+        if (uncertain && policy?.AllowUncertainWrites != true)
+        {
+            step.Status = ExecutionStatus.AwaitingReview; step.Errors = ["An interrupted external write may have completed. Review before resuming."];
+            state.Errors = [.. step.Errors]; Terminal(state, ExecutionStatus.AwaitingReview);
+        }
+        else if (attempt?.ExternalCallStarted == true)
+        {
+            if (CanRetry(step, policy) && policy!.TransportErrors) ScheduleRetry(state, step, policy);
+            else if (policy is { Mode: "manual", TransportErrors: true })
+            { step.Status = ExecutionStatus.AwaitingReview; step.Errors = ["Interrupted connector call; the pipeline policy requires operator approval."]; state.Errors = [.. step.Errors]; Terminal(state, ExecutionStatus.AwaitingReview); }
+            else { step.Status = ExecutionStatus.Failed; step.Errors = ["Interrupted connector call; automatic retry is not enabled or is exhausted."]; state.Errors = [.. step.Errors]; Terminal(state, ExecutionStatus.Failed); }
+        }
+        else { step.Status = ExecutionStatus.Pending; step.NextAttemptAt = null; } // Pure computation/checkpoint recovery, no external call to repeat.
+    }
+
+    public async Task ResumeAsync(string id, bool acknowledgeUncertain = false)
+    {
+        await using var claim = await _states.TryLockAsync(id) ?? throw new RecoveryConflictException("An attempt is still running.");
+        var state = await _states.GetExecutionAsync(id) ?? throw new KeyNotFoundException("Execution not found.");
+        if (!state.Durable || state.IsTest || state.Deleting || state.ExpiresAt <= Now) throw new RecoveryConflictException("This execution cannot be resumed.");
+        if (state.Status is not (ExecutionStatus.Failed or ExecutionStatus.AwaitingReview)) throw new RecoveryConflictException("Only failed or awaiting-review executions can be resumed.");
+        if (state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values).Any(s => s.OutcomeUncertain) && !acknowledgeUncertain)
+            throw new RecoveryConflictException("Confirm that you reviewed the uncertain external write before resuming.");
+        var pipeline = await Load(state);
+        foreach (var step in state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values).Where(s => s.Status is ExecutionStatus.Failed or ExecutionStatus.AwaitingReview))
+        {
+            step.Status = ExecutionStatus.Pending; step.NextAttemptAt = null; step.CompletedAt = null; step.RetryBase = step.Attempts.Count;
+            step.OutcomeUncertain = false; step.Errors.Clear();
+        }
+        state.Errors.Clear(); state.Status = ExecutionStatus.Running; state.CompletedAt = null; state.ExpiresAt = null; state.FailureResponseRef = null; state.ResponseStatusCode = null;
+        await Save(state);
+        await Notify(Ready(state, Stages(pipeline)));
+    }
+
+    public async Task<string> ReplayAsync(string id, ParsedPipeline? revision = null)
+    {
+        await using var claim = await _states.TryLockAsync(id) ?? throw new RecoveryConflictException("An attempt is still running.");
+        var state = await _states.GetExecutionAsync(id) ?? throw new KeyNotFoundException("Execution not found.");
+        if (!state.Durable || state.IsTest || state.Deleting || state.ExpiresAt <= Now || state.Status is ExecutionStatus.Running or ExecutionStatus.Pending or ExecutionStatus.Retrying)
+            throw new RecoveryConflictException("Only retained terminal executions can be replayed.");
+        var original = await Load(state);
+        if (revision is not null && revision.PipelineId != state.PipelineId) throw new ArgumentException("Replay revision must belong to the original pipeline.");
+        var pipeline = revision ?? new ParsedPipeline(original.Yaml, ".", original.Scripts, [])
+            { PipelineId = original.PipelineId, RevisionId = original.RevisionId, Content = original.Content };
+        if (state.TriggerSourceName is not null && !pipeline.Config.Sources.Any(s => s.Name == state.TriggerSourceName && s.Trigger is "http" or "http-request" or "queue"))
+            throw new ArgumentException("The replay revision must retain the original trigger source.");
+        return await StartAsync(pipeline, await _operations.Read(state.TriggerRef, "trigger payload"), state.TriggerSourceName, replayOf: id,
+            triggerMetadata: original.TriggerMetadata is null ? null : JsonNodeValueFactory.Instance.Parse(original.TriggerMetadata));
+    }
+
+    public async Task<int> PruneAsync(CancellationToken cancellationToken = default)
+    {
+        if (_documents is not IExecutionDocumentStore documents) throw new InvalidOperationException("Retention requires execution-scoped document deletion.");
+        var deleted = 0;
+        var failures = new List<Exception>();
+        foreach (var snapshot in await _states.ListAllAsync())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!snapshot.Deleting && !(snapshot.ExpiresAt <= Now)) continue;
+            try
             {
-                ExecutionId = message.ExecutionId,
-                PipelineId = message.PipelineId,
-                Type = StepType.Source,
-                StepName = name,
-                StageIndex = nextStageIndex,
-            });
-            await _stepQueue.EnqueueBatchAsync(messages);
-        }
-        else
-        {
-            // All sources complete → queue output steps
-            var pipelineDto = await LoadPipelineContentAsync(message.ExecutionId);
-            if (pipelineDto is null) return;
-
-            var outputMessages = pipelineDto.Yaml.Outputs.Select(o => new StepMessage
-            {
-                ExecutionId = message.ExecutionId,
-                PipelineId = message.PipelineId,
-                Type = StepType.Output,
-                StepName = o.Name,
-            });
-            await _stepQueue.EnqueueBatchAsync(outputMessages);
-        }
-    }
-
-    private async Task TryCompleteExecutionAsync(string executionId)
-    {
-        var state = await _stateStore.GetExecutionAsync(executionId);
-        if (state is null) return;
-
-        var allOutputsDone = state.Outputs.Values.All(o =>
-            o.Status is ExecutionStatus.Completed or ExecutionStatus.Failed);
-        if (!allOutputsDone) return;
-
-        var anyFailed = state.Outputs.Values.Any(o => o.Status == ExecutionStatus.Failed) ||
-                        state.Sources.Values.Any(s => s.Status == ExecutionStatus.Failed);
-
-        state.Status = anyFailed ? ExecutionStatus.Failed : ExecutionStatus.Completed;
-        state.CompletedAt = DateTime.UtcNow;
-        await _stateStore.SaveExecutionAsync(state);
-    }
-
-    // ── shared helpers (extracted from SyncExecutor patterns) ──
-
-    private async Task<PipelineContentDto?> LoadPipelineContentAsync(string executionId)
-    {
-        var json = await _documentStore.GetAsync($"exec/{executionId}/pipeline");
-        return json is not null ? JsonSerializer.Deserialize<PipelineContentDto>(json, JsonOpts) : null;
-    }
-
-    private async Task<IElwoodValue> LoadIdmAsync(string executionId)
-    {
-        var json = await _documentStore.GetAsync($"exec/{executionId}/idm");
-        return json is not null ? _factory.Parse(json) : _factory.CreateObject([]);
-    }
-
-    private IElwoodValue? EvaluateReference(string reference, IElwoodValue input,
-        Dictionary<string, IElwoodValue>? bindings, IReadOnlyDictionary<string, string> scripts)
-    {
-        string expression;
-        if (reference.EndsWith(".elwood", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!scripts.TryGetValue(reference, out var script)) return null;
-            expression = script;
-        }
-        else { expression = reference; }
-
-        var isScript = expression.TrimStart().StartsWith("let ") ||
-                       expression.Contains("\nlet ") || expression.Contains("return ");
-        var result = isScript
-            ? _engine.Execute(expression, input, bindings)
-            : _engine.Evaluate(expression.Trim(), input, bindings);
-        return result.Success ? result.Value : null;
-    }
-
-    private IElwoodValue MergeIntoIdm(IElwoodValue currentIdm, string sourceName, IElwoodValue sourceOutput)
-    {
-        if (sourceOutput.Kind == ElwoodValueKind.Object)
-        {
-            var props = new List<KeyValuePair<string, IElwoodValue>>();
-            foreach (var name in currentIdm.GetPropertyNames())
-                props.Add(new(name, currentIdm.GetProperty(name)!));
-            foreach (var name in sourceOutput.GetPropertyNames())
-            {
-                props.RemoveAll(p => p.Key == name);
-                props.Add(new(name, sourceOutput.GetProperty(name)!));
+                await using var claim = await _states.TryLockAsync(snapshot.ExecutionId);
+                if (claim is null) continue;
+                var state = await _states.GetExecutionAsync(snapshot.ExecutionId);
+                if (state is null || state.Status is ExecutionStatus.Running or ExecutionStatus.Retrying or ExecutionStatus.Pending || !(state.ExpiresAt <= Now)) continue;
+                state.Deleting = true; await _states.SaveExecutionAsync(state); // Restartable tombstone; resume/replay cannot race cleanup.
+                await documents.DeleteExecutionAsync(state.ExecutionId);
+                await _states.DeleteExecutionAsync(state.ExecutionId); deleted++;
             }
-            return _factory.CreateObject(props);
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                // One inaccessible object must not permanently starve cleanup of every later execution.
+                failures.Add(new InvalidOperationException($"Retention cleanup failed for execution '{snapshot.ExecutionId}'.", ex));
+            }
         }
-        var allProps = new List<KeyValuePair<string, IElwoodValue>>();
-        foreach (var name in currentIdm.GetPropertyNames())
-            allProps.Add(new(name, currentIdm.GetProperty(name)!));
-        allProps.RemoveAll(p => p.Key == sourceName);
-        allProps.Add(new(sourceName, sourceOutput));
-        return _factory.CreateObject(allProps);
+        if (failures.Count > 0) throw new AggregateException($"Retention removed {deleted} execution(s); {failures.Count} cleanup(s) failed and will be retried.", failures);
+        return deleted;
     }
 
-    private IElwoodValue CreateSourceMetadata(SourceConfig source)
+    internal async Task<PipelineResult> RunToCompletion(string id, CancellationToken cancellationToken = default)
     {
-        var props = new List<KeyValuePair<string, IElwoodValue>>
+        while (true)
         {
-            new("name", _factory.CreateString(source.Name)),
-            new("trigger", _factory.CreateString(source.Trigger)),
-            new("eventId", _factory.CreateString(Guid.NewGuid().ToString())),
-            new("timestamp", _factory.CreateString(DateTime.UtcNow.ToString("o"))),
-        };
-        return _factory.CreateObject(props);
-    }
-
-    private IElwoodValue CreatePullMetadata(SourceConfig source, SourceFetchResult fetchResult)
-    {
-        var props = new List<KeyValuePair<string, IElwoodValue>>
-        {
-            new("name", _factory.CreateString(source.Name)),
-            new("trigger", _factory.CreateString("pull")),
-            new("eventId", _factory.CreateString(Guid.NewGuid().ToString())),
-            new("timestamp", _factory.CreateString(DateTime.UtcNow.ToString("o"))),
-            new("contentType", _factory.CreateString(fetchResult.ContentType)),
-        };
-
-        if (fetchResult.StatusCode is not null)
-        {
-            var httpMeta = _factory.CreateObject([
-                new("statusCode", _factory.CreateNumber(fetchResult.StatusCode.Value)),
-            ]);
-            props.Add(new("http", httpMeta));
-        }
-
-        return _factory.CreateObject(props);
-    }
-
-    private string SerializeValue(IElwoodValue value)
-    {
-        if (value is JsonNodeValue jnv)
-            return jnv.Node?.ToJsonString(JsonOpts) ?? "null";
-        if (value.Kind == ElwoodValueKind.Array)
-        {
-            var materialized = _factory.CreateArray(value.EnumerateArray());
-            return ((JsonNodeValue)materialized).Node?.ToJsonString(JsonOpts) ?? "[]";
-        }
-        return value.GetStringValue() ?? "null";
-    }
-
-    private async Task DeliverToDestinationsAsync(OutputConfig output, string content,
-        string contentType, List<string> errors)
-    {
-        var dest = output.Destinations!;
-        var configs = new List<(string type, object config)>();
-        if (dest.Http is not null) foreach (var c in dest.Http) configs.Add(("restEndpoint", c));
-        if (dest.FileShare is not null) foreach (var c in dest.FileShare) configs.Add(("azureFileShare", c));
-        if (dest.Sftp is not null) foreach (var c in dest.Sftp) configs.Add(("sftp", c));
-        if (dest.BlobStorage is not null) foreach (var c in dest.BlobStorage) configs.Add(("blobStorage", c));
-
-        foreach (var (type, config) in configs)
-        {
-            var connector = _destinationConnectors.FirstOrDefault(c => c.CanHandle(type));
-            if (connector is null) { errors.Add($"No connector for '{type}'"); continue; }
-            var result = await connector.DeliverAsync(type, config, content, contentType);
-            if (!result.Success) errors.Add($"Delivery failed: {result.Error}");
+            var state = await _states.GetExecutionAsync(id) ?? throw new InvalidOperationException("Execution disappeared.");
+            if (state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview)
+            {
+                if (state.Status != ExecutionStatus.Completed) return PipelineResult.Failed(state.Errors, id, state.ResponseStatusCode,
+                    state.FailureResponseRef is null ? null : await _operations.Read(state.FailureResponseRef, "failure response"));
+                var outputs = new Dictionary<string, IElwoodValue>();
+                foreach (var (name, step) in state.Outputs) outputs[name] = await _operations.Read(step.DocumentRef, "output");
+                return PipelineResult.Success(outputs, id, state.ResponseStatusCode);
+            }
+            var ready = Ready(state, Stages(await Load(state))).ToList();
+            foreach (var message in ready) { cancellationToken.ThrowIfCancellationRequested(); await ExecuteStepAsync(message); }
+            if (ready.Count == 0) await Task.Delay(25, cancellationToken);
         }
     }
+
+    private async Task Save(ExecutionState state)
+    {
+        if (state.TriggerRef is not null)
+        {
+            var input = await _documents.GetAsync(state.TriggerRef) ?? "null";
+            var calls = state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values).SelectMany(s => s.Attempts).SelectMany(a => a.Calls).ToList();
+            state.TestContextRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/test", JsonSerializer.Serialize(new
+            { input = JsonSerializer.Deserialize<JsonElement>(input), mocks = _test?.Mocks, calls }, LocalTestSession.JsonOptions));
+        }
+        await _states.SaveExecutionAsync(state);
+    }
+
+    private async Task<PipelineContentDto> Load(ExecutionState state) => JsonSerializer.Deserialize<PipelineContentDto>(
+        await _documents.GetAsync(state.PipelineSnapshotRef ?? $"exec/{state.ExecutionId}/pipeline") ?? throw new InvalidOperationException("Stored pipeline is missing."))!;
+    private static List<List<string>> Stages(PipelineContentDto pipeline) => DependencyResolver.ResolveStages(pipeline.Yaml.Sources).Select(s => s.Select(c => c.Name).ToList()).ToList();
+    private static StepState? Step(ExecutionState state, StepMessage message) => message.Type == StepType.Source ? state.Sources.GetValueOrDefault(message.StepName) : state.Outputs.GetValueOrDefault(message.StepName);
+    private static RetryPolicy? Policy(PipelineContentDto pipeline, StepMessage message) => message.Type == StepType.Source ? pipeline.Yaml.Sources.Single(s => s.Name == message.StepName).Retry : pipeline.Yaml.Outputs.Single(s => s.Name == message.StepName).Retry;
+    private IEnumerable<StepMessage> Ready(ExecutionState state, List<List<string>> stages)
+    {
+        for (var i = 0; i < stages.Count; i++)
+        {
+            if (stages[i].All(name => state.Sources[name].Status == ExecutionStatus.Completed)) continue;
+            return stages[i].Where(name => Due(state.Sources[name])).Select(name => new StepMessage { ExecutionId = state.ExecutionId, PipelineId = state.PipelineId ?? state.PipelineName, Type = StepType.Source, StepName = name, StageIndex = i }).ToList();
+        }
+        return state.Outputs.Where(s => Due(s.Value)).Select(s => new StepMessage { ExecutionId = state.ExecutionId, PipelineId = state.PipelineId ?? state.PipelineName, Type = StepType.Output, StepName = s.Key }).ToList();
+    }
+    private bool Due(StepState step) => step.Status is ExecutionStatus.Pending or ExecutionStatus.Retrying && !(step.NextAttemptAt > Now);
+    private static bool CanRetry(StepState step, RetryPolicy? policy) => policy is { Mode: "automatic" } && step.Attempts.Count - step.RetryBase < policy.MaxAttempts;
+    private void ScheduleRetry(ExecutionState state, StepState step, RetryPolicy policy)
+    {
+        var delay = Math.Min(policy.MaxDelayMs, policy.DelayMs * Math.Pow(policy.BackoffMultiplier, Math.Max(0, step.Attempts.Count - step.RetryBase - 1)));
+        step.NextAttemptAt = Now.AddMilliseconds(delay); step.Status = ExecutionStatus.Retrying; state.Status = ExecutionStatus.Retrying;
+        state.CompletedAt = null; state.ExpiresAt = null; state.Errors.Clear();
+    }
+    private void Terminal(ExecutionState state, ExecutionStatus status)
+    { state.Status = status; state.CompletedAt = Now; state.ExpiresAt = state.CompletedAt.Value.AddSeconds(state.RetentionSeconds); }
+    private async Task Notify(IEnumerable<StepMessage> messages)
+    {
+        try { await _queue.EnqueueBatchAsync(messages); }
+        catch { /* Pending work is committed. Recovery will republish; acceptance must not be revoked. */ }
+    }
+    private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 }
 
-/// <summary>
-/// DTO for storing pipeline content in IDocumentStore so queue workers can reload it.
-/// </summary>
+public sealed class RecoveryConflictException(string message) : Exception(message);
 internal sealed class PipelineContentDto
 {
+    public string? PipelineId { get; set; }
+    public string? RevisionId { get; set; }
+    public PipelineContent? Content { get; set; }
     public PipelineConfig Yaml { get; set; } = new();
     public Dictionary<string, string> Scripts { get; set; } = [];
-    public string? TriggerSourceName { get; set; }
+    public string? TriggerMetadata { get; set; }
 }

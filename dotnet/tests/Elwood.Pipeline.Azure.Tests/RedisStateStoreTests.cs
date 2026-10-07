@@ -22,10 +22,13 @@ public class RedisStateStoreTests : IClassFixture<RedisFixture>
         {
             ExecutionId = $"exec-{Guid.NewGuid():N}",
             PipelineName = "test-pipeline",
+            PipelineId = "stable-id", RevisionId = "revision-hash", PipelineSnapshotRef = "snapshot-ref", IsTest = true, TestMode = "mock", TestContextRef = "test-context",
             Status = ExecutionStatus.Completed,
             StartedAt = DateTime.UtcNow,
             CompletedAt = DateTime.UtcNow.AddSeconds(2),
             IdmRef = "some/idm/ref",
+            TriggerRef = "trigger-ref", TriggerSourceName = "input", ReplayOf = "previous-execution", InputHash = "payload-hash",
+            ResponseStatusCode = 502, FailureResponseRef = "failure-body", RetentionSeconds = 60, ExpiresAt = DateTime.UtcNow.AddMinutes(1),
         };
 
         await _store.SaveExecutionAsync(state);
@@ -34,8 +37,22 @@ public class RedisStateStoreTests : IClassFixture<RedisFixture>
         Assert.NotNull(loaded);
         Assert.Equal(state.ExecutionId, loaded!.ExecutionId);
         Assert.Equal("test-pipeline", loaded.PipelineName);
+        Assert.Equal(state.PipelineId, loaded.PipelineId);
+        Assert.Equal(state.RevisionId, loaded.RevisionId);
+        Assert.Equal(state.PipelineSnapshotRef, loaded.PipelineSnapshotRef);
+        Assert.True(loaded.IsTest);
+        Assert.Equal("mock", loaded.TestMode);
+        Assert.Equal("test-context", loaded.TestContextRef);
         Assert.Equal(ExecutionStatus.Completed, loaded.Status);
         Assert.Equal("some/idm/ref", loaded.IdmRef);
+        Assert.Equal("trigger-ref", loaded.TriggerRef);
+        Assert.Equal("input", loaded.TriggerSourceName);
+        Assert.Equal("previous-execution", loaded.ReplayOf);
+        Assert.Equal("payload-hash", loaded.InputHash);
+        Assert.Equal(502, loaded.ResponseStatusCode);
+        Assert.Equal("failure-body", loaded.FailureResponseRef);
+        Assert.Equal(60, loaded.RetentionSeconds);
+        Assert.Equal(state.ExpiresAt, loaded.ExpiresAt);
     }
 
     [Fact]

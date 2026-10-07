@@ -179,31 +179,17 @@ public sealed class RedisStateStore : IStateStore
     /// The "header" of an ExecutionState — top-level fields excluding Sources/Outputs
     /// (which are stored in their own hash fields).
     /// </summary>
-    private sealed class ExecutionHeader
+    private static System.Text.Json.Nodes.JsonObject BuildHeader(ExecutionState state)
     {
-        public string ExecutionId { get; set; } = "";
-        public string PipelineName { get; set; } = "";
-        public ExecutionStatus Status { get; set; } = ExecutionStatus.Pending;
-        public DateTime StartedAt { get; set; }
-        public DateTime? CompletedAt { get; set; }
-        public string? IdmRef { get; set; }
-        public List<string> Errors { get; set; } = [];
+        var header = JsonSerializer.SerializeToNode(state, JsonOptions)!.AsObject();
+        header.Remove(nameof(ExecutionState.Sources));
+        header.Remove(nameof(ExecutionState.Outputs));
+        return header;
     }
-
-    private static ExecutionHeader BuildHeader(ExecutionState state) => new()
-    {
-        ExecutionId = state.ExecutionId,
-        PipelineName = state.PipelineName,
-        Status = state.Status,
-        StartedAt = state.StartedAt,
-        CompletedAt = state.CompletedAt,
-        IdmRef = state.IdmRef,
-        Errors = state.Errors,
-    };
 
     private static ExecutionState? DeserializeFromHash(HashEntry[] entries)
     {
-        ExecutionHeader? header = null;
+        ExecutionState? header = null;
         var sources = new Dictionary<string, SourceStepState>();
         var outputs = new Dictionary<string, OutputStepState>();
 
@@ -215,7 +201,7 @@ public sealed class RedisStateStore : IStateStore
 
             if (name == HeaderField)
             {
-                header = JsonSerializer.Deserialize<ExecutionHeader>(value, JsonOptions);
+                header = JsonSerializer.Deserialize<ExecutionState>(value, JsonOptions);
             }
             else if (name.StartsWith(SourcePrefix, StringComparison.Ordinal))
             {
@@ -233,18 +219,10 @@ public sealed class RedisStateStore : IStateStore
 
         if (header is null) return null;
 
-        return new ExecutionState
-        {
-            ExecutionId = header.ExecutionId,
-            PipelineName = header.PipelineName,
-            Status = header.Status,
-            StartedAt = header.StartedAt,
-            CompletedAt = header.CompletedAt,
-            IdmRef = header.IdmRef,
-            Errors = header.Errors ?? [],
-            Sources = sources,
-            Outputs = outputs,
-        };
+        header.Sources = sources;
+        header.Outputs = outputs;
+        header.Errors ??= [];
+        return header;
     }
 
     private static string ExecKey(string executionId) => $"exec:{executionId}";

@@ -4,6 +4,14 @@ Elwood pipelines are defined in `.elwood.yaml` files. A pipeline describes **whe
 
 The central concept is the **IDM (Intermediate Data Model)** — a shared JSON document built progressively by sources and consumed by outputs.
 
+## Current implementation limits
+
+This reference includes planned capabilities. The runtime validates configuration instead of silently ignoring unsupported behavior. Unknown keys and unimplemented connector types are errors. Per-source/output retry policy, terminal retention and sync failure responses are implemented in M4; see [durable processing](durable-processing.md) for the supported schema and hosting boundaries. The documented destination aliases `restEndpoint` and `azureFileShare` map to `http` and `fileShare`; specifying both names for the same destination type is an error.
+
+The current executors reject `join` and `outputId`, whose behavior is not implemented. Runtime source fan-out via `path` is also rejected; it remains available in the file-input CLI executor. Concurrency values remain scheduling hints; the reference durable runtime serializes steps within each execution and processes different executions concurrently. Runtime HTTP/Blob delivery supports JSON and raw string text/XML; SQL destinations accept JSON. CSV/binary/Parquet output serialization is not implemented; the default file destination supports literal local paths, not Azure connection strings or computed filenames. The filesystem Runtime API registers HTTP, SQL Server procedures and Azure Blob connectors, plus external RabbitMQ and Event Grid ingress. See [M5 connector contracts](connectors.md) for exact fields, defaults, access grants, limits and receipts. SFTP/Azure File Share, Service Bus ingress/delivery, schedules and the other planned destination types below are not enabled in this host.
+
+Script references are resolved for source maps/paths, HTTP request bodies, SQL parameter values, output paths/maps/IDs, response status codes and destination filenames. Resolving a script does not make an unsupported configuration executable. Evaluation errors and missing scripts fail their step; warnings retain the step's successful status when there is no error and are stored with the step's diagnostics.
+
 ```
 Sources → IDM → Outputs → Destinations
 ```
@@ -101,13 +109,13 @@ outputs:
 
 **Rules:**
 - Exactly **one** output must have `response: true`
-- The pipeline runs synchronously inside the HTTP function (subject to Function timeout — 10 min on Consumption plan, 60 min on Premium)
+- The pipeline runs within the installed host and gateway request deadlines
 - The designated output's content is returned to the caller as the HTTP response body
 - Other outputs (without `response: true`) execute as **side effects** — they run before the response is returned, so failures abort the request
 
 ### `mode: async`
 
-The HTTP function returns `202 Accepted` + `executionId` immediately and queues the work. Each fan-out item is processed by a separate queue trigger invocation. State persists in `IStateStore`. The caller polls `GET /api/executions/{id}` or receives a webhook on completion.
+After persisting the input, pinned revision and pending work, the runtime returns `202 Accepted` + `executionId`. Workers execute saved steps, and recovery replaces lost queue hints. An authorized management client can query `GET /api/executions/{id}`. Completion callbacks must be modeled explicitly as destinations; there is no automatic webhook subscription. Runtime source fan-out is not implemented.
 
 ```yaml
 mode: async
@@ -116,8 +124,6 @@ sources:
   - name: bulk-orders
     trigger: http
     endpoint: /api/bulk-import
-    path: $.orders[*]         # fan out per order
-    concurrency: 50
 
 outputs:
   - name: write-warehouse
@@ -140,7 +146,7 @@ outputs:
 |---|---|
 | Caller expects a response body | Caller fires-and-forgets (just acknowledges acceptance) |
 | Total runtime fits inside the Function timeout | Total runtime may exceed Function timeout |
-| Fan-out is small (≤ a few hundred items) | Fan-out is large (thousands+) — async parallelizes via queue workers |
+| Processing fits inside a single request deadline | Durable background processing is required |
 | Errors should propagate to the caller as HTTP 4xx/5xx | Errors should be tracked in execution state for later retry |
 
 You can convert a pipeline between modes by changing one line: `mode: sync` ↔ `mode: async` (and adding/removing `response: true` on the appropriate output).
@@ -232,7 +238,7 @@ sources:
 |---|---|---|
 | `http` | HTTP endpoint | External system POSTs to the endpoint |
 | `http-request` | Synchronous HTTP | Request-response: the output is returned to the caller |
-| `queue` | Message broker | Message arrives on a queue (ASB, RabbitMQ, etc.) |
+| `queue` | Message broker | M5 Runtime API: external RabbitMQ with a `rabbitmq` block; native cloud broker ingress is M6 |
 | `schedule` | Cron schedule | Runs on a timer |
 | `pull` | Pull from external system | Pipeline fetches data from an API, file share, SFTP, SQL, etc. |
 | `file` | File system watch | File appears in a monitored directory |
@@ -250,6 +256,8 @@ sources:
 | `path` | string | no | Fan-out: slice the IDM, process this source once per slice |
 | `concurrency` | int | no | Max parallel slices when `path` is set. Default: `1` |
 | `from` | object | for pull | Pull source configuration |
+| `rabbitmq` | object | for live queue | External RabbitMQ subscription; async mode. See [connectors](connectors.md#external-rabbitmq-ingress). |
+| `eventGrid` | object | no | Opt in to Event Grid schema validation, batch splitting and deduplication on async HTTP. See [connectors](connectors.md#event-grid-webhook-ingress). |
 
 ### Source Dependencies
 
@@ -318,7 +326,7 @@ With `path: $.orders[*]` and 3 orders, the product-details source runs 3 times �
 
 ### Pull Sources
 
-When `trigger: pull`, the `from` section specifies where to get data:
+When `trigger: pull`, the `from` section specifies exactly one connector. HTTP, SQL procedures and Blob are implemented in the Runtime API; the SFTP/Azure File Share examples below remain planned. SQL queries are not accepted. For authentication, SQL parameters/results, Blob version conditions and all defaults, use [M5 connector contracts](connectors.md).
 
 ```yaml
 # REST API
@@ -352,7 +360,10 @@ from:
 from:
   sql:
     connectionString: $secrets.sql.connectionString
-    query: SELECT * FROM orders WHERE status = 'pending'
+    storedProcedure: dbo.GetOrders
+    readOnly: true
+    parameters:
+      status: { type: nvarchar, size: 20, value: '"pending"' }
 ```
 
 ---
@@ -444,6 +455,8 @@ Destinations define where output data is delivered. An output can have multiple 
 
 ### Destination Types
 
+Runtime API M5 implements `http`/`restEndpoint`, `sql` and `blobStorage`. Remaining table entries describe planned interfaces; they must not be used as evidence of an installed connector. Authored SOAP/XML uses an HTTP destination and a raw XML string, not a `soap` block.
+
 | Type | Description |
 |---|---|
 | `restEndpoint` | REST API call (POST, PUT, PATCH) |
@@ -494,7 +507,8 @@ destinations:
   blobStorage:
     - connectionString: $secrets.blob.connectionString
       container: output-data
-      filename: orders/{$.orderId}/{$source.eventId}.json
+      filename: orders/{$.orderId}/{$execution.id}.json
+      overwrite: false  # default: fail if the object exists
 ```
 
 ### Service Bus
@@ -512,7 +526,8 @@ destinations:
 destinations:
   sql:
     - connectionString: $secrets.sql.connectionString
-      storedProcedure: usp_ImportOrder
+      storedProcedure: dbo.usp_ImportOrder
+      parameter: payload  # entire mapped JSON as @payload nvarchar(max)
 ```
 
 ### Email

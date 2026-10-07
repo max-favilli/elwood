@@ -1,0 +1,10 @@
+{
+  "id": "DEMO-42",
+  "userId": 1,
+  "items": [
+    {
+      "productId": 1,
+      "quantity": 2
+    }
+  ]
+}

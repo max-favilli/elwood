@@ -1,0 +1,7 @@
+{
+  "id": "sample-cart-chain",
+  "title": "Cart creation and delivery",
+  "description": "Create a simulated cart in DummyJSON, merge its ID with the original order and deliver it.",
+  "expectedOutcome": "Succeeds. Delivery includes the original orderId and the returned cartId. The public service may return a different ID from the fixture.",
+  "realNotes": "Real systems calls DummyJSON, then Postman Echo. To inspect delivery in a browser, replace the output destination URL with your own Webhook.site URL."
+}

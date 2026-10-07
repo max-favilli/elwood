@@ -1,0 +1,7 @@
+{
+  "id": "sample-http-timeout",
+  "title": "HTTP timeout",
+  "description": "Observe a one-second request deadline against a delayed HTTP response.",
+  "expectedOutcome": "Fails intentionally at source remote. Mock mode simulates the transport failure immediately; real mode exercises the deadline.",
+  "realNotes": "Real systems calls httpbin /delay/5 with connectionTimeout 1000 ms. Public availability and network errors can affect the observed diagnostic."
+}

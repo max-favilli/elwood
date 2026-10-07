@@ -1,0 +1,7 @@
+{
+  "id": "sample-deldo-stock",
+  "title": "Deldo stock import",
+  "description": "Blob CSV \u2192 normalized offers \u2192 SQL procedure and versioned Blob snapshot.",
+  "expectedOutcome": "Completes with the supplied mocks; inspect each connector call and receipt.",
+  "realNotes": "Configure inbound.connectionString and catalog.connectionString secret grants, create containers and catalog.usp_ImportOffers, and upload the matching sample blob. The synthetic Event Grid input needs the actual blob ETag for real tests."
+}

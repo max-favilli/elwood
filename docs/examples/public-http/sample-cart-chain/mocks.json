@@ -1,0 +1,33 @@
+{
+  "sources": {
+    "cart": {
+      "statusCode": 201,
+      "body": {
+        "id": 51,
+        "userId": 1,
+        "total": 19.98
+      },
+      "expectBody": {
+        "userId": 1,
+        "products": [
+          {
+            "id": 1,
+            "quantity": 2
+          }
+        ]
+      }
+    }
+  },
+  "outputs": {
+    "delivery": [
+      {
+        "statusCode": 200,
+        "expectBody": {
+          "orderId": "DEMO-42",
+          "cartId": 51,
+          "cartTotal": 19.98
+        }
+      }
+    ]
+  }
+}

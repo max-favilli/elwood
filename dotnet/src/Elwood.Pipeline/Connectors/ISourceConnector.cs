@@ -17,14 +17,16 @@ public interface ISourceConnector
 
 public sealed class SourceFetchResult
 {
+    public System.Text.Json.Nodes.JsonObject? Metadata { get; }
     public string Content { get; }
     public string ContentType { get; }
     public int? StatusCode { get; }
     public Dictionary<string, string>? Headers { get; }
 
     public SourceFetchResult(string content, string contentType = "json",
-        Dictionary<string, string>? headers = null, int? statusCode = null)
+        Dictionary<string, string>? headers = null, int? statusCode = null, System.Text.Json.Nodes.JsonObject? metadata = null)
     {
+        Metadata = metadata;
         Content = content;
         ContentType = contentType;
         Headers = headers;
@@ -47,6 +49,7 @@ public interface IDestinationConnector
 
 public sealed class DeliveryResult
 {
+    public string? Receipt { get; private init; }
     public bool Success { get; }
     public string? Error { get; }
     public int? StatusCode { get; }
@@ -58,6 +61,6 @@ public sealed class DeliveryResult
         StatusCode = statusCode;
     }
 
-    public static DeliveryResult Ok(int? statusCode = null) => new(true, statusCode: statusCode);
+    public static DeliveryResult Ok(int? statusCode = null, string? receipt = null) => new(true, statusCode: statusCode) { Receipt = receipt };
     public static DeliveryResult Fail(string error, int? statusCode = null) => new(false, error, statusCode);
 }

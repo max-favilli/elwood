@@ -1,0 +1,211 @@
+{
+  "import": {
+    "supplier": "deldo",
+    "feed": "truck",
+    "fileName": "deldo_stock.csv",
+    "blobPath": "deldo/deldo_stock.csv",
+    "etag": "0x8D4BCC2E4835CD0",
+    "receivedAt": "2026-10-06T07:15:42.3187894Z",
+    "receivedDate": "2026-10-06",
+    "rowsIn": 11,
+    "rowsOk": 5,
+    "rowsRejected": 6,
+    "rejected": [
+      {
+        "reason": "EAN must be 8-14 digits",
+        "row": {
+          "EAN": "",
+          "ARTICLE": "XX000000000000",
+          "BRAND": "Unknown",
+          "PROFILE": "No EAN",
+          "WIDTH": "205",
+          "HEIGHT": "55",
+          "RIM": "16",
+          "LOADINDEX": "91",
+          "SPEEDINDEX": "V",
+          "SEASON": "S",
+          "RUNFLAT": "N",
+          "QTY": "5",
+          "PRICE": "10,00"
+        }
+      },
+      {
+        "reason": "PRICE must be a positive decimal",
+        "row": {
+          "EAN": "4019238000005",
+          "ARTICLE": "GY185601584T",
+          "BRAND": "Goodyear",
+          "PROFILE": "Vector 4Seasons Gen-3",
+          "WIDTH": "185",
+          "HEIGHT": "60",
+          "RIM": "15",
+          "LOADINDEX": "84",
+          "SPEEDINDEX": "T",
+          "SEASON": "4S",
+          "RUNFLAT": "N",
+          "QTY": "52",
+          "PRICE": ""
+        }
+      },
+      {
+        "reason": "EAN must be 8-14 digits",
+        "row": {
+          "EAN": "12345",
+          "ARTICLE": "BAD-EAN",
+          "BRAND": "Nokian",
+          "PROFILE": "Short EAN",
+          "WIDTH": "205",
+          "HEIGHT": "55",
+          "RIM": "16",
+          "LOADINDEX": "91",
+          "SPEEDINDEX": "V",
+          "SEASON": "S",
+          "RUNFLAT": "N",
+          "QTY": "3",
+          "PRICE": "70,00"
+        }
+      },
+      {
+        "reason": "PRICE must be a positive decimal",
+        "row": {
+          "EAN": "4019238000007",
+          "ARTICLE": "VR205551691V",
+          "BRAND": "Vredestein",
+          "PROFILE": "Garbage price",
+          "WIDTH": "205",
+          "HEIGHT": "55",
+          "RIM": "16",
+          "LOADINDEX": "91",
+          "SPEEDINDEX": "V",
+          "SEASON": "S",
+          "RUNFLAT": "N",
+          "QTY": "3",
+          "PRICE": "n/a"
+        }
+      },
+      {
+        "reason": "QTY must be a non-negative integer",
+        "row": {
+          "EAN": "4019238000008",
+          "ARTICLE": "FA205551691V",
+          "BRAND": "Falken",
+          "PROFILE": "Fractional qty",
+          "WIDTH": "205",
+          "HEIGHT": "55",
+          "RIM": "16",
+          "LOADINDEX": "91",
+          "SPEEDINDEX": "V",
+          "SEASON": "S",
+          "RUNFLAT": "N",
+          "QTY": "2,5",
+          "PRICE": "55,00"
+        }
+      },
+      {
+        "reason": "PRICE must be \u003E 0",
+        "row": {
+          "EAN": "4019238000009",
+          "ARTICLE": "KU205551691V",
+          "BRAND": "Kumho",
+          "PROFILE": "Zero price",
+          "WIDTH": "205",
+          "HEIGHT": "55",
+          "RIM": "16",
+          "LOADINDEX": "91",
+          "SPEEDINDEX": "V",
+          "SEASON": "S",
+          "RUNFLAT": "N",
+          "QTY": "9",
+          "PRICE": "0"
+        }
+      }
+    ]
+  },
+  "offers": [
+    {
+      "ean": "4019238000001",
+      "supplierCode": "MI205551691V",
+      "brand": "MICHELIN",
+      "pattern": "Primacy 4",
+      "width": 205,
+      "aspect": 55,
+      "rim": 16,
+      "loadIndex": "91",
+      "speedIndex": "V",
+      "season": "summer",
+      "runflat": false,
+      "quantity": 120,
+      "price": 78.5,
+      "currency": "EUR",
+      "deliveryMode": "truck"
+    },
+    {
+      "ean": "4019238000002",
+      "supplierCode": "CO225451794W",
+      "brand": "CONTINENTAL",
+      "pattern": "WinterContact TS 870",
+      "width": 225,
+      "aspect": 45,
+      "rim": 17,
+      "loadIndex": "94",
+      "speedIndex": "W",
+      "season": "winter",
+      "runflat": false,
+      "quantity": 36,
+      "price": 112.9,
+      "currency": "EUR",
+      "deliveryMode": "truck"
+    },
+    {
+      "ean": "4019238000003",
+      "supplierCode": "BR195651591H",
+      "brand": "BRIDGESTONE",
+      "pattern": "Turanza T005",
+      "width": 195,
+      "aspect": 65,
+      "rim": 15,
+      "loadIndex": "91",
+      "speedIndex": "H",
+      "season": "summer",
+      "runflat": false,
+      "quantity": 0,
+      "price": 61.2,
+      "currency": "EUR",
+      "deliveryMode": "truck"
+    },
+    {
+      "ean": "4019238000004",
+      "supplierCode": "PI245401897Y",
+      "brand": "PIRELLI",
+      "pattern": "P Zero",
+      "width": 245,
+      "aspect": 40,
+      "rim": 18,
+      "loadIndex": "97",
+      "speedIndex": "Y",
+      "season": "summer",
+      "runflat": true,
+      "quantity": 8,
+      "price": 189,
+      "currency": "EUR",
+      "deliveryMode": "truck"
+    },
+    {
+      "ean": "4019238000006",
+      "supplierCode": "HA175651484T",
+      "brand": "HANKOOK",
+      "pattern": "Kinergy 4S2",
+      "width": 175,
+      "aspect": 65,
+      "rim": 14,
+      "loadIndex": "84",
+      "speedIndex": "T",
+      "season": null,
+      "runflat": false,
+      "quantity": 14,
+      "price": 49.9,
+      "currency": "EUR",
+      "deliveryMode": "truck"
+    }
+  ]
+}

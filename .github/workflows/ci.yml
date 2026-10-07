@@ -19,12 +19,69 @@ jobs:
       - name: Build
         run: dotnet build dotnet/Elwood.slnx
       - name: Test (non-integration)
-        # Runs Core, Json, Pipeline, CLI, Parquet, and Pipeline.Azure tests.
-        # Pipeline.Azure.Tests are integration tests using Testcontainers — they spin
-        # real Redis + Azurite containers. Docker is pre-installed on ubuntu-latest,
-        # so they "just work" here. Locally, devs without Docker should run with
-        # --filter "Category!=Integration" to skip them.
+        # Ordinary tests use in-memory stores and mock endpoints. Docker-backed
+        # Azure adapter tests run separately in the infrastructure job below.
         run: dotnet test dotnet/Elwood.slnx --filter "Category!=Integration" --verbosity normal
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Runtime API contract
+        run: node --test scripts/runtime-api.test.mjs scripts/durable-runtime.test.mjs scripts/connectors-api.test.mjs
+
+  connectors:
+    name: SQL, Blob and RabbitMQ connectors
+    runs-on: ubuntu-latest
+    services:
+      sql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: Elwood-CI-only-Password42!
+        ports: ['1433:1433']
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Elwood-CI-only-Password42!' -C -Q 'SELECT 1'"
+          --health-interval 10s --health-timeout 5s --health-retries 20
+      rabbitmq:
+        image: rabbitmq:4.1-management
+        ports: ['5672:5672', '15672:15672']
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s --health-timeout 5s --health-retries 12
+      blob:
+        image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+        ports: ['10000:10000']
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Real connector contracts
+        env:
+          ELWOOD_TEST_SQL: 'Server=127.0.0.1,1433;User ID=sa;Password=Elwood-CI-only-Password42!;Encrypt=false'
+          ELWOOD_TEST_BLOB: 'UseDevelopmentStorage=true'
+          ELWOOD_TEST_RABBITMQ: 'amqp://guest:guest@127.0.0.1:5672/'
+        run: dotnet test dotnet/tests/Elwood.Connectors.Tests --filter "Category=Integration" --verbosity normal
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Build hosted runtime
+        run: dotnet build dotnet/src/Elwood.Runtime.Api
+      - name: Hosted RabbitMQ reconnect and process recovery
+        env:
+          ELWOOD_TEST_RABBITMQ: 'amqp://guest:guest@127.0.0.1:5672/'
+          ELWOOD_TEST_RABBITMQ_MANAGEMENT: 'http://127.0.0.1:15672'
+        run: node --test scripts/rabbitmq-runtime.test.mjs
+
+  infrastructure:
+    name: Azure adapters (Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Redis and Azurite integration tests
+        run: dotnet test dotnet/tests/Elwood.Pipeline.Azure.Tests --filter "Category=Integration" --verbosity normal
 
   typescript:
     name: TypeScript

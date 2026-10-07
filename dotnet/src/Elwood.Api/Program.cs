@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Elwood.Core;
 using Elwood.Json;
+using Elwood.Pipeline;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 var app = builder.Build();
@@ -35,9 +36,7 @@ app.MapPost("/api/evaluate", async (HttpContext ctx) =>
 
     var elwoodInput = input is not null ? new JsonNodeValue(input.DeepClone()) : factory.CreateNull();
 
-    var isScript = script.TrimStart().StartsWith("let ") ||
-                   script.Contains("\nlet ") ||
-                   script.Contains("return ");
+    var isScript = StepEvaluator.IsScript(script);
 
     var result = isScript
         ? engine.Execute(script, elwoodInput)
@@ -50,7 +49,11 @@ app.MapPost("/api/evaluate", async (HttpContext ctx) =>
         {
             success = true,
             value = outputNode,
-            diagnostics = Array.Empty<object>()
+            diagnostics = result.Diagnostics.Select(d => new
+            {
+                severity = d.Severity.ToString().ToLowerInvariant(), message = d.Message,
+                line = d.Span.Line, column = d.Span.Column, suggestion = d.Suggestion
+            })
         });
     }
     else

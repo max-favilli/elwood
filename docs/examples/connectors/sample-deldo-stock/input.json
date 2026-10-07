@@ -1,0 +1,25 @@
+[
+  {
+    "topic": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-gomme/providers/Microsoft.Storage/storageAccounts/stgommeexample",
+    "subject": "/blobServices/default/containers/inbound/blobs/deldo/deldo_stock.csv",
+    "eventType": "Microsoft.Storage.BlobCreated",
+    "id": "5c5e1a7e-0d7a-4a4b-9c1a-3f2d8a4e1b22",
+    "data": {
+      "api": "PutBlockList",
+      "clientRequestId": "6d79dbfb-0e37-4fc4-981f-442c9ca65760",
+      "requestId": "831e1650-001e-001b-66ab-eeb76e000000",
+      "eTag": "0x8D4BCC2E4835CD0",
+      "contentType": "text/csv",
+      "contentLength": 524,
+      "blobType": "BlockBlob",
+      "url": "https://stgommeexample.blob.core.windows.net/inbound/deldo/deldo_stock.csv",
+      "sequencer": "00000000000004420000000000028963",
+      "storageDiagnostics": {
+        "batchId": "b68529f3-68cd-4744-baa4-3c0498ec19f0"
+      }
+    },
+    "dataVersion": "",
+    "metadataVersion": "1",
+    "eventTime": "2026-10-06T07:15:42.3187894Z"
+  }
+]

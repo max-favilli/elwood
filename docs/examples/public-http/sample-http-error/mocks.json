@@ -1,0 +1,10 @@
+{
+  "sources": {
+    "remote": {
+      "statusCode": 503,
+      "contentType": "text/plain",
+      "body": "Service Unavailable"
+    }
+  },
+  "outputs": {}
+}

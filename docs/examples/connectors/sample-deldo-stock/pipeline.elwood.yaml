@@ -1,0 +1,78 @@
+# sample: sample-deldo-stock
+version: 2
+name: sample-deldo-stock
+description: >
+  A Deldo stock/price file landed in inbound/deldo. Read exactly the blob version the
+  event describes, normalise the rows to the shared offer contract, load them into the
+  catalog database and keep one snapshot per file version for analysis.
+mode: async
+ttlSeconds: 2592000   # 30 days of execution history / recovery window
+
+sources:
+  # Event Grid BlobCreated notification, ONE event per execution (the ingress adapter
+  # splits batches, docs/elwood-requests.md §4). event.elwood re-validates type, path and ETag.
+  - name: event
+    trigger: http
+    endpoint: /samples/sample-deldo-stock
+    eventGrid: { subjectPrefix: /blobServices/default/containers/inbound/blobs/deldo/ }
+    contentType: json
+    map: event.elwood                 # → { event: { supplier, blobPath, fileName, etag, ... } }
+
+  # The file itself, pinned to the version the event announced: if the supplier has
+  # already replaced it, the read must fail visibly rather than load new bytes under
+  # the old ETag (docs/elwood-requests.md §1). The CSV is pulled as text and parsed
+  # explicitly: Deldo is Belgian, expect ';' and decimal comma.
+  - name: file
+    trigger: pull
+    depends: event
+    contentType: text
+    from:
+      blobStorage:
+        connectionString: $secrets.inbound.connectionString
+        container: inbound
+        path: '{$idm.event.blobPath}'
+        maxBytes: 26214400
+        ifMatch: '{$idm.event.etag}'  # reject a replaced blob
+    retry:                            # reads are side-effect free: retry freely
+      mode: automatic
+      maxAttempts: 5
+      delayMs: 2000
+      backoffMultiplier: 2
+      maxDelayMs: 60000
+      transportErrors: true
+    map: normalize.elwood             # → { import: {...}, offers: [...] }
+
+outputs:
+  # One call per file version. The procedure is idempotent on (blob_path, etag) and
+  # returns { import_id, status, offers_loaded }. A timeout after the command was sent
+  # may still have committed: no automatic retry, an operator resumes after checking
+  # catalog.imports (resume reuses this result if it had succeeded).
+  - name: offers-to-sql
+    map: '{ import: $.import, offers: $.offers }'
+    contentType: json
+    retry:
+      mode: manual
+      allowUncertainWrites: false
+    destinations:
+      sql:
+        - connectionString: $secrets.catalog.connectionString
+          storedProcedure: catalog.usp_ImportOffers
+          parameter: payload
+
+  # One snapshot per file version; the ETag makes the name unique when the same file name
+  # is replaced several times a day, and a redelivery rewrites identical content (no-op).
+  # Pipeline Parquet delivery remains unsupported; use JSON for this snapshot.
+  - name: snapshot
+    map: '{ import: $.import, offers: $.offers }'
+    contentType: json
+    retry:
+      mode: automatic
+      maxAttempts: 5
+      delayMs: 2000
+      allowUncertainWrites: true      # same bytes to the same name: duplicates are harmless
+    destinations:
+      blobStorage:
+        - connectionString: $secrets.inbound.connectionString
+          container: analytics
+          overwrite: true
+          filename: deldo/truck/{$idm.import.receivedDate}/{$idm.import.fileName}.{$idm.import.etag}.json

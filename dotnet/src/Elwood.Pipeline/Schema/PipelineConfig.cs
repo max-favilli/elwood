@@ -29,10 +29,13 @@ public sealed class PipelineConfig
     /// <summary>
     /// Data retention in seconds. Controls how long execution state and documents
     /// are kept in storage. Passed to IStateStore and IDocumentStore at execution time.
-    /// Default: 259200 (3 days). Can be refined to per-source/output later if needed.
+    /// Default: 2592000 (30 days) after terminal completion. Active executions do not expire.
     /// </summary>
     [YamlMember(Alias = "ttlSeconds")]
     public int? TtlSeconds { get; set; }
+
+    [YamlMember(Alias = "failureResponse")]
+    public FailureResponseConfig? FailureResponse { get; set; }
 
     [YamlMember(Alias = "sources")]
     public List<SourceConfig> Sources { get; set; } = [];
@@ -57,6 +60,10 @@ public sealed class PipelineConfig
 /// </summary>
 public sealed class SourceConfig
 {
+    public RabbitMqTriggerConfig? Rabbitmq { get; set; }
+    public EventGridConfig? EventGrid { get; set; }
+    [YamlMember(Alias = "retry")]
+    public RetryPolicy? Retry { get; set; }
     [YamlMember(Alias = "name")]
     public string Name { get; set; } = "";
 
@@ -124,6 +131,11 @@ public sealed class SourceConfig
     public List<string> GetDependencies()
     {
         if (Depends is null) return [];
+        if (Depends is System.Text.Json.JsonElement element)
+        {
+            if (element.ValueKind == System.Text.Json.JsonValueKind.String) return [element.GetString()!];
+            if (element.ValueKind == System.Text.Json.JsonValueKind.Array) return element.EnumerateArray().Select(e => e.GetString()!).ToList();
+        }
         if (Depends is string s) return [s];
         if (Depends is List<object> list) return list.Select(x => x.ToString()!).ToList();
         return [];
@@ -135,6 +147,8 @@ public sealed class SourceConfig
 /// </summary>
 public sealed class PullSourceConfig
 {
+    public SqlSourceConfig? Sql { get; set; }
+    public BlobSourceConfig? BlobStorage { get; set; }
     [YamlMember(Alias = "http")]
     public HttpSourceConfig? Http { get; set; }
 
@@ -147,6 +161,8 @@ public sealed class PullSourceConfig
 
 public sealed class HttpSourceConfig
 {
+    public OAuth2Config? Oauth2 { get; set; }
+    public string BodyFormat { get; set; } = "json";
     [YamlMember(Alias = "url")]
     public string Url { get; set; } = "";
 
@@ -260,6 +276,8 @@ public sealed class JoinConfig
 /// </summary>
 public sealed class OutputConfig
 {
+    [YamlMember(Alias = "retry")]
+    public RetryPolicy? Retry { get; set; }
     [YamlMember(Alias = "name")]
     public string Name { get; set; } = "";
 
@@ -316,11 +334,40 @@ public sealed class OutputConfig
     public string? ResponseStatusCode { get; set; }
 }
 
+public sealed class RetryPolicy
+{
+    [YamlMember(Alias = "mode")]
+    public string Mode { get; set; } = "automatic";
+    [YamlMember(Alias = "maxAttempts")]
+    public int MaxAttempts { get; set; } = 3;
+    [YamlMember(Alias = "delayMs")]
+    public int DelayMs { get; set; } = 1000;
+    [YamlMember(Alias = "backoffMultiplier")]
+    public double BackoffMultiplier { get; set; } = 2;
+    [YamlMember(Alias = "maxDelayMs")]
+    public int MaxDelayMs { get; set; } = 60000;
+    [YamlMember(Alias = "statusCodes")]
+    public List<int> StatusCodes { get; set; } = [408, 429, 500, 502, 503, 504];
+    [YamlMember(Alias = "transportErrors")]
+    public bool TransportErrors { get; set; } = true;
+    [YamlMember(Alias = "allowUncertainWrites")]
+    public bool AllowUncertainWrites { get; set; }
+}
+
+public sealed class FailureResponseConfig
+{
+    [YamlMember(Alias = "body")]
+    public string Body { get; set; } = "{ errors: $error.messages }";
+    [YamlMember(Alias = "statusCode")]
+    public string StatusCode { get; set; } = "500";
+}
+
 /// <summary>
 /// Destination configuration — where outputs are delivered.
 /// </summary>
 public sealed class DestinationsConfig
 {
+    public List<SqlDestinationConfig>? Sql { get; set; }
     [YamlMember(Alias = "fileShare")]
     public List<FileShareDestinationConfig>? FileShare { get; set; }
 
@@ -354,6 +401,10 @@ public sealed class SftpDestinationConfig
 
 public sealed class HttpDestinationConfig
 {
+    public string? User { get; set; }
+    public string? Password { get; set; }
+    public OAuth2Config? Oauth2 { get; set; }
+    public int? ConnectionTimeout { get; set; }
     [YamlMember(Alias = "url")]
     public string Url { get; set; } = "";
 
@@ -366,6 +417,10 @@ public sealed class HttpDestinationConfig
 
 public sealed class BlobStorageDestinationConfig
 {
+    public string? AccountUrl { get; set; }
+    public bool Overwrite { get; set; }
+    public string? IfMatch { get; set; }
+    public int TimeoutSeconds { get; set; } = 60;
     [YamlMember(Alias = "connectionString")]
     public string ConnectionString { get; set; } = "";
 

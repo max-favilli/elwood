@@ -6,6 +6,8 @@
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../Elwood.Pipeline.Sql/Elwood.Pipeline.Sql.csproj" />
+    <ProjectReference Include="../Elwood.Pipeline.RabbitMq/Elwood.Pipeline.RabbitMq.csproj" />
     <PackageReference Include="Microsoft.ApplicationInsights.AspNetCore" Version="2.*" />
     <ProjectReference Include="..\Elwood.Core\Elwood.Core.csproj" />
     <ProjectReference Include="..\Elwood.Json\Elwood.Json.csproj" />

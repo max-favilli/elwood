@@ -7,12 +7,15 @@
     <Project Path="src/Elwood.Newtonsoft/Elwood.Newtonsoft.csproj" />
     <Project Path="src/Elwood.Xlsx/Elwood.Xlsx.csproj" />
     <Project Path="src/Elwood.Parquet/Elwood.Parquet.csproj" />
+    <Project Path="src/Elwood.Pipeline.RabbitMq/Elwood.Pipeline.RabbitMq.csproj" />
+    <Project Path="src/Elwood.Pipeline.Sql/Elwood.Pipeline.Sql.csproj" />
     <Project Path="src/Elwood.Pipeline/Elwood.Pipeline.csproj" />
     <Project Path="src/Elwood.Pipeline.Azure/Elwood.Pipeline.Azure.csproj" />
     <Project Path="src/Elwood.Runtime.Api/Elwood.Runtime.Api.csproj" />
     <Project Path="src/Elwood.Runtime.Azure.Functions/Elwood.Runtime.Azure.Functions.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Elwood.Connectors.Tests/Elwood.Connectors.Tests.csproj" />
     <Project Path="tests/Elwood.Core.Tests/Elwood.Core.Tests.csproj" />
     <Project Path="tests/Elwood.Cli.Tests/Elwood.Cli.Tests.csproj" />
     <Project Path="tests/Elwood.Parquet.Tests/Elwood.Parquet.Tests.csproj" />

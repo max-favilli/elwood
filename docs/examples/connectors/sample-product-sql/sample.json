@@ -1,0 +1,7 @@
+{
+  "id": "sample-product-sql",
+  "title": "Product message \u2192 SQL \u2192 SAP",
+  "description": "Enrich a RabbitMQ product event using a SQL procedure, then deliver over HTTP with Basic authentication.",
+  "expectedOutcome": "Completes with the supplied mocks; inspect each connector call and receipt.",
+  "realNotes": "Local tests use the supplied trigger input. Real mode calls dbo.GetProduct and SAP; only deployment starts the RabbitMQ subscription. Grant products.sql, products.rabbitmq and sap.* as appropriate."
+}

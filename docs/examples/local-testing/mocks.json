@@ -1,0 +1,15 @@
+{
+  "sources": {
+    "crm": {
+      "statusCode": 201,
+      "body": { "id": "crm-42" },
+      "expectBody": { "externalId": 42 }
+    }
+  },
+  "outputs": {
+    "emarsys": [{
+      "statusCode": 202,
+      "expectBody": { "orderId": 42, "crmId": "crm-42" }
+    }]
+  }
+}

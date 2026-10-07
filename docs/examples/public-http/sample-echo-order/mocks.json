@@ -1,0 +1,20 @@
+{
+  "sources": {
+    "echo": {
+      "statusCode": 200,
+      "body": {
+        "json": {
+          "orderId": "DEMO-42",
+          "customer": "Ada Example",
+          "total": 39.98
+        }
+      },
+      "expectBody": {
+        "orderId": "DEMO-42",
+        "customer": "Ada Example",
+        "total": 39.98
+      }
+    }
+  },
+  "outputs": {}
+}

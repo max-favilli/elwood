@@ -1,3 +1,4 @@
+using Elwood.Pipeline.Storage;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -19,7 +20,8 @@ public sealed class FileSystemPipelineStore : IPipelineStore
 
     public FileSystemPipelineStore(string baseDir)
     {
-        _baseDir = baseDir;
+        _baseDir = Path.GetFullPath(baseDir);
+        SafePath.Within(_baseDir, "check");
         Directory.CreateDirectory(baseDir);
     }
 
@@ -30,7 +32,7 @@ public sealed class FileSystemPipelineStore : IPipelineStore
 
         foreach (var dir in Directory.GetDirectories(_baseDir))
         {
-            var yamlFile = Path.Combine(dir, "pipeline.elwood.yaml");
+            var yamlFile = SafePath.Within(dir, "pipeline.elwood.yaml");
             if (!File.Exists(yamlFile)) continue;
 
             try
@@ -62,8 +64,8 @@ public sealed class FileSystemPipelineStore : IPipelineStore
 
     public Task<PipelineDefinition?> GetPipelineAsync(string id)
     {
-        var dir = Path.Combine(_baseDir, id);
-        var yamlFile = Path.Combine(dir, "pipeline.elwood.yaml");
+        var dir = SafePath.Within(_baseDir, SafePath.Id(id));
+        var yamlFile = SafePath.Within(dir, "pipeline.elwood.yaml");
         if (!File.Exists(yamlFile)) return Task.FromResult<PipelineDefinition?>(null);
 
         var content = ReadPipelineContent(dir);
@@ -77,19 +79,25 @@ public sealed class FileSystemPipelineStore : IPipelineStore
 
     public Task SavePipelineAsync(string id, PipelineContent content, string? author = null, string? message = null)
     {
-        var dir = Path.Combine(_baseDir, id);
+        var dir = SafePath.Within(_baseDir, SafePath.Id(id));
+        SafePath.Content(content);
         Directory.CreateDirectory(dir);
 
-        File.WriteAllText(Path.Combine(dir, "pipeline.elwood.yaml"), content.Yaml);
+        File.WriteAllText(SafePath.Within(dir, "pipeline.elwood.yaml"), content.Yaml);
 
         foreach (var (name, script) in content.Scripts)
-            File.WriteAllText(Path.Combine(dir, name), script);
+        {
+            var path = SafePath.Within(dir, SafePath.Script(name));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, script);
+        }
 
         // Clean up scripts that were removed
-        var existingScripts = Directory.GetFiles(dir, "*.elwood");
+        var existingScripts = Directory.GetFiles(dir, "*.elwood", SearchOption.AllDirectories);
         foreach (var file in existingScripts)
         {
-            var fileName = Path.GetFileName(file);
+            var fileName = Path.GetRelativePath(dir, file).Replace(Path.DirectorySeparatorChar, '/');
+            SafePath.Within(dir, fileName);
             if (!content.Scripts.ContainsKey(fileName))
                 File.Delete(file);
         }
@@ -99,9 +107,13 @@ public sealed class FileSystemPipelineStore : IPipelineStore
 
     public Task DeletePipelineAsync(string id)
     {
-        var dir = Path.Combine(_baseDir, id);
+        var dir = SafePath.Within(_baseDir, SafePath.Id(id));
         if (Directory.Exists(dir))
+        {
+            foreach (var entry in Directory.EnumerateFileSystemEntries(dir, "*", SearchOption.AllDirectories))
+                SafePath.Within(dir, Path.GetRelativePath(dir, entry).Replace(Path.DirectorySeparatorChar, '/'));
             Directory.Delete(dir, true);
+        }
         return Task.CompletedTask;
     }
 
@@ -120,12 +132,12 @@ public sealed class FileSystemPipelineStore : IPipelineStore
 
     private static PipelineContent ReadPipelineContent(string dir)
     {
-        var yamlFile = Path.Combine(dir, "pipeline.elwood.yaml");
+        var yamlFile = SafePath.Within(dir, "pipeline.elwood.yaml");
         var yaml = File.ReadAllText(yamlFile);
         var scripts = new Dictionary<string, string>();
 
-        foreach (var file in Directory.GetFiles(dir, "*.elwood"))
-            scripts[Path.GetFileName(file)] = File.ReadAllText(file);
+        foreach (var file in Directory.GetFiles(dir, "*.elwood", SearchOption.AllDirectories))
+            scripts[Path.GetRelativePath(dir, file).Replace(Path.DirectorySeparatorChar, '/')] = File.ReadAllText(SafePath.Within(dir, Path.GetRelativePath(dir, file).Replace(Path.DirectorySeparatorChar, '/')));
 
         return new PipelineContent { Yaml = yaml, Scripts = scripts };
     }
