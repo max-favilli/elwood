@@ -63,7 +63,7 @@ Example host configuration (values are placeholders, not working credentials):
 | `deploy` | Migrate, activate revisions and delete/deactivate pipelines |
 | `recover` | Resume/replay retained live executions (also requires pipeline read access) |
 
-Scopes are exact pipeline IDs; `"*"` grants all pipelines. Permissions are independent; a portal maintainer normally needs `read` alongside other permissions. Execution authorization uses stable pipeline IDs, never the editable YAML display name. Old execution records without IDs are visible only to identities scoped to all pipelines. Lists and metrics are filtered on the server.
+Pipeline scopes and permission names compare case-insensitively; use lowercase canonical IDs in new configuration. `"*"` grants all pipelines. Permissions are independent; a portal maintainer normally needs `read` alongside other permissions. Execution authorization uses stable pipeline IDs, never the editable YAML display name. Old execution records without IDs are visible only to identities scoped to all pipelines. Lists and metrics are filtered on the server.
 
 All management routes require authentication except health; the trigger routes retain their own pipeline-defined authentication. Remote bearer requests require HTTPS. Configure TLS on the API host; this runtime does not implicitly trust forwarded headers or authenticate on behalf of a reverse proxy. CORS permits only configured portal origins (localhost:3000 by default). The local developer identity accepts loopback connections only.
 
@@ -92,3 +92,12 @@ Script tests return `X-Elwood-Revision` alongside the existing `X-Elwood-Warning
 `DeploymentTests` covers draft/live isolation, explicit migration, collisions, stale and concurrent writes, immutable history, async revision pinning, filesystem containment and secret denial. The isolated `scripts/runtime-api.test.mjs` additionally checks real HTTP authentication, permissions and list filtering, snapshot tests, warning transport, draft/deploy semantics, traversal rejection, CORS and distinct live/test secret grants. Portal tests exercise bearer transport, conditional saves, explicit deploy/migration requests and snapshot identity.
 
 Build the Runtime API before running its Node contract test. Azure adapter tests require Docker and run in the separate CI integration job. The Redis execution header now retains pipeline/revision/snapshot identity and the test flag; native cloud deployment wiring remains outside this local catalog.
+
+
+### Reverse proxies and upgrades
+
+Set `Elwood:Management:BehindProxy=true` whenever a proxy forwards requests to the API, including a proxy on the same machine. The local development token is refused at startup with this setting, `ASPNETCORE_FORWARDEDHEADERS_ENABLED`, or a `ForwardedHeaders` configuration section. Requests carrying `Forwarded` or `X-Forwarded-*` headers cannot use the loopback TLS exemption or a local-only token. A proxy that strips these headers is only detectable through host configuration: never expose the development launcher through such a proxy.
+
+The current host does not install forwarded-header middleware. Use HTTPS from the proxy to the API, or explicitly configure trusted proxy addresses and forwarded-header processing in a custom host before authentication. Do not trust arbitrary client-supplied forwarding headers.
+
+Stop all old runtime processes before upgrading the filesystem store. Execution claims now use a stable namespace guard so released lock files can be safely removed on Windows and Unix. Retention also removes abandoned claims, old access locks and temporary files older than one day; active writers are excluded. The two store-wide coordination locks remain bounded. Deployments use replace-compatible readers and bounded retries for external Windows readers. Keep all state on one filesystem that supports these locking/rename guarantees.

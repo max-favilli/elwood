@@ -50,7 +50,9 @@ public class HttpCallDetails
         if (BodyLimit <= 0) return (null, size, size > 0);
         if (size <= BodyLimit) return (value, size, false);
         var prefix = System.Text.Encoding.UTF8.GetBytes(value[..Math.Min(value.Length, BodyLimit)]);
-        return (System.Text.Encoding.UTF8.GetString(prefix, 0, BodyLimit), size, true);
+        var length = BodyLimit;
+        while (length > 0 && length < prefix.Length && (prefix[length] & 0xC0) == 0x80) length--;
+        return (System.Text.Encoding.UTF8.GetString(prefix, 0, length), size, true);
     }
 }
 

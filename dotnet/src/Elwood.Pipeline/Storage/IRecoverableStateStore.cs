@@ -21,3 +21,9 @@ public interface IExecutionDocumentStore : IDocumentStore
 {
     Task DeleteExecutionAsync(string executionId);
 }
+
+/// <summary>Low-frequency maintenance of abandoned host storage artifacts.</summary>
+public interface IArtifactMaintenance
+{
+    Task CleanupArtifactsAsync();
+}

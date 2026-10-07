@@ -3,7 +3,7 @@ using Elwood.Pipeline.State;
 
 namespace Elwood.Pipeline.Storage;
 
-public sealed class FileSystemStateStore : IRecoverableStateStore
+public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMaintenance
 {
     private readonly string _baseDir;
     private bool _indexesReady;
@@ -146,13 +146,39 @@ public sealed class FileSystemStateStore : IRecoverableStateStore
         await SaveExecutionAsync(state);
     }
 
-    public Task<IAsyncDisposable?> TryLockAsync(string executionId)
+    public async Task<IAsyncDisposable?> TryLockAsync(string executionId)
     {
         var directory = SafePath.Within(_baseDir, "locks");
         Directory.CreateDirectory(directory);
         var path = SafePath.Within(directory, SafePath.Id(executionId) + ".lock");
-        try { return Task.FromResult<IAsyncDisposable?>(new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)); }
-        catch (IOException) { return Task.FromResult<IAsyncDisposable?>(null); }
+        var guard = SafePath.Within(_baseDir, "claim-namespace");
+        // Opening and removing lock files share a stable namespace lock. Never unlink
+        // a held claim: on Unix another process could otherwise lock a new inode.
+        await using var access = await AtomicExecutionFile.LockAsync(guard);
+        try { return new Claim(new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None), path, guard); }
+        catch (IOException ex) when ((ex.HResult & 0xFFFF) is 11 or 32 or 33) { return null; }
+    }
+
+    private sealed class Claim(FileStream stream, string path, string guard) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            await using var access = await AtomicExecutionFile.LockAsync(guard);
+            await stream.DisposeAsync();
+            File.Delete(path);
+        }
+    }
+
+    public async Task CleanupArtifactsAsync()
+    {
+        var directory = SafePath.Within(_baseDir, "locks");
+        if (Directory.Exists(directory))
+            foreach (var path in Directory.EnumerateFiles(directory, "*.lock"))
+            {
+                // Claims abandoned by crashed processes are released and removed.
+                await using var claim = await TryLockAsync(Path.GetFileNameWithoutExtension(path));
+            }
+        AtomicExecutionFile.Cleanup(_baseDir);
     }
 
     public async Task<List<ExecutionState>> ListAllAsync()
@@ -168,7 +194,10 @@ public sealed class FileSystemStateStore : IRecoverableStateStore
 
     public Task DeleteExecutionAsync(string executionId)
     {
-        File.Delete(SafePath.Within(_baseDir, SafePath.Id(executionId) + ".json"));
+        var path = SafePath.Within(_baseDir, SafePath.Id(executionId) + ".json");
+        File.Delete(path);
+        foreach (var artifact in Directory.EnumerateFiles(_baseDir, Path.GetFileName(path) + ".*"))
+            AtomicExecutionFile.TryDeleteArtifact(artifact);
         foreach (var index in new[] { "active", "terminal" }) File.Delete(IndexPath(index, executionId));
         return Task.CompletedTask;
     }
@@ -182,7 +211,7 @@ public sealed class FileSystemStateStore : IRecoverableStateStore
     }
 }
 
-public sealed class FileSystemDocumentStore : IExecutionDocumentStore
+public sealed class FileSystemDocumentStore : IExecutionDocumentStore, IArtifactMaintenance
 {
     private readonly string _baseDir;
 
@@ -218,6 +247,8 @@ public sealed class FileSystemDocumentStore : IExecutionDocumentStore
         return await AtomicExecutionFile.ReadAsync(path);
     }
 
+    public Task CleanupArtifactsAsync() { AtomicExecutionFile.Cleanup(_baseDir); return Task.CompletedTask; }
+
     public Task DeleteAsync(string key)
     {
         SafePath.Relative(key.Replace(":", "_"));
@@ -246,18 +277,48 @@ internal static class AtomicExecutionFile
 {
     public static async Task ReplaceAsync(string temporary, string path)
     {
-        await using var access = await LockAsync(path);
-        File.Move(temporary, path, true);
+        for (var retry = 0; ; retry++)
+        {
+            try { File.Move(temporary, path, true); return; }
+            catch (Exception ex) when (retry < 200 &&
+                (ex is IOException && (ex.HResult & 0xFFFF) is 32 or 33 ||
+                 OperatingSystem.IsWindows() && ex is UnauthorizedAccessException && (ex.HResult & 0xFFFF) == 5))
+            { await Task.Delay(10); }
+        }
     }
 
-    // A short file-access lock is separate from the whole-attempt execution claim:
-    // operators can inspect a running attempt without blocking its next checkpoint.
-    // It also keeps Windows readers away from the replacement operation itself.
+    // Readers hold the previous immutable file open while an atomic replacement
+    // publishes the new version. No per-document access lock artifacts are needed.
     public static async Task<string?> ReadAsync(string path)
     {
-        await using var access = await LockAsync(path);
-        try { return await File.ReadAllTextAsync(path); }
+        try
+        {
+            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            return await reader.ReadToEndAsync();
+        }
         catch (FileNotFoundException) { return null; }
+    }
+
+    internal static void Cleanup(string directory)
+    {
+        var cutoff = DateTime.UtcNow.AddDays(-1);
+        foreach (var path in Directory.EnumerateFiles(directory))
+            if ((path.EndsWith(".tmp", StringComparison.Ordinal) || (path.EndsWith(".access.lock", StringComparison.Ordinal) && Path.GetFileName(path) is not ("claim-namespace.access.lock" or "index-initialization.access.lock"))) &&
+                File.GetLastWriteTimeUtc(path) < cutoff) TryDeleteArtifact(path);
+    }
+
+    internal static void TryDeleteArtifact(string path)
+    {
+        SafePath.Within(Path.GetDirectoryName(path)!, Path.GetFileName(path));
+        try
+        {
+            // Exclusive access prevents removing an in-progress write. Delete-on-close
+            // removes the exact opened file, without an unlock/unlink race.
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+        }
+        catch (FileNotFoundException) { }
+        catch (IOException ex) when ((ex.HResult & 0xFFFF) is 11 or 32 or 33) { }
     }
 
     internal static async Task<FileStream> LockAsync(string path)

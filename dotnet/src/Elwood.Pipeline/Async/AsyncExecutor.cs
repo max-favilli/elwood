@@ -133,14 +133,14 @@ public sealed class AsyncExecutor
             attempt.CompletedAt = Now; attempt.Error = ex.Message; attempt.Status = "Failed"; attempt.Diagnostics = [.. step.Diagnostics];
             step.Errors = [$"{message.Type} '{message.StepName}': {ex.Message}"]; step.CompletedAt = Now;
             var policy = pipeline is null ? null : Policy(pipeline, message);
-            var status = ex is HttpRequestException http ? (int?)http.StatusCode : (ex as ConnectorFailure)?.StatusCode;
+            var status = ex is HttpRequestException http ? (int?)http.StatusCode : (ex as ConnectorFailure)?.StatusCode ?? (ex as ConnectorException)?.StatusCode;
             var transport = ex is HttpRequestException or OperationCanceledException || ex is ConnectorFailure && status is null;
             var uncertain = attempt.ExternalCallStarted && attempt.MayHaveWritten && status is null &&
                 (transport || ex is IOException);
             if (ex is ConnectorException classified) uncertain = classified.OutcomeUncertain;
             step.OutcomeUncertain = uncertain;
             var retryable = status is not null ? policy?.StatusCodes.Contains(status.Value) == true : transport && policy?.TransportErrors == true;
-            if (ex is ConnectorException failure) retryable = failure.Retryable && policy?.TransportErrors == true;
+            if (ex is ConnectorException failure && status is null) retryable = failure.Retryable && policy?.TransportErrors == true;
             if (uncertain && policy?.AllowUncertainWrites != true)
             {
                 step.Status = ExecutionStatus.AwaitingReview; attempt.Status = "Uncertain";
@@ -225,6 +225,7 @@ public sealed class AsyncExecutor
             else { step.Status = ExecutionStatus.Failed; step.Errors = ["Interrupted connector call; automatic retry is not enabled or is exhausted."]; state.Errors = [.. step.Errors]; Terminal(state, ExecutionStatus.Failed); }
         }
         else { step.Status = ExecutionStatus.Pending; step.NextAttemptAt = null; } // Pure computation/checkpoint recovery, no external call to repeat.
+        if (step.Status is ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) step.CompletedAt = Now;
     }
 
     public async Task ResumeAsync(string id, bool acknowledgeUncertain = false)
@@ -290,12 +291,15 @@ public sealed class AsyncExecutor
                 failures.Add(new InvalidOperationException($"Retention cleanup failed for execution '{snapshot.ExecutionId}'.", ex));
             }
         }
+        if (_states is IArtifactMaintenance stateMaintenance) await stateMaintenance.CleanupArtifactsAsync();
+        if (_documents is IArtifactMaintenance documentMaintenance) await documentMaintenance.CleanupArtifactsAsync();
         if (failures.Count > 0) throw new AggregateException($"Retention removed {deleted} execution(s); {failures.Count} cleanup(s) failed and will be retried.", failures);
         return deleted;
     }
 
     internal async Task<PipelineResult> RunToCompletion(string id, CancellationToken cancellationToken = default)
     {
+        List<List<string>>? stages = null;
         while (true)
         {
             var state = await _states.GetExecutionAsync(id) ?? throw new InvalidOperationException("Execution disappeared.");
@@ -307,9 +311,15 @@ public sealed class AsyncExecutor
                 foreach (var (name, step) in state.Outputs) outputs[name] = await _operations.Read(step.DocumentRef, "output");
                 return PipelineResult.Success(outputs, id, state.ResponseStatusCode);
             }
-            var ready = Ready(state, Stages(await Load(state))).ToList();
+            stages ??= Stages(await Load(state));
+            var ready = Ready(state, stages).ToList();
             foreach (var message in ready) { cancellationToken.ThrowIfCancellationRequested(); await ExecuteStepAsync(message); }
-            if (ready.Count == 0) await Task.Delay(25, cancellationToken);
+            if (ready.Count == 0)
+            {
+                var next = state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values)
+                    .Where(step => step.NextAttemptAt > Now).Select(step => step.NextAttemptAt!.Value).DefaultIfEmpty(Now.AddSeconds(1)).Min();
+                await Task.Delay(TimeSpan.FromMilliseconds(Math.Clamp((next - Now).TotalMilliseconds, 25, 1000)), cancellationToken);
+            }
         }
     }
 

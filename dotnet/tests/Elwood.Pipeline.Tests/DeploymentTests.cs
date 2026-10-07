@@ -224,8 +224,8 @@ public sealed class DeploymentTests : IDisposable
         var resolver = new StringResolver(provider);
         Assert.Equal("value", resolver.Resolve("${allowed}"));
         Assert.Equal("value", resolver.Resolve("$secrets.allowed"));
-        Assert.Throws<UnauthorizedAccessException>(() => resolver.Resolve("${private}"));
-        Assert.Throws<UnauthorizedAccessException>(() => resolver.Resolve("$secrets.private"));
+        Assert.Throws<PermissionDeniedException>(() => resolver.Resolve("${private}"));
+        Assert.Throws<PermissionDeniedException>(() => resolver.Resolve("$secrets.private"));
         Assert.Throws<InvalidOperationException>(() => resolver.Resolve("${PATH}"));
     }
 

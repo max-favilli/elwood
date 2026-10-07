@@ -21,11 +21,11 @@ var stateDir = builder.Configuration["Elwood:StateDir"]
     ?? Path.Combine(Directory.GetCurrentDirectory(), ".elwood", "state");
 
 // Register services
-builder.Services.AddSingleton<IPipelineStore>(new FileSystemPipelineStore(pipelinesDir));
+builder.Services.AddSingleton<IPipelineStore>(sp => new FileSystemPipelineStore(pipelinesDir, sp.GetRequiredService<ILogger<FileSystemPipelineStore>>()));
 builder.Services.AddSingleton<IStateStore>(new FileSystemStateStore(stateDir));
 builder.Services.AddSingleton<IDocumentStore>(new FileSystemDocumentStore(Path.Combine(stateDir, "documents")));
 builder.Services.AddSingleton<JsonNodeValueFactory>(_ => JsonNodeValueFactory.Instance);
-builder.Services.AddSingleton(sp => new FileSystemDeploymentStore(sp.GetRequiredService<IPipelineStore>(), Path.Combine(stateDir, "deployments")));
+builder.Services.AddSingleton(sp => new FileSystemDeploymentStore(sp.GetRequiredService<IPipelineStore>(), Path.Combine(stateDir, "deployments"), sp.GetRequiredService<ILogger<FileSystemDeploymentStore>>()));
 builder.Services.AddSingleton(new ManagementSecurity(builder.Configuration, stateDir));
 builder.Services.AddSingleton<RuntimeStepQueue>();
 builder.Services.AddSingleton<DurableRuntime>();
@@ -116,18 +116,24 @@ app.Use(async (context, next) =>
             var pipeline = permission.PipelineScoped ? context.Request.RouteValues["id"]?.ToString() : null;
             if (pipeline is not null) SafePath.Id(pipeline);
             if (permission.Name is not null && !identity.Can(permission.Name, pipeline))
-                throw new UnauthorizedAccessException("This identity does not have permission for this operation.");
+                throw new PermissionDeniedException("This identity does not have permission for this operation.");
         }
         await next(context);
     }
-    catch (Exception ex) when (ex is ArgumentException or JsonException or DeploymentConflictException or RecoveryConflictException or KeyNotFoundException or UnauthorizedAccessException)
+    catch (Exception ex) when (ex is ArgumentException or JsonException or DeploymentConflictException or RecoveryConflictException or KeyNotFoundException or PermissionDeniedException)
     {
         context.Response.StatusCode = ex switch
         {
-            UnauthorizedAccessException => 403, DeploymentConflictException or RecoveryConflictException => 409,
+            PermissionDeniedException => 403, DeploymentConflictException or RecoveryConflictException => 409,
             KeyNotFoundException => 404, _ => 400,
         };
         await context.Response.WriteAsJsonAsync(new { error = ex.Message });
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+    {
+        app.Logger.LogError(ex, "Storage operation failed for {Method} {Path}", context.Request.Method, context.Request.Path);
+        context.Response.StatusCode = 500;
+        await context.Response.WriteAsJsonAsync(new { error = "A storage operation failed. Consult the runtime logs." });
     }
 });
 
@@ -265,7 +271,7 @@ app.MapGet("/api/executions/{id}", async (string id, IStateStore store, HttpCont
 app.MapPost("/api/executions", async (ExecutionRequest body, FileSystemDeploymentStore store, HttpContext context) =>
 {
     SafePath.Id(body.PipelineId);
-    if (!ManagementSecurity.Identity(context).Can("test", body.PipelineId)) throw new UnauthorizedAccessException("Pipeline test permission required.");
+    if (!ManagementSecurity.Identity(context).Can("test", body.PipelineId)) throw new PermissionDeniedException("Pipeline test permission required.");
     var draft = await store.GetAsync(body.PipelineId) ?? throw new KeyNotFoundException("Pipeline not found.");
     if (body.ExpectedRevisionId is not null && body.Content is null && body.ExpectedRevisionId != draft.DraftRevisionId)
         throw new DeploymentConflictException("The saved draft changed. Reload before testing.");
@@ -325,7 +331,9 @@ app.MapPost("/api/v1/trigger/{**path}", async (string path, HttpContext context,
         {
             var decoded = header.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase)
                 ? System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(header[6..])) : "";
-            if (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(password) || decoded != user + ":" + password)
+            if (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(password) || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+                System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(decoded)),
+                System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(user + ":" + password))))
                 return Results.Json(new { error = "Invalid trigger credentials." }, statusCode: 401);
         }
         catch (FormatException) { return Results.Json(new { error = "Invalid trigger credentials." }, statusCode: 401); }
@@ -395,7 +403,7 @@ static async Task<Elwood.Pipeline.State.ExecutionState> RecoveryExecution(string
 {
     var state = await store.GetExecutionAsync(id);
     if (state is null || !CanReadExecution(context, state)) throw new KeyNotFoundException("Execution not found.");
-    if (!ManagementSecurity.Identity(context).Can("recover", state.PipelineId)) throw new UnauthorizedAccessException("Pipeline recovery permission required.");
+    if (!ManagementSecurity.Identity(context).Can("recover", state.PipelineId)) throw new PermissionDeniedException("Pipeline recovery permission required.");
     return state;
 }
 static string ExecutionJson(Elwood.Core.Abstractions.IElwoodValue value) => value is JsonNodeValue node ? node.Node?.ToJsonString() ?? "null" : JsonSerializer.Serialize(value.GetStringValue());

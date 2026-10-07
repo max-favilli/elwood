@@ -13,7 +13,7 @@ public sealed class StepEvaluator(ElwoodEngine engine)
     // The lexer skips comments and treats strings as single tokens. Only a leading
     // statement keyword introduces a script; keywords inside values are expressions.
     public static bool IsScript(string source)
-        => new Lexer(source).Tokenize()[0].Kind is TokenKind.Let or TokenKind.Return;
+        => new Lexer(source).FirstToken().Kind is TokenKind.Let or TokenKind.Return;
 
     public IElwoodValue Evaluate(string reference, IElwoodValue input,
         Dictionary<string, IElwoodValue>? bindings, IReadOnlyDictionary<string, string> scripts,

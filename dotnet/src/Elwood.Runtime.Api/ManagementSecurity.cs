@@ -13,17 +13,23 @@ public sealed class ManagementIdentity
     public string[] Pipelines { get; set; } = [];
     public bool LocalOnly { get; set; }
     public bool Can(string operation, string? pipeline = null) =>
-        Permissions.Contains(operation) && (pipeline is null || Pipelines.Contains("*") || Pipelines.Contains(pipeline));
+        Permissions.Contains(operation, StringComparer.OrdinalIgnoreCase) && (pipeline is null || Pipelines.Contains("*") || Pipelines.Contains(pipeline, StringComparer.OrdinalIgnoreCase));
 }
 
 public sealed class ManagementSecurity
 {
     private readonly ManagementIdentity[] _identities;
     private readonly IConfiguration _configuration;
+    private readonly bool _behindProxy;
 
     public ManagementSecurity(IConfiguration configuration, string stateDir)
     {
         _configuration = configuration;
+        _behindProxy = configuration.GetValue<bool>("Elwood:Management:BehindProxy") ||
+            configuration.GetValue<bool>("ASPNETCORE_FORWARDEDHEADERS_ENABLED") ||
+            configuration.GetSection("ForwardedHeaders").Exists();
+        if (_behindProxy && configuration.GetValue<bool>("Elwood:Management:LocalDevelopment"))
+            throw new InvalidOperationException("LocalDevelopment management authentication cannot be used behind a reverse proxy.");
         var identities = configuration.GetSection("Elwood:Management:Tokens").Get<ManagementIdentity[]>() ?? [];
         if (configuration.GetValue<bool>("Elwood:Management:LocalDevelopment"))
         {
@@ -53,7 +59,8 @@ public sealed class ManagementSecurity
 
     public ManagementIdentity? Authenticate(HttpContext context)
     {
-        var local = context.Connection.RemoteIpAddress is { } address && IPAddress.IsLoopback(address);
+        var forwarded = context.Request.Headers.Keys.Any(key => key.Equals("Forwarded", StringComparison.OrdinalIgnoreCase) || key.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase));
+        var local = !_behindProxy && !forwarded && context.Connection.RemoteIpAddress is { } address && IPAddress.IsLoopback(address);
         // Remote bearer credentials require TLS. Forwarded headers are not implicitly trusted.
         if (!local && !context.Request.IsHttps) return null;
         var authorization = context.Request.Headers.Authorization.ToString();

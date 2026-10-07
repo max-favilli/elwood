@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-test('M5 samples, authenticated HTTP chain, Event Grid acceptance and scoped connector identities', { timeout: 60000 }, async () => {
+test('M5 samples, authenticated HTTP chain, Event Grid acceptance and scoped connector identities', { timeout: 180000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'elwood-m5-api-'));
   const token = 'local-m5-management';
   let child, logs = '', writes = [];

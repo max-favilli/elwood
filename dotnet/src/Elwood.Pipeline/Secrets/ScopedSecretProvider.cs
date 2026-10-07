@@ -7,8 +7,11 @@ public sealed class ScopedSecretProvider(ISecretProvider inner, IEnumerable<stri
 
     public string? GetSecret(string path)
     {
-        if (!_allowed.Contains(path)) throw new UnauthorizedAccessException("Secret access denied for this pipeline and operation.");
+        if (!_allowed.Contains(path)) throw new PermissionDeniedException("Secret access denied for this pipeline and operation.");
         // Never fall through to StringResolver's unrestricted environment fallback.
         return inner.GetSecret(path) ?? throw new InvalidOperationException("An authorized secret is unavailable.");
     }
 }
+
+/// <summary>A deliberate host permission denial, safe to expose to the caller.</summary>
+public sealed class PermissionDeniedException(string message) : UnauthorizedAccessException(message);

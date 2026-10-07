@@ -1,4 +1,5 @@
 using Elwood.Pipeline.Storage;
+using Microsoft.Extensions.Logging;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -13,13 +14,15 @@ namespace Elwood.Pipeline.Registry;
 public sealed class FileSystemPipelineStore : IPipelineStore
 {
     private readonly string _baseDir;
+    private readonly ILogger<FileSystemPipelineStore>? _logger;
     private static readonly IDeserializer YamlDeserializer = new DeserializerBuilder()
         .WithNamingConvention(CamelCaseNamingConvention.Instance)
         .IgnoreUnmatchedProperties()
         .Build();
 
-    public FileSystemPipelineStore(string baseDir)
+    public FileSystemPipelineStore(string baseDir, ILogger<FileSystemPipelineStore>? logger = null)
     {
+        _logger = logger;
         _baseDir = Path.GetFullPath(baseDir);
         SafePath.Within(_baseDir, "check");
         Directory.CreateDirectory(baseDir);
@@ -32,11 +35,11 @@ public sealed class FileSystemPipelineStore : IPipelineStore
 
         foreach (var dir in Directory.GetDirectories(_baseDir))
         {
-            var yamlFile = SafePath.Within(dir, "pipeline.elwood.yaml");
-            if (!File.Exists(yamlFile)) continue;
-
             try
             {
+                SafePath.Id(Path.GetFileName(dir));
+                var yamlFile = SafePath.Within(dir, "pipeline.elwood.yaml");
+                if (!File.Exists(yamlFile)) continue;
                 var yaml = File.ReadAllText(yamlFile);
                 var config = YamlDeserializer.Deserialize<Schema.PipelineConfig>(yaml);
                 var id = Path.GetFileName(dir);
@@ -56,7 +59,8 @@ public sealed class FileSystemPipelineStore : IPipelineStore
                     LastModified = File.GetLastWriteTimeUtc(yamlFile),
                 });
             }
-            catch { /* skip invalid pipelines */ }
+            catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or YamlDotNet.Core.YamlException)
+            { _logger?.LogWarning("Skipping invalid legacy pipeline {Id}: {ErrorType}", Path.GetFileName(dir), ex.GetType().Name); }
         }
 
         return Task.FromResult(results.OrderBy(p => p.Name).ToList());

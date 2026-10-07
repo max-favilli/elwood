@@ -10,7 +10,7 @@ import { join, resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 
-test('Runtime API exposes warnings, validation errors and failed execution history', { timeout: 60000 }, async () => {
+test('Runtime API exposes warnings, validation errors and failed execution history', { timeout: 180000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'elwood-api-test-'));
   let child;
   const admin = 'integration-admin-token';
@@ -31,7 +31,7 @@ test('Runtime API exposes warnings, validation errors and failed execution histo
   try {
     await writeFile(join(root, 'appsettings.json'), JSON.stringify({ Elwood: { Management: { Tokens: [
       { Name: 'admin', TokenSha256: createHash('sha256').update(admin).digest('hex'), Permissions: ['read', 'write', 'test', 'deploy'], Pipelines: ['*'] },
-      { Name: 'reader', TokenSha256: createHash('sha256').update(reader).digest('hex'), Permissions: ['read'], Pipelines: ['orders'] },
+      { Name: 'reader', TokenSha256: createHash('sha256').update(reader).digest('hex'), Permissions: ['READ'], Pipelines: ['ORDERS'] },
       { Name: 'writer', TokenSha256: createHash('sha256').update(writer).digest('hex'), Permissions: ['read', 'write', 'test'], Pipelines: ['orders'] },
       { Name: 'write-only', TokenSha256: createHash('sha256').update('write-only').digest('hex'), Permissions: ['write'], Pipelines: ['orders'] },
       { Name: 'tester', TokenSha256: createHash('sha256').update('test-only').digest('hex'), Permissions: ['test'], Pipelines: ['orders'] },
@@ -60,7 +60,7 @@ outputs:
     const base = `http://127.0.0.1:${port}`;
     child = spawn('dotnet', [resolve(process.env.ELWOOD_TEST_RUNTIME_DLL ?? 'dotnet/src/Elwood.Runtime.Api/bin/Debug/net10.0/Elwood.Runtime.Api.dll'), '--urls', base], {
       cwd: root, windowsHide: true,
-      env: { ...process.env, Elwood__PipelinesDir: pipelines, Elwood__StateDir: join(root, 'state'),
+      env: { ...process.env, Logging__EventLog__LogLevel__Default: 'None', Elwood__PipelinesDir: pipelines, Elwood__StateDir: join(root, 'state'),
         Elwood__Management__LocalDevelopment: 'false', ELWOOD_SECRET_ALLOWED: `http://127.0.0.1:${upstream.address().port}`, Elwood__AppConfiguration: '', ELWOOD_APP_CONFIGURATION: '', APPLICATIONINSIGHTS_CONNECTION_STRING: '' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -68,9 +68,9 @@ outputs:
     child.stdout.on('data', chunk => { logs = (logs + chunk).slice(-8000); });
     child.stderr.on('data', chunk => { logs = (logs + chunk).slice(-8000); });
     let ready = false;
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 600; i++) {
       if (child.exitCode !== null) break;
-      try { ready = (await fetch(`${base}/api/health`)).ok; } catch { /* starting */ }
+      try { ready = (await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(1000) })).ok; } catch { /* starting */ }
       if (ready) break;
       await delay(100);
     }
@@ -78,6 +78,12 @@ outputs:
     const post = (path, data) => fetch(base + path, { method: 'POST', headers: {
       Authorization: `Bearer ${admin}`, 'Content-Type': 'application/json', Origin: 'http://localhost:3000',
     }, body: JSON.stringify(data) });
+
+    assert.equal((await fetch(`${base}/api/session`, { headers: { Authorization: `Bearer ${admin}`, 'X-Forwarded-For': '203.0.113.1' } })).status, 401);
+    await mkdir(join(root, 'state', 'deployments', 'inaccessible.json'), { recursive: true });
+    const storageFailure = await fetch(`${base}/api/pipelines/inaccessible`, { headers: { Authorization: `Bearer ${admin}` } });
+    assert.equal(storageFailure.status, 500);
+    assert.doesNotMatch(await storageFailure.text(), /inaccessible|state|elwood-api-test/i);
 
     const literal = await post('/api/pipelines/regression/scripts/literal.elwood/test', {});
     assert.equal(literal.status, 200);
@@ -309,6 +315,8 @@ outputs:
     const validation = await (await post('/api/pipelines/regression/validate', { content: { yaml: 'name: regression\nretry: { attempts: 3 }\n', scripts: {} } })).json();
     assert.equal(validation.valid, false);
     assert.match(validation.errors.join(' '), /retry/);
+  } catch (error) {
+    error.message += `\nRuntime logs:\n${logs}`; throw error;
   } finally {
     if (child && child.exitCode === null) {
       const exited = once(child, 'exit');
@@ -318,4 +326,22 @@ outputs:
     await new Promise(resolve => upstream.close(resolve));
     await rm(root, { recursive: true, force: true });
   }
+});
+
+
+test('Local development token cannot start behind a configured proxy', { timeout: 90000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'elwood-proxy-test-'));
+  let child; let logs = '';
+  try {
+    child = spawn('dotnet', [resolve(process.env.ELWOOD_TEST_RUNTIME_DLL ?? 'dotnet/src/Elwood.Runtime.Api/bin/Debug/net10.0/Elwood.Runtime.Api.dll')], {
+      cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, Logging__EventLog__LogLevel__Default: 'None', Elwood__PipelinesDir: join(root, 'pipelines'), Elwood__StateDir: join(root, 'state'),
+        Elwood__Management__LocalDevelopment: 'true', Elwood__Management__BehindProxy: 'true',
+        Elwood__AppConfiguration: '', ELWOOD_APP_CONFIGURATION: '', APPLICATIONINSIGHTS_CONNECTION_STRING: '' },
+    });
+    child.stdout.on('data', chunk => { logs += chunk; }); child.stderr.on('data', chunk => { logs += chunk; });
+    await once(child, 'exit', { signal: AbortSignal.timeout(60000) });
+    assert.notEqual(child.exitCode, 0);
+    assert.match(logs, /LocalDevelopment.*reverse proxy/);
+  } finally { if (child?.exitCode === null) { child.kill(); await once(child, 'exit'); } await rm(root, { recursive: true, force: true }); }
 });

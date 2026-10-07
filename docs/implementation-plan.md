@@ -206,3 +206,10 @@ Each supported installation needs deployment automation, configuration/secrets g
 - Provider-specific load targets and operational acceptance criteria (M4 defines retry, failure-response and retention semantics).
 
 These decisions do not block regression tests and fixes for swallowed transformation errors, incorrect execution state or misleading portal results.
+
+
+### Review follow-up: storage and management hardening
+
+A separate work package after the six blocking fixes adds removable cross-process execution claims, old temporary/access-lock cleanup, replace-compatible readers and bounded Windows rename retries. Invalid legacy folder IDs are skipped per pipeline with a log entry. Management denials have a dedicated exception type; filesystem failures return a generic 500. Proxy configuration rejects local development credentials, Basic trigger authentication compares hashes in constant time, and management scopes compare case-insensitively.
+
+Provider HTTP statuses now obey the pipeline's status allowlist; interrupted terminal steps have completion timestamps. Synchronous execution loads the immutable pipeline once and waits for the next retry deadline. The classifier reads only the first lexer token, with no DSL semantic changes. Offline CLI binding/snapshot differences are explicitly documented in local-testing.md. UTF-8 trace previews stop on a character boundary. API tests use a longer cold-start budget and exercise proxy rejection, generic storage failures and scope casing.

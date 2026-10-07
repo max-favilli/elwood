@@ -91,3 +91,12 @@ Run `dotnet test dotnet/tests/Elwood.Pipeline.Tests/Elwood.Pipeline.Tests.csproj
 M4 local tests use the same step engine and authored retry policy as live executions. Attempts and call details are recorded. Test records do not expose live resume/replay controls or enter the background recovery queue; rerun the draft test explicitly. Deployed executions use the recovery workflow documented in [durable processing](durable-processing.md).
 
 Body previews are limited to 64 KiB per request/response by default. Configure `Elwood:Inspection:TestBodyLimitBytes` from 0 (disabled) to 1048576. Inspection reports byte counts and truncation markers; fixture assertions, transformations and receipt/checkpoint documents still use the complete data. Production execution state stores metadata only, and production runs do not create a test-context document.
+
+
+## Offline CLI boundary
+
+`elwood run` uses `PipelineExecutor` to transform supplied source files. It does not execute runtime connectors, retries, durable acceptance, destination delivery or recovery. Use the portal/API **Test draft** workflow when verifying runtime behavior, even for an async pipeline.
+
+The offline CLI and runtime share the DSL engine but supply different context bindings. In CLI source maps, `$source` comes from a supplied source envelope or minimal generated metadata; `$execution` is not supplied. At runtime, `$execution.id` identifies the retained execution, and fetched sources add HTTP/SQL/Blob metadata. Output maps and destination expressions must not assume a current `$source`: use the mapped IDM to carry required source metadata forward. A script that needs `$execution.id` must be tested through the runtime or receive an explicit binding in a standalone DSL test.
+
+The CLI's stored pipeline snapshot is an offline inspection artifact, not the durable runtime snapshot format. CLI executions cannot be resumed or replayed through the Runtime API. This distinction does not change DSL syntax or evaluation semantics.

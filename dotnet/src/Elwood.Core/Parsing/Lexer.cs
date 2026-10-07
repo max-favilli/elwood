@@ -21,6 +21,13 @@ public sealed class Lexer
         _source = source ?? throw new ArgumentNullException(nameof(source));
     }
 
+    /// <summary>Read one token without scanning the rest of the input.</summary>
+    public Token FirstToken()
+    {
+        SkipWhitespaceAndComments();
+        return _pos < _source.Length ? ReadToken() : MakeToken(TokenKind.Eof, "", _pos, _pos);
+    }
+
     public List<Token> Tokenize()
     {
         var tokens = new List<Token>();

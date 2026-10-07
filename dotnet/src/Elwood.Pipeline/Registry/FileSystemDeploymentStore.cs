@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using Elwood.Pipeline.Storage;
+using Microsoft.Extensions.Logging;
 
 namespace Elwood.Pipeline.Registry;
 
@@ -44,10 +45,12 @@ public sealed class FileSystemDeploymentStore
 {
     private readonly IPipelineStore _legacy;
     private readonly string _root;
+    private readonly ILogger<FileSystemDeploymentStore>? _logger;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public FileSystemDeploymentStore(IPipelineStore legacy, string root)
+    public FileSystemDeploymentStore(IPipelineStore legacy, string root, ILogger<FileSystemDeploymentStore>? logger = null)
     {
+        _logger = logger;
         _legacy = legacy;
         _root = Path.GetFullPath(root);
         SafePath.Within(_root, "catalog.lock");
@@ -74,7 +77,11 @@ public sealed class FileSystemDeploymentStore
             .Distinct(StringComparer.OrdinalIgnoreCase);
         var results = new List<DeploymentDefinition>();
         foreach (var id in ids)
-            if (await GetAsync(id) is { } definition) results.Add(definition);
+        {
+            try { if (await GetAsync(id) is { } definition) results.Add(definition); }
+            catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or JsonException)
+            { _logger?.LogWarning("Skipping invalid pipeline {Id}: {ErrorType}", id, ex.GetType().Name); }
+        }
         return results;
     }
 
@@ -219,7 +226,8 @@ public sealed class FileSystemDeploymentStore
     private async Task<Manifest?> ReadAsync(string id)
     {
         var path = FilePath(id);
-        return File.Exists(path) ? JsonSerializer.Deserialize<Manifest>(await File.ReadAllTextAsync(path), JsonOptions)! : null;
+        var json = await AtomicExecutionFile.ReadAsync(path);
+        return json is null ? null : JsonSerializer.Deserialize<Manifest>(json, JsonOptions)!;
     }
     private async Task WriteAsync(string id, Manifest manifest)
     {
@@ -228,7 +236,7 @@ public sealed class FileSystemDeploymentStore
         try
         {
             await File.WriteAllTextAsync(temp, JsonSerializer.Serialize(manifest, JsonOptions));
-            File.Move(temp, path, true);
+            await AtomicExecutionFile.ReplaceAsync(temp, path);
         }
         finally { if (File.Exists(temp)) File.Delete(temp); }
     }
@@ -237,7 +245,12 @@ public sealed class FileSystemDeploymentStore
         var path = SafePath.Within(_root, "catalog.lock");
         for (var attempt = 0; ; attempt++)
         {
-            try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            try
+            {
+                var lease = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                try { AtomicExecutionFile.Cleanup(_root); return lease; }
+                catch { lease.Dispose(); throw; }
+            }
             catch (IOException) when (attempt < 100) { await Task.Delay(20); }
         }
     }
