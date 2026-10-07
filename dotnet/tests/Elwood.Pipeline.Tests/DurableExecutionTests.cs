@@ -407,13 +407,13 @@ public sealed class DurableExecutionTests
     {
         public int Count;
         public bool CanHandle(PullSourceConfig config) => true;
-        public Task<SourceFetchResult> FetchAsync(PullSourceConfig config, IElwoodValue? context = null) => run(Interlocked.Increment(ref Count));
+        public Task<SourceFetchResult> FetchAsync(PullSourceConfig config, IElwoodValue? context = null, CancellationToken cancellationToken = default) => run(Interlocked.Increment(ref Count));
     }
     private sealed class Destinations : IDestinationConnector
     {
         public int First; public int Second;
         public bool CanHandle(string type) => true;
-        public Task<DeliveryResult> DeliverAsync(string type, object config, string content, string contentType, Dictionary<string, string>? context = null)
+        public Task<DeliveryResult> DeliverAsync(string type, object config, string content, string contentType, Dictionary<string, string>? context = null, CancellationToken cancellationToken = default)
         {
             if (((HttpDestinationConfig)config).Url.Contains("first")) { First++; return Task.FromResult(DeliveryResult.Ok(200)); }
             return Task.FromResult(++Second == 1 ? DeliveryResult.Fail("Unavailable", 503) : DeliveryResult.Ok(200));

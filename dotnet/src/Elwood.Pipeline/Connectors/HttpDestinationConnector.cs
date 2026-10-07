@@ -19,7 +19,7 @@ public sealed class HttpDestinationConnector : IDestinationConnector
         => destinationType is "restEndpoint" or "http";
 
     public async Task<DeliveryResult> DeliverAsync(string destinationType, object destinationConfig,
-        string content, string contentType, Dictionary<string, string>? context = null)
+        string content, string contentType, Dictionary<string, string>? context = null, CancellationToken cancellationToken = default)
     {
         // Deserialize config
         var json = JsonSerializer.Serialize(destinationConfig);
@@ -50,15 +50,17 @@ public sealed class HttpDestinationConnector : IDestinationConnector
                     }
             }
 
-            using var deadline = config.ConnectionTimeout is > 0 ? new CancellationTokenSource(config.ConnectionTimeout.Value) : null;
-            await HttpAuthentication.Apply(_httpClient, request, config.User, config.Password, config.Oauth2, deadline?.Token ?? default);
-            using var response = await HttpCallCapture.SendAsync(_httpClient, request, deadline?.Token ?? default, config.ConnectionTimeout);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            if (config.ConnectionTimeout is > 0) deadline.CancelAfter(config.ConnectionTimeout.Value);
+            await HttpAuthentication.Apply(_httpClient, request, config.User, config.Password, config.Oauth2, deadline.Token);
+            using var response = await HttpCallCapture.SendAsync(_httpClient, request, deadline.Token, config.ConnectionTimeout);
             var statusCode = (int)response.StatusCode;
 
             return response.IsSuccessStatusCode
-                ? DeliveryResult.Ok(statusCode, await response.Content.ReadAsStringAsync())
-                : DeliveryResult.Fail($"HTTP {statusCode}: {await response.Content.ReadAsStringAsync()}", statusCode);
+                ? DeliveryResult.Ok(statusCode, await response.Content.ReadAsStringAsync(deadline.Token))
+                : DeliveryResult.Fail($"HTTP {statusCode}: {await response.Content.ReadAsStringAsync(deadline.Token)}", statusCode);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (ConnectorException) { throw; }
         catch (Exception ex)
         {

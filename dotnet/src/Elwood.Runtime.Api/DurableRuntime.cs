@@ -57,7 +57,7 @@ public sealed class ExecutionRecoveryWorker(DurableRuntime runtime, RuntimeStepQ
                 var message = await queue.ReadAsync(token);
                 var state = await states.GetExecutionAsync(message.ExecutionId);
                 if (state?.Durable != true) continue;
-                await runtime.Runner(state.PipelineId).ExecuteStepAsync(message);
+                await runtime.Runner(state.PipelineId).ExecuteStepAsync(message, token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
             catch (Exception ex) { logger.LogError(ex, "Execution worker failed; persisted work remains recoverable."); }

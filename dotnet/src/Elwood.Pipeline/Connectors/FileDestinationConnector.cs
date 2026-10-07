@@ -11,7 +11,7 @@ public sealed class FileDestinationConnector : IDestinationConnector
         => destinationType is "azureFileShare" or "fileShare";
 
     public async Task<DeliveryResult> DeliverAsync(string destinationType, object destinationConfig,
-        string content, string contentType, Dictionary<string, string>? context = null)
+        string content, string contentType, Dictionary<string, string>? context = null, CancellationToken cancellationToken = default)
     {
         var json = JsonSerializer.Serialize(destinationConfig);
         var config = JsonSerializer.Deserialize<FileDestConfig>(json,
@@ -26,9 +26,10 @@ public sealed class FileDestinationConnector : IDestinationConnector
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
 
-            await File.WriteAllTextAsync(config.Filename, content);
+            await File.WriteAllTextAsync(config.Filename, content, cancellationToken);
             return DeliveryResult.Ok();
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             return DeliveryResult.Fail(ex.Message);

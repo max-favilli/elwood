@@ -84,8 +84,9 @@ public sealed class AsyncExecutor
         return id;
     }
 
-    public async Task ExecuteStepAsync(StepMessage message)
+    public async Task ExecuteStepAsync(StepMessage message, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         await using var claim = await _states.TryLockAsync(message.ExecutionId);
         if (claim is null) return;
         var state = await _states.GetExecutionAsync(message.ExecutionId);
@@ -115,17 +116,31 @@ public sealed class AsyncExecutor
             {
                 var stageIndex = stages.FindIndex(stage => stage.Contains(message.StepName));
                 idm = await _operations.Assemble(state, stages.Take(stageIndex).SelectMany(s => s));
-                await _operations.Source(state, pipeline, pipeline.Yaml.Sources.Single(s => s.Name == message.StepName), idm, attempt);
+                await _operations.Source(state, pipeline, pipeline.Yaml.Sources.Single(s => s.Name == message.StepName), idm, attempt, cancellationToken);
             }
             else
             {
                 idm = await _operations.Read(state.IdmRef, "IDM");
-                await _operations.Output(state, pipeline, pipeline.Yaml.Outputs.Single(o => o.Name == message.StepName), idm, attempt);
+                await _operations.Output(state, pipeline, pipeline.Yaml.Outputs.Single(o => o.Name == message.StepName), idm, attempt, cancellationToken);
             }
             attempt.Status = "Completed"; attempt.CompletedAt = Now;
             attempt.Diagnostics = [.. step.Diagnostics]; step.Status = ExecutionStatus.Completed; step.CompletedAt = Now;
             await Save(state);
             await Advance(state, pipeline);
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            // Preserve the pre-call durable checkpoint. Recovery must classify any
+            // interrupted write as uncertain, never assume cancellation rolled it back.
+            if (!state.Durable)
+            {
+                step.Status = ExecutionStatus.Failed; step.CompletedAt = Now;
+                step.OutcomeUncertain = attempt.ExternalCallStarted && attempt.MayHaveWritten;
+                attempt.Status = "Interrupted"; attempt.CompletedAt = Now;
+                state.Errors = ["Execution canceled by the caller or host."];
+                Terminal(state, ExecutionStatus.Failed); await Save(state);
+            }
+            throw new OperationCanceledException(cancellationToken);
         }
         catch (Exception ex)
         {
@@ -313,7 +328,7 @@ public sealed class AsyncExecutor
             }
             stages ??= Stages(await Load(state));
             var ready = Ready(state, stages).ToList();
-            foreach (var message in ready) { cancellationToken.ThrowIfCancellationRequested(); await ExecuteStepAsync(message); }
+            foreach (var message in ready) { cancellationToken.ThrowIfCancellationRequested(); await ExecuteStepAsync(message, cancellationToken); }
             if (ready.Count == 0)
             {
                 var next = state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values)

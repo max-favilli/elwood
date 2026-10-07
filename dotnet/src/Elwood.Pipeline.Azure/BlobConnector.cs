@@ -16,6 +16,8 @@ public sealed class BlobConnector(TokenCredential? credential = null,
     Func<string?, string?, string, string, BlobClient>? clientFactory = null,
     Action<string?, string?>? authorize = null) : ISourceConnector, IDestinationConnector
 {
+    private static readonly Lazy<TokenCredential> DefaultCredential = new(() => new AzureIdentity::Azure.Identity.DefaultAzureCredential());
+
     public bool CanHandle(PullSourceConfig config) => config.BlobStorage is not null;
     public bool CanHandle(string type) => type == "blobStorage";
 
@@ -26,10 +28,10 @@ public sealed class BlobConnector(TokenCredential? credential = null,
         var options = new BlobClientOptions(); options.Retry.MaxRetries = 0;
         if (!string.IsNullOrWhiteSpace(connection)) return new BlobClient(connection, container, path, options);
         var uri = new BlobUriBuilder(new Uri(account!)) { BlobContainerName = container, BlobName = path }.ToUri();
-        return new BlobClient(uri, credential ?? new AzureIdentity::Azure.Identity.DefaultAzureCredential(), options);
+        return new BlobClient(uri, credential ?? DefaultCredential.Value, options);
     }
 
-    public async Task<SourceFetchResult> FetchAsync(PullSourceConfig config, IElwoodValue? context = null)
+    public async Task<SourceFetchResult> FetchAsync(PullSourceConfig config, IElwoodValue? context = null, CancellationToken cancellationToken = default)
     {
         var blob = config.BlobStorage ?? throw new ArgumentException("Missing Blob source configuration.");
         var call = Start("download", blob.Container, blob.Path, blob.TimeoutSeconds);
@@ -38,7 +40,8 @@ public sealed class BlobConnector(TokenCredential? credential = null,
         {
             var client = Client(blob.ConnectionString, blob.AccountUrl, blob.Container, blob.Path);
             if (blob.VersionId is not null) client = client.WithVersion(blob.VersionId);
-            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(blob.TimeoutSeconds));
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(blob.TimeoutSeconds));
             var response = await client.DownloadStreamingAsync(new BlobDownloadOptions
             { Conditions = blob.IfMatch is null ? null : new BlobRequestConditions { IfMatch = Match(blob.IfMatch) } }, deadline.Token);
             await using var stream = response.Value.Content;
@@ -59,11 +62,12 @@ public sealed class BlobConnector(TokenCredential? credential = null,
             if (call is not null) { call.ResponseBody = content; call.ResponseMetadata = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(metadata.ToJsonString()); }
             return new(content, blob.ContentType, metadata: new JsonObject { ["blob"] = metadata });
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception ex) { throw Failure(ex, false, call); }
         finally { if (call is not null) call.DurationMs = timer.Elapsed.TotalMilliseconds; }
     }
 
-    public async Task<DeliveryResult> DeliverAsync(string type, object config, string content, string contentType, Dictionary<string, string>? context = null)
+    public async Task<DeliveryResult> DeliverAsync(string type, object config, string content, string contentType, Dictionary<string, string>? context = null, CancellationToken cancellationToken = default)
     {
         var blob = (BlobStorageDestinationConfig)config;
         var call = Start("upload", blob.Container, blob.Filename, blob.TimeoutSeconds);
@@ -72,7 +76,8 @@ public sealed class BlobConnector(TokenCredential? credential = null,
         try
         {
             var client = Client(blob.ConnectionString, blob.AccountUrl, blob.Container, blob.Filename);
-            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(blob.TimeoutSeconds));
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(blob.TimeoutSeconds));
             var bytes = Encoding.UTF8.GetBytes(content);
             using var stream = new MemoryStream(bytes);
             if (call is not null) call.RequestBody = content;
@@ -88,6 +93,7 @@ public sealed class BlobConnector(TokenCredential? credential = null,
             if (call is not null) { call.ResponseBody = receipt.ToJsonString(); call.ResponseMetadata = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(receipt.ToJsonString()); }
             return DeliveryResult.Ok(receipt: receipt.ToJsonString());
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception ex) { throw Failure(ex, sent, call); }
         finally { if (call is not null) call.DurationMs = timer.Elapsed.TotalMilliseconds; }
     }

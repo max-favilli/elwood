@@ -284,7 +284,7 @@ app.MapPost("/api/executions", async (ExecutionRequest body, FileSystemDeploymen
         context.RequestServices.GetRequiredService<IConfiguration>().GetValue("Elwood:Inspection:TestBodyLimitBytes", 64 * 1024));
     var payload = JsonNodeValueFactory.Instance.Parse(body.Payload.ValueKind == JsonValueKind.Undefined ? "{}" : body.Payload.GetRawText());
     // Management execution is always an explicit draft test, including async definitions.
-    var result = await Executor(context, body.PipelineId, isTest: true, testSession).ExecuteAsync(parsed, payload, isTest: true);
+    var result = await Executor(context, body.PipelineId, isTest: true, testSession).ExecuteAsync(parsed, payload, isTest: true, cancellationToken: app.Lifetime.ApplicationStopping);
     var state = await context.RequestServices.GetRequiredService<IStateStore>().GetExecutionAsync(result.ExecutionId!);
     var inspection = CanReadExecution(context, state!)
         ? await ExecutionInspection.LoadAsync(state!, context.RequestServices.GetRequiredService<IDocumentStore>()) : null;
@@ -371,7 +371,7 @@ app.MapPost("/api/v1/trigger/{**path}", async (string path, HttpContext context,
         context.Response.Headers["X-Elwood-Revision"] = accepted!.RevisionId;
         return Results.Accepted($"/api/executions/{executionId}", new { executionId, revisionId = accepted.RevisionId, status = accepted.Status });
     }
-    var result = await Executor(context, id, false).ExecuteAsync(parsed, payload, triggerSourceName: sourceName);
+    var result = await Executor(context, id, false).ExecuteAsync(parsed, payload, triggerSourceName: sourceName, cancellationToken: app.Lifetime.ApplicationStopping);
     context.Response.Headers["X-Elwood-Revision"] = bundle.RevisionId;
     if (!result.IsSuccess)
     {

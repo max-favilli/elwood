@@ -9,7 +9,7 @@ public sealed class FileSourceConnector : ISourceConnector
         => config.FileShare is not null;
 
     public async Task<SourceFetchResult> FetchAsync(Schema.PullSourceConfig config,
-        Core.Abstractions.IElwoodValue? context = null)
+        Core.Abstractions.IElwoodValue? context = null, CancellationToken cancellationToken = default)
     {
         var fs = config.FileShare ?? throw new InvalidOperationException("FileShare config is null");
         var path = fs.Path;
@@ -17,7 +17,7 @@ public sealed class FileSourceConnector : ISourceConnector
         if (!File.Exists(path))
             throw new FileNotFoundException($"Source file not found: {path}");
 
-        var content = await File.ReadAllTextAsync(path);
+        var content = await File.ReadAllTextAsync(path, cancellationToken);
         var ext = Path.GetExtension(path).ToLowerInvariant();
         var format = ext switch
         {

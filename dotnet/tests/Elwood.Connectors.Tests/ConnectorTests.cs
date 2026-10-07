@@ -212,6 +212,60 @@ public class ConnectorTests
         Assert.Equal("[REDACTED]", Assert.Single(call.RequestHeaders!["Authorization"]));
     }
 
+
+    [Fact]
+    public async Task OAuthCacheReusesTokensAndSeparatesRotatedCredentialsAndScopes()
+    {
+        var tokens = 0;
+        using var client = new HttpClient(new Handler(async request =>
+        {
+            await Task.Yield();
+            if (request.RequestUri!.AbsolutePath == "/token")
+                return new(HttpStatusCode.OK) { Content = new StringContent($"{{\"access_token\":\"token-{Interlocked.Increment(ref tokens)}\",\"expires_in\":3600}}") };
+            Assert.StartsWith("token-", request.Headers.Authorization!.Parameter);
+            return new(HttpStatusCode.OK) { Content = new StringContent("{}") };
+        }));
+        var connector = new HttpSourceConnector(client);
+        var config = new PullSourceConfig { Http = new() { Url = "https://crm.test/data", Oauth2 = new() { TokenUrl = "https://crm.test/token", ClientId = "client", ClientSecret = "one" } } };
+        await Task.WhenAll(Enumerable.Range(0, 10).Select(_ => connector.FetchAsync(config)));
+        Assert.Equal(1, tokens);
+        config.Http.Oauth2.ClientSecret = "two";
+        await connector.FetchAsync(config); Assert.Equal(2, tokens);
+        config.Http.Oauth2.Scope = "other";
+        await connector.FetchAsync(config); Assert.Equal(3, tokens);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task OAuthCacheDoesNotServeExpiredOrUncacheableTokens(int seconds)
+    {
+        var tokens = 0;
+        using var client = new HttpClient(new Handler(request => Task.FromResult(request.RequestUri!.AbsolutePath == "/token"
+            ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent($"{{\"access_token\":\"token-{++tokens}\",\"expires_in\":{seconds}}}") }
+            : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") })));
+        var connector = new HttpSourceConnector(client);
+        var config = new PullSourceConfig { Http = new() { Url = "https://crm.test/data", Oauth2 = new() { TokenUrl = "https://crm.test/token", ClientId = "client", ClientSecret = "secret" } } };
+        await connector.FetchAsync(config);
+        if (seconds > 0) await Task.Delay(TimeSpan.FromSeconds(1.2));
+        await connector.FetchAsync(config);
+        Assert.Equal(2, tokens);
+    }
+
+    [Fact]
+    public async Task OAuthFailureIsNotCached()
+    {
+        var tokens = 0;
+        using var client = new HttpClient(new Handler(request => Task.FromResult(request.RequestUri!.AbsolutePath == "/token"
+            ? ++tokens == 1 ? new(HttpStatusCode.ServiceUnavailable) : new(HttpStatusCode.OK) { Content = new StringContent("{\"access_token\":\"good\",\"expires_in\":3600}") }
+            : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") })));
+        var connector = new HttpSourceConnector(client);
+        var config = new PullSourceConfig { Http = new() { Url = "https://crm.test/data", Oauth2 = new() { TokenUrl = "https://crm.test/token", ClientId = "client", ClientSecret = "secret" } } };
+        Assert.Equal(503, (await Assert.ThrowsAsync<ConnectorException>(() => connector.FetchAsync(config))).StatusCode);
+        await connector.FetchAsync(config); await connector.FetchAsync(config);
+        Assert.Equal(2, tokens);
+    }
+
     private sealed class Handler(Func<HttpRequestMessage, Task<HttpResponseMessage>> send) : HttpMessageHandler
     { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => send(request); }
     private sealed class FailSecondInput : IDocumentStore
@@ -231,7 +285,7 @@ public class ConnectorTests
     {
         public int SqlCalls, BlobCalls;
         public bool CanHandle(string type) => true;
-        public Task<DeliveryResult> DeliverAsync(string type, object config, string content, string contentType, Dictionary<string, string>? context = null)
+        public Task<DeliveryResult> DeliverAsync(string type, object config, string content, string contentType, Dictionary<string, string>? context = null, CancellationToken cancellationToken = default)
         {
             if (type == "sql") SqlCalls++;
             else if (++BlobCalls == 1) throw new ConnectorException("Connection lost after upload", "transport", true, true);

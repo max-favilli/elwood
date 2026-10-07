@@ -12,7 +12,7 @@ public interface ISourceConnector
     bool CanHandle(Schema.PullSourceConfig config);
 
     /// <summary>Fetch data from the source. Returns raw content as string.</summary>
-    Task<SourceFetchResult> FetchAsync(Schema.PullSourceConfig config, IElwoodValue? context = null);
+    Task<SourceFetchResult> FetchAsync(Schema.PullSourceConfig config, IElwoodValue? context = null, CancellationToken cancellationToken = default);
 }
 
 public sealed class SourceFetchResult
@@ -44,7 +44,7 @@ public interface IDestinationConnector
 
     /// <summary>Deliver content to the destination.</summary>
     Task<DeliveryResult> DeliverAsync(string destinationType, object destinationConfig,
-        string content, string contentType, Dictionary<string, string>? context = null);
+        string content, string contentType, Dictionary<string, string>? context = null, CancellationToken cancellationToken = default);
 }
 
 public sealed class DeliveryResult

@@ -209,7 +209,7 @@ public sealed class DeploymentTests : IDisposable
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Continue { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool CanHandle(PullSourceConfig config) => true;
-        public async Task<SourceFetchResult> FetchAsync(PullSourceConfig config, Elwood.Core.Abstractions.IElwoodValue? context = null)
+        public async Task<SourceFetchResult> FetchAsync(PullSourceConfig config, Elwood.Core.Abstractions.IElwoodValue? context = null, CancellationToken cancellationToken = default)
         {
             Started.SetResult();
             await Continue.Task.WaitAsync(TimeSpan.FromSeconds(5));

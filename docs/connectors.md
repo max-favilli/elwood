@@ -21,7 +21,7 @@ oauth2:
   clientAuthentication: basic         # basic (default) or body
 ```
 
-`oauth2` has the same shape on each `destinations.http` entry. Token endpoints require HTTPS, except loopback HTTP for controlled tests. Tokens are acquired per call; there is no token cache or interactive authorization-code flow. Default clients do not follow redirects. An unsuccessful token request fails before sending the business request and is not an uncertain business write. Token exchanges and tokens are excluded from traces; authorization headers are redacted.
+`oauth2` has the same shape on each `destinations.http` entry. Token endpoints require HTTPS, except loopback HTTP for controlled tests. Successful tokens with a usable `expires_in` are cached until shortly before expiry; see authentication lifetimes below. Interactive authorization-code flows are not supported. Default clients do not follow redirects. An unsuccessful token request fails before sending the business request and is not an uncertain business write. Token exchanges and tokens are excluded from traces; authorization headers are redacted.
 
 Sources can send raw string bodies with `bodyFormat: text` or `xml`; default `json` serializes the evaluated value. Outputs use `contentType: text` or `xml` and their map must return a string. HTTP headers can specify `Content-Type` and `SOAPAction`. This supports authored XML envelopes over HTTP, not WSDL discovery, automatic SOAP object mapping or TQL. The confirmed M5 SAP PI/PO flow is JSON HTTP with Basic authentication. Response bodies from destinations are retained as receipts. To use a response in later transformations, model the request as a dependent HTTP pull source, as in the CRM sample.
 
@@ -199,3 +199,10 @@ The hosted RabbitMQ test additionally requires the management plugin. Set `ELWOO
 The supplied-input CLI accepts and validates retry policies but does not execute them or connector delivery; it prints a note. A production bundle can therefore be used directly for offline transformation checks without removing retry blocks. The Deldo callable-lambda, numeric-conversion, deliberate-failure and strict-access requests are tracked as separate DSL work; M5 changes no language behavior.
 
 Permanently invalid RabbitMQ messages (size limit, required MessageId, invalid UTF-8/JSON, or conflicting MessageId/payload) are rejected without requeue. Configure a dead-letter exchange/queue on the external queue to retain these rejects; without one RabbitMQ discards them. Logs identify MessageId, exchange, routing key and reason, without message bodies. Transient acceptance failures remain unacknowledged and reconnect with exponential delay bounded at 60 seconds, reset after successful acceptance.
+
+
+## Cancellation and authentication lifetimes
+
+Source and destination connector methods accept an optional caller `CancellationToken`. Host shutdown propagates it through HTTP requests (including OAuth2), Blob transfers, SQL connections/commands and file I/O, combined with each operation's configured deadline. A durable attempt interrupted during a possible write retains its pre-call checkpoint and enters the normal uncertain-write recovery policy on restart. Cancellation is not proof of rollback. Embedders implementing custom connectors must accept and honor the new parameter.
+
+Blob connectors reuse a lazily created `DefaultAzureCredential` unless an explicit credential is supplied; pipeline/account grants are still checked on every operation. OAuth2 client-credentials tokens are cached in memory per HTTP client and exact resolved OAuth configuration, including the client secret and scope. Rotation uses a different hashed key. Only successful responses with a positive numeric `expires_in` are cached; expiry includes refresh headroom, and each client cache is bounded to 256 entries. Token exchanges and cached credentials remain excluded from traces and persistence.

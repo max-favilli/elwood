@@ -28,12 +28,12 @@ public sealed class SyncExecutor
     }
 
     public async Task<PipelineResult> ExecuteAsync(ParsedPipeline pipeline, IElwoodValue triggerPayload,
-        IElwoodValue? triggerMetadata = null, string? triggerSourceName = null, bool isTest = false)
+        IElwoodValue? triggerMetadata = null, string? triggerSourceName = null, bool isTest = false, CancellationToken cancellationToken = default)
     {
         if (!pipeline.IsValid) return PipelineResult.Failed(pipeline.Errors.ToList());
         var id = await _runner.StartAsync(pipeline, triggerPayload, triggerSourceName, isTest: isTest,
             triggerMetadata: triggerMetadata, durable: _durable);
-        return await _runner.RunToCompletion(id);
+        return await _runner.RunToCompletion(id, cancellationToken);
     }
 
     // Compatibility for sync-only embedding adapters. Never advertised as durable acceptance.

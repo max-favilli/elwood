@@ -23,7 +23,7 @@ public sealed class HttpSourceConnector : ISourceConnector
     public bool CanHandle(Schema.PullSourceConfig config) => config.Http is not null;
 
     public async Task<SourceFetchResult> FetchAsync(Schema.PullSourceConfig config,
-        Core.Abstractions.IElwoodValue? context = null)
+        Core.Abstractions.IElwoodValue? context = null, CancellationToken cancellationToken = default)
     {
         var http = config.Http ?? throw new InvalidOperationException("HTTP config is null");
 
@@ -50,11 +50,10 @@ public sealed class HttpSourceConnector : ISourceConnector
                 }
 
         // Apply per-request timeout if configured
-        using var cts = http.ConnectionTimeout is > 0
-            ? new CancellationTokenSource(TimeSpan.FromMilliseconds(http.ConnectionTimeout.Value))
-            : null;
-        await HttpAuthentication.Apply(_httpClient, request, http.User, http.Password, http.Oauth2, cts?.Token ?? default);
-        using var response = await HttpCallCapture.SendAsync(_httpClient, request, cts?.Token ?? default, http.ConnectionTimeout);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (http.ConnectionTimeout is > 0) cts.CancelAfter(http.ConnectionTimeout.Value);
+        await HttpAuthentication.Apply(_httpClient, request, http.User, http.Password, http.Oauth2, cts.Token);
+        using var response = await HttpCallCapture.SendAsync(_httpClient, request, cts.Token, http.ConnectionTimeout);
         var statusCode = (int)response.StatusCode;
 
         // Check if the status code is accepted
@@ -63,7 +62,7 @@ public sealed class HttpSourceConnector : ISourceConnector
             response.EnsureSuccessStatusCode(); // throws with the actual error
         }
 
-        var content = await response.Content.ReadAsStringAsync();
+        var content = await response.Content.ReadAsStringAsync(cts.Token);
         var contentType = response.Content.Headers.ContentType?.MediaType ?? "application/json";
 
         var responseHeaders = response.Headers

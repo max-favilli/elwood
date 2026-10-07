@@ -17,15 +17,15 @@ public sealed class SqlConnector(Func<string, DbConnection>? connectionFactory =
     public bool CanHandle(PullSourceConfig config) => config.Sql is not null;
     public bool CanHandle(string type) => type == "sql";
 
-    public async Task<SourceFetchResult> FetchAsync(PullSourceConfig config, IElwoodValue? context = null)
+    public async Task<SourceFetchResult> FetchAsync(PullSourceConfig config, IElwoodValue? context = null, CancellationToken cancellationToken = default)
     {
         var sql = config.Sql ?? throw new ArgumentException("Missing SQL source configuration.");
         var result = await Execute(sql.ConnectionString, sql.StoredProcedure, sql.Parameters, sql.CommandTimeoutSeconds,
-            sql.MaxRows, sql.MaxResultBytes, !sql.ReadOnly);
+            sql.MaxRows, sql.MaxResultBytes, !sql.ReadOnly, cancellationToken);
         return new(result.Rows.ToJsonString(), metadata: new JsonObject { ["sql"] = result.Metadata.DeepClone() });
     }
 
-    public async Task<DeliveryResult> DeliverAsync(string type, object config, string content, string contentType, Dictionary<string, string>? context = null)
+    public async Task<DeliveryResult> DeliverAsync(string type, object config, string content, string contentType, Dictionary<string, string>? context = null, CancellationToken cancellationToken = default)
     {
         var sql = (SqlDestinationConfig)config;
         if (contentType != "json") throw new ConnectorException("SQL payload delivery requires JSON.", "sql.format");
@@ -33,12 +33,12 @@ public sealed class SqlConnector(Func<string, DbConnection>? connectionFactory =
         {
             [sql.Parameter] = new() { Type = "nvarchar", Size = -1, ResolvedValue = JsonSerializer.SerializeToElement(content) }
         };
-        var result = await Execute(sql.ConnectionString, sql.StoredProcedure, parameters, sql.CommandTimeoutSeconds, sql.MaxRows, sql.MaxResultBytes, true);
+        var result = await Execute(sql.ConnectionString, sql.StoredProcedure, parameters, sql.CommandTimeoutSeconds, sql.MaxRows, sql.MaxResultBytes, true, cancellationToken);
         return DeliveryResult.Ok(receipt: new JsonObject { ["rows"] = result.Rows, ["sql"] = result.Metadata }.ToJsonString());
     }
 
     private async Task<(JsonArray Rows, JsonObject Metadata)> Execute(string connectionString, string procedure,
-        Dictionary<string, SqlParameterConfig> parameters, int timeout, int maxRows, int maxBytes, bool mayWrite)
+        Dictionary<string, SqlParameterConfig> parameters, int timeout, int maxRows, int maxBytes, bool mayWrite, CancellationToken cancellationToken)
     {
         var call = HttpCallCapture.Details;
         var timer = Stopwatch.StartNew();
@@ -56,7 +56,8 @@ public sealed class SqlConnector(Func<string, DbConnection>? connectionFactory =
             command.CommandType = CommandType.StoredProcedure; command.CommandText = procedure; command.CommandTimeout = timeout;
             if (command is SqlCommand sqlCommand) sqlCommand.RetryLogicProvider = SqlConfigurableRetryFactory.CreateNoneRetryProvider();
             foreach (var (name, definition) in parameters) command.Parameters.Add(Parameter(command, name, definition));
-            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(timeout));
             await connection.OpenAsync(deadline.Token);
             sent = true;
             await using var reader = await command.ExecuteReaderAsync(deadline.Token);
@@ -86,6 +87,7 @@ public sealed class SqlConnector(Func<string, DbConnection>? connectionFactory =
             if (call is not null) { call.ResponseBody = rows.ToJsonString(); call.ResponseMetadata = JsonSerializer.Deserialize<Dictionary<string, object?>>(metadata.ToJsonString()); }
             return (rows, metadata);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (ConnectorException ex) { if (call is not null) call.Error = ex.Message; throw; }
         catch (Exception ex)
         {

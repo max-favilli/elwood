@@ -461,7 +461,7 @@ public class MockSourceConnector : ISourceConnector
 
     public bool CanHandle(Schema.PullSourceConfig config) => config.Http is not null;
 
-    public Task<SourceFetchResult> FetchAsync(Schema.PullSourceConfig config, IElwoodValue? context = null)
+    public Task<SourceFetchResult> FetchAsync(Schema.PullSourceConfig config, IElwoodValue? context = null, CancellationToken cancellationToken = default)
     {
         _onFetch?.Invoke(config, context);
         return Task.FromResult(new SourceFetchResult(_response, "json", statusCode: _statusCode));

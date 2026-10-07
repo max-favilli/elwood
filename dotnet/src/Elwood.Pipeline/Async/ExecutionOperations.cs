@@ -57,7 +57,7 @@ internal sealed class ExecutionOperations
         return _factory.CreateObject(properties);
     }
 
-    public async Task Source(ExecutionState state, PipelineContentDto pipeline, SourceConfig config, IElwoodValue idm, StepAttempt attempt)
+    public async Task Source(ExecutionState state, PipelineContentDto pipeline, SourceConfig config, IElwoodValue idm, StepAttempt attempt, CancellationToken cancellationToken)
     {
         var step = state.Sources[config.Name];
         IElwoodValue payload;
@@ -85,7 +85,7 @@ internal sealed class ExecutionOperations
                 {
                     var connector = _sources.FirstOrDefault(c => c.CanHandle(from)) ?? throw new InvalidOperationException("No source connector available.");
                     ResolveSource(from, idm, Bindings(state, config.Name, idm));
-                    return await connector.FetchAsync(from, idm);
+                    return await connector.FetchAsync(from, idm, cancellationToken);
                 }
                 fetched = await Call(state, attempt, config.Name, null, from.Sql is { ReadOnly: false } ? "WRITE" : from.Http?.Method ?? "GET",
                     () => _test is null ? Real() : _test.FetchAsync(config.Name, from, Real));
@@ -124,7 +124,7 @@ internal sealed class ExecutionOperations
         await _documents.StoreAsync($"exec/{state.ExecutionId}/source/{config.Name}", Json(payload));
     }
 
-    public async Task Output(ExecutionState state, PipelineContentDto pipeline, OutputConfig config, IElwoodValue idm, StepAttempt attempt)
+    public async Task Output(ExecutionState state, PipelineContentDto pipeline, OutputConfig config, IElwoodValue idm, StepAttempt attempt, CancellationToken cancellationToken)
     {
         var step = state.Outputs[config.Name];
         string content;
@@ -164,7 +164,7 @@ internal sealed class ExecutionOperations
             {
                 var connector = _destinations.FirstOrDefault(c => c.CanHandle(type)) ?? throw new InvalidOperationException($"No connector for destination '{type}'.");
                 var resolved = ResolveDestination(destination, outputData, Bindings(state, config.Name, idm), pipeline, step.Diagnostics);
-                return await connector.DeliverAsync(type, resolved, deliveryContent, config.ContentType);
+                return await connector.DeliverAsync(type, resolved, deliveryContent, config.ContentType, cancellationToken: cancellationToken);
             }
             var index = i;
             var result = await Call(state, attempt, config.Name, i, (destination as HttpDestinationConfig)?.Method ?? "POST",

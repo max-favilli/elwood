@@ -209,8 +209,57 @@ public sealed class ReviewRegressionTests
     private sealed class StatusFailure(int status) : ISourceConnector
     {
         public bool CanHandle(Schema.PullSourceConfig config) => true;
-        public Task<SourceFetchResult> FetchAsync(Schema.PullSourceConfig config, Elwood.Core.Abstractions.IElwoodValue? context = null)
+        public Task<SourceFetchResult> FetchAsync(Schema.PullSourceConfig config, Elwood.Core.Abstractions.IElwoodValue? context = null, CancellationToken cancellationToken = default)
             => throw new ConnectorException("Provider failed", "provider.http", retryable: true, statusCode: status);
+    }
+
+
+    [Fact]
+    public async Task HostCancellationReachesConnectorAndLeavesUncertainWriteRecoverable()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "elwood-cancel-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var states = new FileSystemStateStore(root); var queue = new InMemoryStepQueue();
+            var handler = new CancelHandler(); using var client = new HttpClient(handler);
+            var runner = new AsyncExecutor(states, new InMemoryDocumentStore(), queue, sourceConnectors: [new HttpSourceConnector(client)]);
+            var pipeline = HttpPipeline(); pipeline.Config.Sources[0].From!.Http!.Method = "POST";
+            var id = await runner.StartAsync(pipeline, JsonNodeValueFactory.Instance.Parse("{}"));
+            using var stop = new CancellationTokenSource();
+            var executing = runner.ExecuteStepAsync(Assert.Single(queue.DrainAll()), stop.Token);
+            await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(3)); stop.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => executing.WaitAsync(TimeSpan.FromSeconds(3)));
+            Assert.Equal(ExecutionStatus.Running, (await states.GetExecutionAsync(id))!.Sources["remote"].Status);
+            await runner.RecoverAsync();
+            var state = (await states.GetExecutionAsync(id))!;
+            Assert.Equal(ExecutionStatus.AwaitingReview, state.Status);
+            Assert.NotNull(state.Sources["remote"].CompletedAt);
+            Assert.True(state.Sources["remote"].OutcomeUncertain);
+            Assert.Equal(1, handler.Calls);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task DestinationCancellationDoesNotWaitForHttpTimeout()
+    {
+        var handler = new CancelHandler(); using var client = new HttpClient(handler);
+        using var stop = new CancellationTokenSource();
+        var executing = new HttpDestinationConnector(client).DeliverAsync("http", new Schema.HttpDestinationConfig { Url = "https://service.test/data", ConnectionTimeout = 60000 }, "{}", "json", cancellationToken: stop.Token);
+        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(3)); stop.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => executing.WaitAsync(TimeSpan.FromSeconds(3)));
+    }
+
+    private sealed class CancelHandler : HttpMessageHandler
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Calls;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Calls++; Started.TrySetResult();
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            throw new InvalidOperationException("Cancellation was not propagated.");
+        }
     }
 
     private sealed class ResponseHandler(string body) : HttpMessageHandler
