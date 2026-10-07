@@ -91,10 +91,18 @@ public sealed class ReviewRegressionTests
             var documents = new InMemoryDocumentStore(); var queue = new InMemoryStepQueue();
             var runner = new AsyncExecutor(states, documents, queue);
             var idActive = await runner.StartAsync(HttpPipeline(), JsonNodeValueFactory.Instance.Parse("{}"));
+            var abandoned = Path.Combine(root, "indexes", "active", "abandoned");
+            await File.WriteAllTextAsync(abandoned, "");
+            await using (var claim = await states.TryLockAsync("abandoned"))
+            {
+                await states.ListRecoverableAsync();
+                Assert.True(File.Exists(abandoned)); // A writer may still publish its state.
+            }
             queue.DrainAll();
             await runner.RecoverAsync();
             Assert.Equal(idActive, Assert.Single(queue.DrainAll()).ExecutionId);
             Assert.Equal(idActive, Assert.Single(await states.ListRecoverableAsync()).ExecutionId);
+            Assert.False(File.Exists(abandoned));
             var state = (await states.GetExecutionAsync(idActive))!;
             state.Status = ExecutionStatus.Completed;
             await states.SaveExecutionAsync(state);
@@ -150,6 +158,16 @@ public sealed class ReviewRegressionTests
             Assert.False(File.Exists(stale));
             Assert.True(File.Exists(fresh));
             Assert.Empty(Directory.GetFiles(root, "*.json.access.lock"));
+            var activeTemp = Path.Combine(root, "still-writing.tmp");
+            await File.WriteAllTextAsync(activeTemp, "partial");
+            File.SetLastWriteTimeUtc(activeTemp, DateTime.UtcNow.AddDays(-2));
+            using (var writer = new FileStream(activeTemp, FileMode.Open, FileAccess.Write, FileShare.None))
+            {
+                await store.CleanupArtifactsAsync();
+                Assert.True(File.Exists(activeTemp));
+            }
+            await store.CleanupArtifactsAsync();
+            Assert.False(File.Exists(activeTemp));
         }
         finally { Directory.Delete(root, true); }
     }
@@ -174,16 +192,19 @@ public sealed class ReviewRegressionTests
         finally { Directory.Delete(root, true); }
     }
 
-    [Fact]
-    public async Task InvalidLegacyIdDoesNotBreakHealthyRouting()
+    [Theory]
+    [InlineData("bad id", "name: bad")]
+    [InlineData("empty", "")]
+    [InlineData("null-lists", "sources: null\noutputs: null")]
+    public async Task InvalidLegacyIdDoesNotBreakHealthyRouting(string folder, string yaml)
     {
         var root = Path.Combine(Path.GetTempPath(), "elwood-legacy-" + Guid.NewGuid().ToString("N"));
         try
         {
             var legacy = new FileSystemPipelineStore(Path.Combine(root, "legacy"));
             await legacy.SavePipelineAsync("good", new PipelineContent { Yaml = "name: good\nsources: [{ name: input, trigger: http, endpoint: /good }]\noutputs: []" });
-            var bad = Path.Combine(root, "legacy", "bad id"); Directory.CreateDirectory(bad);
-            await File.WriteAllTextAsync(Path.Combine(bad, "pipeline.elwood.yaml"), "name: bad");
+            var bad = Path.Combine(root, "legacy", folder); Directory.CreateDirectory(bad);
+            await File.WriteAllTextAsync(Path.Combine(bad, "pipeline.elwood.yaml"), yaml);
             var store = new FileSystemDeploymentStore(legacy, Path.Combine(root, "catalog"));
             Assert.Equal("good", Assert.Single(await store.ListAsync()).Id);
             Assert.Equal("good", (await store.MatchAsync("/good"))!.Value.PipelineId);
@@ -193,6 +214,7 @@ public sealed class ReviewRegressionTests
 
 
     [Theory]
+    [InlineData(0, true, ExecutionStatus.Retrying)]
     [InlineData(503, false, ExecutionStatus.Retrying)]
     [InlineData(429, true, ExecutionStatus.Failed)]
     public async Task ProviderStatusMustMatchAuthoredStatusPolicy(int status, bool transport, ExecutionStatus expected)

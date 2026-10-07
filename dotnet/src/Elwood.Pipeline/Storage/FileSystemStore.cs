@@ -77,15 +77,15 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
             var id = Path.GetFileName(marker);
             var state = await GetExecutionAsync(id);
             if (state is not null && IndexFor(state) == index) result.Add(state);
-            else if (state is not null)
+            else
             {
                 // Reconcile a crashed transition only while owning the execution.
                 await using var claim = await TryLockAsync(id);
                 if (claim is null) continue;
                 state = await GetExecutionAsync(id);
-                if (state is not null && IndexFor(state) != index)
+                if (state is null || IndexFor(state) != index)
                 {
-                    if (IndexFor(state) is { } current) Mark(current, id);
+                    if (state is not null && IndexFor(state) is { } current) Mark(current, id);
                     File.Delete(marker);
                 }
             }
@@ -179,6 +179,8 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
                 await using var claim = await TryLockAsync(Path.GetFileNameWithoutExtension(path));
             }
         AtomicExecutionFile.Cleanup(_baseDir);
+        var indexes = SafePath.Within(_baseDir, "indexes");
+        if (Directory.Exists(indexes)) AtomicExecutionFile.Cleanup(indexes);
     }
 
     public async Task<List<ExecutionState>> ListAllAsync()

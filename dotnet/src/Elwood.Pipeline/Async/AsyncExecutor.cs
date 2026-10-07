@@ -149,6 +149,7 @@ public sealed class AsyncExecutor
             step.Errors = [$"{message.Type} '{message.StepName}': {ex.Message}"]; step.CompletedAt = Now;
             var policy = pipeline is null ? null : Policy(pipeline, message);
             var status = ex is HttpRequestException http ? (int?)http.StatusCode : (ex as ConnectorFailure)?.StatusCode ?? (ex as ConnectorException)?.StatusCode;
+            if (status == 0) status = null; // Azure uses zero for a transport failure without an HTTP response.
             var transport = ex is HttpRequestException or OperationCanceledException || ex is ConnectorFailure && status is null;
             var uncertain = attempt.ExternalCallStarted && attempt.MayHaveWritten && status is null &&
                 (transport || ex is IOException);

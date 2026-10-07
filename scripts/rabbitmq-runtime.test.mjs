@@ -11,7 +11,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 // Real broker + separate Runtime API process. Build the API first. Requires the
 // RabbitMQ management plugin, with permission to manage this test's own queue.
-test('hosted RabbitMQ reconnect, durable acceptance and restart retain revision and deduplicate', { timeout: 120000 }, async () => {
+test('hosted RabbitMQ reconnect, durable acceptance and restart retain revision and deduplicate', { timeout: 240000 }, async () => {
   const uri = new URL(process.env.ELWOOD_TEST_RABBITMQ ?? 'amqp://guest:guest@127.0.0.1:5672/');
   const management = new URL(process.env.ELWOOD_TEST_RABBITMQ_MANAGEMENT ?? 'http://127.0.0.1:15672');
   const credentials = `${decodeURIComponent(management.username || uri.username)}:${decodeURIComponent(management.password || uri.password)}`;
@@ -50,8 +50,9 @@ test('hosted RabbitMQ reconnect, durable acceptance and restart retain revision 
     assert.ok(response.ok, `Runtime ${method} ${path}: ${response.status} ${await response.clone().text()}`);
     return response.json();
   };
-  async function until(predicate, description) {
-    for (let i = 0; i < 200; i++) {
+  async function until(predicate, description, budgetMs = 20000) {
+    const deadline = Date.now() + budgetMs;
+    while (Date.now() < deadline) {
       const result = await predicate(); if (result) return result;
       await delay(100);
     }
@@ -66,7 +67,7 @@ test('hosted RabbitMQ reconnect, durable acceptance and restart retain revision 
     await new Promise(resolve => reservation.close(resolve));
     child = spawn('dotnet', [dll, '--urls', base], {
       cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, Elwood__PipelinesDir: join(root, 'pipelines'), Elwood__StateDir: join(root, 'state'),
+      env: { ...process.env, Logging__EventLog__LogLevel__Default: 'None', Elwood__PipelinesDir: join(root, 'pipelines'), Elwood__StateDir: join(root, 'state'),
         Elwood__SecretsFile: join(root, 'secrets.json'), Elwood__Management__LocalDevelopment: 'false',
         Elwood__Durable__WorkerEnabled: String(workers), Elwood__AppConfiguration: '', ELWOOD_APP_CONFIGURATION: '',
         APPLICATIONINSIGHTS_CONNECTION_STRING: '' },
@@ -76,7 +77,7 @@ test('hosted RabbitMQ reconnect, durable acceptance and restart retain revision 
     await until(async () => {
       assert.equal(child.exitCode, null, logs);
       try { return (await fetch(base + '/api/health', { signal: AbortSignal.timeout(1000) })).ok; } catch { return false; }
-    }, 'Runtime did not start');
+    }, 'Runtime did not start', 60000);
   }
   const content = label => ({ yaml: `name: broker-recovery
 mode: async

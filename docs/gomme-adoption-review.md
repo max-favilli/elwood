@@ -1,6 +1,6 @@
 # Deldo adoption review and M5/M6 alignment
 
-Reviewed 6 October 2026 against the local Elwood implementation and `D:\git-repos\gommenew`. This document can be passed back to the pet project's AI session. It records an integration review and implementation plan; it does not announce shipped connectors or authorize a deployment.
+Reviewed 6 October 2026 against the local Elwood implementation and the companion `gommenew` repository. This document can be passed back to the pet project's AI session. It records an integration review and implementation plan; it does not announce shipped connectors or authorize a deployment.
 
 ## Decision
 

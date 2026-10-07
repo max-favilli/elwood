@@ -1,6 +1,6 @@
 # Elwood integration platform implementation plan
 
-Milestones 1–5 are implemented and the three M5 verification gaps were closed on 7 October 2026. The next step is independent review of the backend and portal commits, followed by M6 native cloud installations. The first adoption tests after M6 will be the Eagle SAP integration and the pet project’s Deldo integration. Follow the confirmed [product direction](product-direction.md); M5 completion is not a production-readiness claim.
+Milestones 1–5 are implemented and the three M5 verification gaps were closed on 7 October 2026. The independent review findings have been addressed in separate follow-up packages; see the review closeout below. Review those commits before M6 native cloud installations. The first adoption tests after M6 will be the Eagle SAP integration and the pet project’s Deldo integration. Follow the confirmed [product direction](product-direction.md); M5 completion is not a production-readiness claim.
 
 This plan covers the backend and the sibling `elwood-portal` repository. Each milestone ends with a demonstrable behavior and focused automated checks. Milestones describe proposed delivery order; they do not expand the agreed product scope.
 
@@ -218,3 +218,32 @@ Provider HTTP statuses now obey the pipeline's status allowlist; interrupted ter
 ### Review follow-up: connector cancellation and credential reuse
 
 A separate connector package propagates caller cancellation from host shutdown through every connector, preserves interrupted durable write checkpoints for recovery, and expires canceled non-durable tests. Blob credentials are reused; OAuth2 tokens use a bounded, expiry-aware cache scoped to the HTTP client and resolved credentials/scope. Regression coverage includes concurrent refresh suppression, rotation, scope separation, expiry, uncached failures, cancellation before the HTTP timeout and restart classification of an interrupted write. Verified: 187 pipeline tests and 16 non-integration connector tests.
+
+
+### Independent-review closeout — 7 October 2026
+
+All six blocking findings and the smaller listed runtime fixes are addressed before M6. The final edge-case regressions cover provider status zero as a transport fault, empty/null legacy definitions, active temporary files during cleanup, and abandoned recovery-index entries without removing a writer's acceptance intent. Documentation now removes unsupported Service Bus/email YAML examples and destination-level retry keys, documents offline CLI differences and reverse-proxy requirements, removes the machine-specific pet-project path, labels the disposable CI database password and gives API cold starts a 60-second health-check budget.
+
+Reviewable work packages:
+
+- Backend `99cfc77`: the six blockers and regression coverage.
+- Backend `3e4b29e`: storage lifecycle, management boundaries and execution efficiency.
+- Backend `468f9e7`: connector cancellation and credential caching.
+- A final backend closeout commit: edge cases, reference corrections and CI/test startup resilience.
+- Portal `b4c147e`: replay acknowledgement and bounded-body inspection labels.
+- Portal `0e7d57b`: actual editor/run-panel component coverage, CI wiring and case-insensitive management scopes.
+
+Verification during the follow-up:
+
+| Area | Evidence |
+|---|---|
+| Pipeline | 190 tests pass; the 17 review regressions also pass after final index cleanup changes |
+| DSL | 374 Core tests pass; no syntax or evaluation behavior changed |
+| Connectors | 16 non-integration tests pass, including OAuth reuse/expiry/rotation and uncached failure |
+| API | Three non-broker scripts pass (four tests including proxy startup rejection); isolated API build has no warnings/errors |
+| RabbitMQ | All five real broker tests and the hosted restart/reconnect script passed during the blocking-fix package; the portable broker/Erlang processes and downloaded files were then removed |
+| Portal | 120 existing tests (112 engine fixtures + eight other checks), six new component tests, TypeScript and production build pass; lint has no errors and three existing hook warnings |
+
+The component tests render the actual editor and run panel with mocked Monaco and network boundaries. They exercise Validate without saving, both explicitly selected real/mock modes against the exact unsaved snapshot, Save draft before Deploy with the returned revision, conflict display and read-only permissions. No new visual browser walkthrough is claimed. Docker-backed Azure adapter tests and remote CI have not been run locally in this follow-up. The unrelated Parquet fixture change from the independent review is left outside these commits.
+
+A separate dependency audit during test-tool setup reports existing portal application advisories, including critical Next.js 16.2.3 and high Axios findings. These require a dependency-upgrade/verification package before external hosting; they are not fixed by adding component tests. Previously recorded SSH.NET advisories also remain outside this review-fix scope. M6 implementation, deployment and destination-blob retention have not started. No live cloud/workplace resources were contacted, and no commits were pushed.

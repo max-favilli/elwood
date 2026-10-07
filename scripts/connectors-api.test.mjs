@@ -35,11 +35,16 @@ test('M5 samples, authenticated HTTP chain, Event Grid acceptance and scoped con
     } }));
     await writeFile(join(root, 'secrets.json'), JSON.stringify({ 'crm.url': remoteBase + '/crm', 'crm.tokenUrl': remoteBase + '/token', 'crm.clientId': 'client', 'crm.clientSecret': 'client-secret', 'emarsys.url': remoteBase + '/emarsys', 'emarsys.user': 'user', 'emarsys.password': 'password' }));
     child = spawn('dotnet', [resolve(process.env.ELWOOD_TEST_RUNTIME_DLL ?? 'dotnet/src/Elwood.Runtime.Api/bin/Debug/net10.0/Elwood.Runtime.Api.dll'), '--urls', base], {
-      cwd: root, windowsHide: true, env: { ...process.env, Elwood__PipelinesDir: join(root,'pipelines'), Elwood__StateDir: join(root,'state'), Elwood__SecretsFile: join(root,'secrets.json'), Elwood__Management__LocalDevelopment: 'false', Elwood__AppConfiguration: '', ELWOOD_APP_CONFIGURATION: '', APPLICATIONINSIGHTS_CONNECTION_STRING: '' }, stdio: ['ignore','pipe','pipe'],
+      cwd: root, windowsHide: true, env: { ...process.env, Logging__EventLog__LogLevel__Default: 'None', Elwood__PipelinesDir: join(root,'pipelines'), Elwood__StateDir: join(root,'state'), Elwood__SecretsFile: join(root,'secrets.json'), Elwood__Management__LocalDevelopment: 'false', Elwood__AppConfiguration: '', ELWOOD_APP_CONFIGURATION: '', APPLICATIONINSIGHTS_CONNECTION_STRING: '' }, stdio: ['ignore','pipe','pipe'],
     });
     child.stdout.on('data', c => logs = (logs + c).slice(-6000)); child.stderr.on('data', c => logs = (logs + c).slice(-6000));
     let ready = false;
-    for (let n=0;n<100;n++) { try { ready = (await fetch(base+'/api/health')).ok; } catch {} if (ready) break; await delay(100); }
+    const startupDeadline = Date.now() + 60000;
+    while (Date.now() < startupDeadline) {
+      if (child.exitCode !== null) break;
+      try { ready = (await fetch(base+'/api/health', { signal: AbortSignal.timeout(1000) })).ok; } catch {}
+      if (ready) break; await delay(100);
+    }
     assert.ok(ready, logs);
     const request = (path, method='GET', body, headers={}) => fetch(base+path, { method, headers: { Authorization: 'Bearer '+token, 'Content-Type':'application/json', ...headers }, body: body===undefined ? undefined : JSON.stringify(body) });
     const save = async (id, content) => {

@@ -8,7 +8,7 @@ The central concept is the **IDM (Intermediate Data Model)** — a shared JSON d
 
 This reference includes planned capabilities. The runtime validates configuration instead of silently ignoring unsupported behavior. Unknown keys and unimplemented connector types are errors. Per-source/output retry policy, terminal retention and sync failure responses are implemented in M4; see [durable processing](durable-processing.md) for the supported schema and hosting boundaries. The documented destination aliases `restEndpoint` and `azureFileShare` map to `http` and `fileShare`; specifying both names for the same destination type is an error.
 
-The current executors reject `join` and `outputId`, whose behavior is not implemented. Runtime source fan-out via `path` is also rejected; it remains available in the file-input CLI executor. Concurrency values remain scheduling hints; the reference durable runtime serializes steps within each execution and processes different executions concurrently. Runtime HTTP/Blob delivery supports JSON and raw string text/XML; SQL destinations accept JSON. CSV/binary/Parquet output serialization is not implemented; the default file destination supports literal local paths, not Azure connection strings or computed filenames. The filesystem Runtime API registers HTTP, SQL Server procedures and Azure Blob connectors, plus external RabbitMQ and Event Grid ingress. See [M5 connector contracts](connectors.md) for exact fields, defaults, access grants, limits and receipts. SFTP/Azure File Share, Service Bus ingress/delivery, schedules and the other planned destination types below are not enabled in this host.
+The current executors reject `join` and `outputId`, whose behavior is not implemented. Runtime source fan-out via `path` is also rejected; it remains available in the file-input CLI executor. Concurrency values remain scheduling hints; the reference durable runtime serializes steps within each execution and processes different executions concurrently. Runtime HTTP/Blob delivery supports JSON and raw string text/XML; SQL destinations accept JSON. CSV/binary/Parquet output serialization is not implemented; the default file destination supports literal local paths, not Azure connection strings or computed filenames. The filesystem Runtime API registers HTTP, SQL Server procedures and Azure Blob connectors, plus external RabbitMQ and Event Grid ingress. See [M5 connector contracts](connectors.md) for exact fields, defaults, access grants, limits and receipts. SFTP/Azure File Share, Service Bus ingress/delivery and schedules are not enabled in this host; Service Bus/email destination keys are not part of the current schema.
 
 Script references are resolved for source maps/paths, HTTP request bodies, SQL parameter values, output paths/maps/IDs, response status codes and destination filenames. Resolving a script does not make an unsupported configuration executable. Evaluation errors and missing scripts fail their step; warnings retain the step's successful status when there is no error and are stored with the step's diagnostics.
 
@@ -511,15 +511,6 @@ destinations:
       overwrite: false  # default: fail if the object exists
 ```
 
-### Service Bus
-
-```yaml
-destinations:
-  serviceBus:
-    - connectionString: $secrets.asb.connectionString
-      queue: order-notifications
-```
-
 ### SQL
 
 ```yaml
@@ -528,16 +519,6 @@ destinations:
     - connectionString: $secrets.sql.connectionString
       storedProcedure: dbo.usp_ImportOrder
       parameter: payload  # entire mapped JSON as @payload nvarchar(max)
-```
-
-### Email
-
-```yaml
-destinations:
-  emailCommService:
-    - connectionString: $secrets.email.connectionString
-      to: notifications@example.com
-      subject: Order {$.orderId} processed
 ```
 
 ### Multiple Destinations
@@ -550,24 +531,31 @@ destinations:
   azureFileShare:
     - connectionString: $secrets.fs.connectionString
       filename: /archive/{$.orderId}.json
-  serviceBus:
-    - connectionString: $secrets.asb.connectionString
-      queue: order-events
 ```
 
 ### Retry Policy
 
-Destinations support retry policies:
+Configure `retry` on a source or output. A destination entry does not accept `retryPolicy`, `maxRetries` or `waitSeconds`. An output policy governs its incomplete destinations; checkpointed successful deliveries are skipped on resume. For example:
 
 ```yaml
-destinations:
-  restEndpoint:
-    - url: https://api.target.com/import
-      method: POST
-      retryPolicy:
-        maxRetries: 3
-        waitSeconds: 5
+outputs:
+  - name: publish
+    retry:
+      mode: automatic
+      maxAttempts: 3
+      delayMs: 5000
+      statusCodes: [429, 503]
+      transportErrors: true
+      allowUncertainWrites: false
+    destinations:
+      restEndpoint:
+        - url: https://api.target.com/import
+          method: POST
 ```
+
+Use `mode: manual` when another attempt needs explicit approval. An uncertain write still requires operator review unless the maintainer opts into `allowUncertainWrites: true`. See [durable processing](durable-processing.md) for the full policy and acknowledgement contract.
+
+Service Bus and email destinations are deferred; `serviceBus` and `emailCommService` are not current YAML schema keys and are rejected. Do not add them to a deployable bundle.
 
 ### Dynamic Expressions in Destinations
 
@@ -576,19 +564,19 @@ All string properties in destinations support inline Elwood expressions:
 ```yaml
 filename: /exports/{$.category}/{$.orderId}.json     # Data from current slice
 url: https://api.example.com/orders/{$.orderId}      # Dynamic URL
-subject: Order {$.orderId} - {$.status}              # Dynamic email subject
 ```
 
 In destination expressions:
 - `$` is the current output slice
-- `$source` is the source metadata
+- `$execution.id` is the runtime execution ID
 - `$idm` is the full IDM
+- Carry required source metadata into the IDM in the source map; outputs do not have a current `$source`.
 
 ---
 
 ## Source Metadata (`$source`)
 
-Every source provides metadata alongside the payload:
+Source maps receive `$source` metadata alongside the payload. Fields depend on the ingress adapter or CLI envelope; the following shapes illustrate the concepts, not fields guaranteed by every host. In particular, the offline CLI generates `payloadId` while the current runtime does not. See [offline CLI differences](local-testing.md#offline-cli-boundary) and [connector metadata](connectors.md).
 
 ```
 $source.name             → "orders" (source name from YAML)

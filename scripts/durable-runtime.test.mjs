@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, basename } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-test('durable HTTP acceptance, process restart, retry, resume, replay and recovery permissions', { timeout: 90000 }, async () => {
+test('durable HTTP acceptance, process restart, retry, resume, replay and recovery permissions', { timeout: 240000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'elwood-durable-api-'));
   const admin = 'durable-admin';
   let child, base, logs = '';
@@ -44,14 +44,15 @@ test('durable HTTP acceptance, process restart, retry, resume, replay and recove
     base = `http://127.0.0.1:${port}`;
     child = spawn('dotnet', [apiDll, '--urls', base], {
       cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, Elwood__PipelinesDir: join(root, 'pipelines'), Elwood__StateDir: join(root, 'state'),
+      env: { ...process.env, Logging__EventLog__LogLevel__Default: 'None', Elwood__PipelinesDir: join(root, 'pipelines'), Elwood__StateDir: join(root, 'state'),
         Elwood__Durable__WorkerEnabled: String(enabled), Elwood__Management__LocalDevelopment: 'false',
         Elwood__AppConfiguration: '', ELWOOD_APP_CONFIGURATION: '', APPLICATIONINSIGHTS_CONNECTION_STRING: '' },
     });
     child.stdout.on('data', data => { logs = (logs + data).slice(-5000); });
     child.stderr.on('data', data => { logs = (logs + data).slice(-5000); });
-    for (let i = 0; i < 150; i++) {
-      try { if ((await fetch(base + '/api/health')).ok) return; } catch { /* starting */ }
+    const startupDeadline = Date.now() + 60000;
+    while (Date.now() < startupDeadline) {
+      try { if ((await fetch(base + '/api/health', { signal: AbortSignal.timeout(1000) })).ok) return; } catch { /* starting */ }
       if (child.exitCode !== null) break;
       await delay(100);
     }

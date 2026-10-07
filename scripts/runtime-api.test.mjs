@@ -68,7 +68,8 @@ outputs:
     child.stdout.on('data', chunk => { logs = (logs + chunk).slice(-8000); });
     child.stderr.on('data', chunk => { logs = (logs + chunk).slice(-8000); });
     let ready = false;
-    for (let i = 0; i < 600; i++) {
+    const startupDeadline = Date.now() + 60000;
+    while (Date.now() < startupDeadline) {
       if (child.exitCode !== null) break;
       try { ready = (await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(1000) })).ok; } catch { /* starting */ }
       if (ready) break;

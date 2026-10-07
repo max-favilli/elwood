@@ -42,6 +42,8 @@ public sealed class FileSystemPipelineStore : IPipelineStore
                 if (!File.Exists(yamlFile)) continue;
                 var yaml = File.ReadAllText(yamlFile);
                 var config = YamlDeserializer.Deserialize<Schema.PipelineConfig>(yaml);
+                if (config?.Sources is null || config.Outputs is null || config.Sources.Any(source => source is null) || config.Outputs.Any(output => output is null))
+                    throw new ArgumentException("Legacy pipeline lists must be non-null.");
                 var id = Path.GetFileName(dir);
 
                 if (nameFilter is not null &&
