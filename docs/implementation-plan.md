@@ -105,6 +105,14 @@ The retained verification baseline is 172 pipeline tests (including the later re
 
 **M6 gates remain:** native hosting and distributed storage/ownership adapters, actual Azure event delivery, deployment/security/operations configuration, and enforced default 30-day cleanup for internal data **and delivered output blobs**, with pipeline/destination overrides. Output blob expiry is not implemented by the M5 connector. See [storage retention](storage-retention.md). No live cloud or workplace system was contacted. Obtain independent review before starting M6; use the Eagle/SAP and Deldo sessions as real adoption tests afterward.
 
+### Independent-review blocking fixes — 7 October 2026
+
+The six blocking findings from the review of backend `f69a6e9` / portal `5744a32` are fixed as a dedicated follow-up package, before M6. Endpoint permission metadata replaces request-path suffix classification; production attempt traces retain metadata/sizes rather than body copies; fetched HTTP checkpoints redact credential headers; recovery reads a persistent active-execution index while retention reads the terminal index; permanent RabbitMQ rejection dead-letters without requeue while transient failures reconnect with bounded exponential backoff; and replay enforces the uncertain-write acknowledgement in the backend. The portal sends that acknowledgement and labels omitted/truncated previews.
+
+Regression evidence: 177 pipeline tests, all four Runtime API contract suites and five real RabbitMQ tests passed. The new checks include write-only identities with trailing-slash endpoints, a 1 MiB response with serialized state under 8 KiB and no production test-context document, fetched-checkpoint header redaction, unreadable terminal files during recovery, oversized/missing-ID/conflicting poison messages followed by a valid message, and replay refusal/explicit approval. Portal's existing 120 tests and TypeScript checks passed. Those 120 comprise 112 engine fixture runs and eight gallery/helper/API/sample tests; they are not 120 component tests. Component coverage and the smaller review findings are a separate follow-up package.
+
+The filesystem adapter builds indexes once when upgrading a pre-index store, then maintains them across transitions and process restarts. Index intent is persisted before the state commit so interrupted transitions may leave extra candidates but cannot hide accepted work. Body previews in local tests default to 64 KiB, configurable through `Elwood:Inspection:TestBodyLimitBytes` (0–1 MiB); full processing/checkpoint documents remain separate. DSL behavior is unchanged.
+
 ### Preserve and align the baseline
 
 - Keep current local edits intact. Separate the existing portal alignment work from subsequent runtime changes in reviewable commits/PRs.

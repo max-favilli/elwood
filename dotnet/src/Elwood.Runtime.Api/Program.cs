@@ -93,16 +93,17 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy
 builder.Services.AddSingleton<RuntimeConnectors>();
 builder.Services.AddHostedService<RabbitMqTriggerWorker>();
 var app = builder.Build();
+app.UseRouting();
 app.UseCors();
 app.Use(async (context, next) =>
 {
     try
     {
-        var path = context.Request.Path.Value ?? "";
-        if (path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) &&
-            !path.Equals("/api/health", StringComparison.OrdinalIgnoreCase) &&
-            !path.StartsWith("/api/v1/trigger/", StringComparison.OrdinalIgnoreCase))
+        var endpoint = context.GetEndpoint();
+        if (endpoint is not null && endpoint.Metadata.GetMetadata<PublicEndpoint>() is null)
         {
+            var permission = endpoint.Metadata.GetMetadata<ManagementPermission>()
+                ?? throw new InvalidOperationException("Management endpoint has no permission metadata.");
             var identity = context.RequestServices.GetRequiredService<ManagementSecurity>().Authenticate(context);
             if (identity is null)
             {
@@ -112,13 +113,9 @@ app.Use(async (context, next) =>
                 return;
             }
             context.Items["identity"] = identity;
-            var operation = context.Request.Method == "GET" ? "read" :
-                path.EndsWith("/resume", StringComparison.OrdinalIgnoreCase) || path.EndsWith("/replay", StringComparison.OrdinalIgnoreCase) ? "recover" :
-                path.EndsWith("/deploy", StringComparison.OrdinalIgnoreCase) || path.EndsWith("/migrate", StringComparison.OrdinalIgnoreCase) || (context.Request.Method == "DELETE" && !path.Contains("/scripts/", StringComparison.OrdinalIgnoreCase)) ? "deploy" :
-                path.EndsWith("/test", StringComparison.OrdinalIgnoreCase) || path.EndsWith("/test-template", StringComparison.OrdinalIgnoreCase) || path.Equals("/api/executions", StringComparison.OrdinalIgnoreCase) ? "test" : "write";
-            var pipeline = context.Request.RouteValues.TryGetValue("id", out var id) && path.StartsWith("/api/pipelines/", StringComparison.OrdinalIgnoreCase) ? id?.ToString() : null;
+            var pipeline = permission.PipelineScoped ? context.Request.RouteValues["id"]?.ToString() : null;
             if (pipeline is not null) SafePath.Id(pipeline);
-            if (!path.Equals("/api/session", StringComparison.OrdinalIgnoreCase) && !identity.Can(operation, pipeline))
+            if (permission.Name is not null && !identity.Can(permission.Name, pipeline))
                 throw new UnauthorizedAccessException("This identity does not have permission for this operation.");
         }
         await next(context);
@@ -134,12 +131,12 @@ app.Use(async (context, next) =>
     }
 });
 
-app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
+app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow })).WithMetadata(new PublicEndpoint());
 app.MapGet("/api/session", (HttpContext context) =>
 {
     var identity = ManagementSecurity.Identity(context);
     return Results.Ok(new { identity.Name, identity.Permissions, identity.Pipelines });
-});
+}).WithMetadata(new ManagementPermission(null, false));
 
 app.MapGet("/api/pipelines", async (FileSystemDeploymentStore store, HttpContext context, string? name) =>
 {
@@ -152,50 +149,50 @@ app.MapGet("/api/pipelines", async (FileSystemDeploymentStore store, HttpContext
             outputCount = config.Outputs.Count, d.LastModified, d.DraftRevisionId, d.ActiveRevisionId, d.MigrationRequired };
     });
     return Results.Ok(results.Where(d => name is null || d.name.Contains(name, StringComparison.OrdinalIgnoreCase) || d.Id.Contains(name, StringComparison.OrdinalIgnoreCase)));
-});
+}).WithMetadata(new ManagementPermission("read", false));
 app.MapGet("/api/pipelines/{id}", async (string id, FileSystemDeploymentStore store, HttpContext context) =>
 {
     var definition = await store.GetAsync(id);
     if (definition is null) return Results.NotFound();
     context.Response.Headers.ETag = $"\"{definition.DraftRevisionId}\"";
     return Results.Ok(definition);
-});
+}).WithMetadata(new ManagementPermission("read", true));
 app.MapPost("/api/pipelines/{id}", async (string id, PipelineContent content, FileSystemDeploymentStore store) =>
-    Results.Created($"/api/pipelines/{id}", await store.SaveDraftAsync(id, content, null, create: true)));
+    Results.Created($"/api/pipelines/{id}", await store.SaveDraftAsync(id, content, null, create: true))).WithMetadata(new ManagementPermission("write", true));
 app.MapPut("/api/pipelines/{id}", async (string id, PipelineContent content, FileSystemDeploymentStore store, HttpRequest request) =>
-    Results.Ok(await store.SaveDraftAsync(id, content, Expected(request))));
+    Results.Ok(await store.SaveDraftAsync(id, content, Expected(request)))).WithMetadata(new ManagementPermission("write", true));
 app.MapDelete("/api/pipelines/{id}", async (string id, FileSystemDeploymentStore store, HttpRequest request) =>
 {
     await store.DeleteAsync(id, Expected(request));
     return Results.NoContent();
-});
+}).WithMetadata(new ManagementPermission("deploy", true));
 app.MapPost("/api/pipelines/{id}/migrate", async (string id, RevisionRequest body, FileSystemDeploymentStore store, HttpContext context) =>
-    Results.Ok(await store.MigrateAsync(id, body.ExpectedRevisionId, ManagementSecurity.Identity(context).Name)));
+    Results.Ok(await store.MigrateAsync(id, body.ExpectedRevisionId, ManagementSecurity.Identity(context).Name))).WithMetadata(new ManagementPermission("deploy", true));
 app.MapPost("/api/pipelines/{id}/deploy", async (string id, RevisionRequest body, FileSystemDeploymentStore store, HttpContext context) =>
 {
     var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
     var errors = RuntimeErrors(new PipelineParser().ParseContent(draft.Content));
     if (errors.Count > 0) return Results.BadRequest(new { errors });
     return Results.Ok(await store.DeployAsync(id, body.ExpectedRevisionId, ManagementSecurity.Identity(context).Name));
-});
+}).WithMetadata(new ManagementPermission("deploy", true));
 app.MapGet("/api/pipelines/{id}/revisions", async (string id, FileSystemDeploymentStore store) =>
-    Results.Ok((await store.RevisionsAsync(id)).Select(b => new { b.RevisionId, b.Author, timestamp = b.CreatedAt })));
+    Results.Ok((await store.RevisionsAsync(id)).Select(b => new { b.RevisionId, b.Author, timestamp = b.CreatedAt }))).WithMetadata(new ManagementPermission("read", true));
 app.MapGet("/api/pipelines/{id}/revisions/{revision}", async (string id, string revision, FileSystemDeploymentStore store) =>
 {
     var bundle = (await store.RevisionsAsync(id)).FirstOrDefault(b => b.RevisionId == revision);
     return bundle is null ? Results.NotFound() : Results.Ok(bundle);
-});
+}).WithMetadata(new ManagementPermission("read", true));
 app.MapGet("/api/pipelines/{id}/scripts", async (string id, FileSystemDeploymentStore store) =>
 {
     var draft = await store.GetAsync(id);
     return draft is null ? Results.NotFound() : Results.Ok(draft.Content.Scripts.Select(s => new { name = s.Key, length = s.Value.Length }));
-});
+}).WithMetadata(new ManagementPermission("read", true));
 app.MapGet("/api/pipelines/{id}/scripts/{name}", async (string id, string name, FileSystemDeploymentStore store) =>
 {
     SafePath.Script(name);
     var draft = await store.GetAsync(id);
     return draft is not null && draft.Content.Scripts.TryGetValue(name, out var script) ? Results.Text(script, "text/plain") : Results.NotFound();
-});
+}).WithMetadata(new ManagementPermission("read", true));
 app.MapPut("/api/pipelines/{id}/scripts/{name}", async (string id, string name, HttpRequest request, FileSystemDeploymentStore store) =>
 {
     SafePath.Script(name);
@@ -203,14 +200,14 @@ app.MapPut("/api/pipelines/{id}/scripts/{name}", async (string id, string name, 
     using var reader = new StreamReader(request.Body);
     draft.Content.Scripts[name] = await reader.ReadToEndAsync();
     return Results.Ok(await store.SaveDraftAsync(id, draft.Content, Expected(request)));
-});
+}).WithMetadata(new ManagementPermission("write", true));
 app.MapDelete("/api/pipelines/{id}/scripts/{name}", async (string id, string name, HttpRequest request, FileSystemDeploymentStore store) =>
 {
     SafePath.Script(name);
     var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
     draft.Content.Scripts.Remove(name);
     return Results.Ok(await store.SaveDraftAsync(id, draft.Content, Expected(request)));
-});
+}).WithMetadata(new ManagementPermission("write", true));
 app.MapPost("/api/pipelines/{id}/scripts/{name}/test", async (string id, string name, HttpRequest request, FileSystemDeploymentStore store) =>
 {
     SafePath.Script(name);
@@ -232,7 +229,7 @@ app.MapPost("/api/pipelines/{id}/scripts/{name}/test", async (string id, string 
     if (result.Diagnostics.Count > 0)
         request.HttpContext.Response.Headers["X-Elwood-Warnings"] = JsonSerializer.Serialize(result.Diagnostics.Select(d => d.ToString()));
     return Results.Bytes(output.WrittenMemory, "application/json");
-});
+}).WithMetadata(new ManagementPermission("test", true));
 app.MapPost("/api/pipelines/{id}/validate", async (string id, DraftRequest body, FileSystemDeploymentStore store) =>
 {
     var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
@@ -240,7 +237,7 @@ app.MapPost("/api/pipelines/{id}/validate", async (string id, DraftRequest body,
     SafePath.Content(content);
     var errors = RuntimeErrors(new PipelineParser().ParseContent(content));
     return Results.Ok(new { valid = errors.Count == 0, errors, revisionId = PipelineBundle.Hash(content) });
-});
+}).WithMetadata(new ManagementPermission("write", true));
 
 app.MapPost("/api/pipelines/{id}/test-template", async (string id, DraftRequest body, FileSystemDeploymentStore store) =>
 {
@@ -251,20 +248,20 @@ app.MapPost("/api/pipelines/{id}/test-template", async (string id, DraftRequest 
     var errors = RuntimeErrors(parsed);
     if (errors.Count > 0) return Results.BadRequest(new { errors });
     return Results.Ok(new { revisionId = parsed.RevisionId, mocks = LocalTestSession.Template(parsed) });
-});
+}).WithMetadata(new ManagementPermission("test", true));
 app.MapGet("/api/executions/{id}/inspection", async (string id, IStateStore store, IDocumentStore documents, HttpContext context) =>
 {
     var execution = await store.GetExecutionAsync(id);
     return execution is null || !CanReadExecution(context, execution) ? Results.NotFound()
         : Results.Ok(await ExecutionInspection.LoadAsync(execution, documents));
-});
+}).WithMetadata(new ManagementPermission("read", false));
 app.MapGet("/api/executions", async (IStateStore store, HttpContext context, string? pipeline, int? limit) =>
-    Results.Ok((await store.ListExecutionsAsync(pipeline, Math.Clamp(limit ?? 50, 1, 500))).Where(e => CanReadExecution(context, e))));
+    Results.Ok((await store.ListExecutionsAsync(pipeline, Math.Clamp(limit ?? 50, 1, 500))).Where(e => CanReadExecution(context, e)))).WithMetadata(new ManagementPermission("read", false));
 app.MapGet("/api/executions/{id}", async (string id, IStateStore store, HttpContext context) =>
 {
     var execution = await store.GetExecutionAsync(id);
     return execution is null || !CanReadExecution(context, execution) ? Results.NotFound() : Results.Ok(execution);
-});
+}).WithMetadata(new ManagementPermission("read", false));
 app.MapPost("/api/executions", async (ExecutionRequest body, FileSystemDeploymentStore store, HttpContext context) =>
 {
     SafePath.Id(body.PipelineId);
@@ -277,7 +274,8 @@ app.MapPost("/api/executions", async (ExecutionRequest body, FileSystemDeploymen
     var parsed = new PipelineParser().ParseContent(content, body.PipelineId);
     var errors = RuntimeErrors(parsed);
     if (errors.Count > 0) return Results.BadRequest(new { errors });
-    var testSession = new LocalTestSession(body.TestMode, body.Mocks, parsed);
+    var testSession = new LocalTestSession(body.TestMode, body.Mocks, parsed,
+        context.RequestServices.GetRequiredService<IConfiguration>().GetValue("Elwood:Inspection:TestBodyLimitBytes", 64 * 1024));
     var payload = JsonNodeValueFactory.Instance.Parse(body.Payload.ValueKind == JsonValueKind.Undefined ? "{}" : body.Payload.GetRawText());
     // Management execution is always an explicit draft test, including async definitions.
     var result = await Executor(context, body.PipelineId, isTest: true, testSession).ExecuteAsync(parsed, payload, isTest: true);
@@ -286,13 +284,13 @@ app.MapPost("/api/executions", async (ExecutionRequest body, FileSystemDeploymen
         ? await ExecutionInspection.LoadAsync(state!, context.RequestServices.GetRequiredService<IDocumentStore>()) : null;
     return Results.Ok(new { result.ExecutionId, success = result.IsSuccess, errors = result.Errors,
         outputs = Outputs(result), result.ResponseStatusCode, revisionId = parsed.RevisionId, isTest = true, testMode = testSession.Mode, inspection });
-});
+}).WithMetadata(new ManagementPermission("test", false));
 app.MapPost("/api/executions/{id}/resume", async (string id, ResumeRequest body, IStateStore states, DurableRuntime runtime, HttpContext context) =>
 {
     var state = await RecoveryExecution(id, states, context);
     await runtime.Runner(state.PipelineId).ResumeAsync(id, body.AcknowledgeUncertain);
     return Results.Accepted($"/api/executions/{id}", new { executionId = id });
-});
+}).WithMetadata(new ManagementPermission("recover", false));
 app.MapPost("/api/executions/{id}/replay", async (string id, ReplayRequest body, IStateStore states, FileSystemDeploymentStore store, DurableRuntime runtime, HttpContext context) =>
 {
     var state = await RecoveryExecution(id, states, context);
@@ -306,9 +304,9 @@ app.MapPost("/api/executions/{id}/replay", async (string id, ReplayRequest body,
         var errors = RuntimeErrors(revision);
         if (errors.Count > 0) return Results.BadRequest(new { errors });
     }
-    var replay = await runtime.Runner(state.PipelineId).ReplayAsync(id, revision);
+    var replay = await runtime.Runner(state.PipelineId).ReplayAsync(id, revision, body.AcknowledgeUncertain);
     return Results.Accepted($"/api/executions/{replay}", new { executionId = replay, replayOf = id });
-});
+}).WithMetadata(new ManagementPermission("recover", false));
 app.MapPost("/api/v1/trigger/{**path}", async (string path, HttpContext context, FileSystemDeploymentStore store) =>
 {
     var match = await store.MatchAsync("/" + path);
@@ -376,14 +374,14 @@ app.MapPost("/api/v1/trigger/{**path}", async (string path, HttpContext context,
         return Results.Text(response.ContentType == "json" ? ExecutionJson(value) : value.GetStringValue(),
             response.ContentType switch { "xml" => "application/xml", "text" => "text/plain", _ => "application/json" }, statusCode: result.ResponseStatusCode ?? 200);
     return Results.Ok(new { result.ExecutionId, outputs = Outputs(result) });
-});
+}).WithMetadata(new PublicEndpoint());
 app.MapGet("/api/metrics", async (IStateStore store, HttpContext context) =>
 {
     var recent = (await store.ListExecutionsAsync(limit: 100)).Where(e => CanReadExecution(context, e)).ToList();
     return Results.Ok(new { running = recent.Count(e => e.Status == Elwood.Pipeline.State.ExecutionStatus.Running),
         completed = recent.Count(e => e.Status == Elwood.Pipeline.State.ExecutionStatus.Completed),
         failed = recent.Count(e => e.Status == Elwood.Pipeline.State.ExecutionStatus.Failed), total = recent.Count });
-});
+}).WithMetadata(new ManagementPermission("read", false));
 app.Run();
 
 static string Expected(HttpRequest request) => request.Headers.IfMatch.ToString().Trim('"');
@@ -422,4 +420,4 @@ record RevisionRequest(string ExpectedRevisionId);
 record DraftRequest(PipelineContent? Content);
 record ExecutionRequest(string PipelineId, JsonElement Payload, PipelineContent? Content, string? ExpectedRevisionId, string? TestMode, MockFixtures? Mocks);
 record ResumeRequest(bool AcknowledgeUncertain = false);
-record ReplayRequest(string? RevisionId = null);
+record ReplayRequest(string? RevisionId = null, bool AcknowledgeUncertain = false);

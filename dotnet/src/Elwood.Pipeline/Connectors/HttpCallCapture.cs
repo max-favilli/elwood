@@ -3,9 +3,20 @@ using System.Net.Http.Headers;
 
 namespace Elwood.Pipeline.Connectors;
 
-/// <summary>Application-level HTTP details, captured only during a local test.</summary>
+/// <summary>Connector metadata. Body previews are bounded and disabled for production attempts.</summary>
 public class HttpCallDetails
 {
+    [System.Text.Json.Serialization.JsonIgnore]
+    public int BodyLimit { get; init; } = 64 * 1024;
+    private string? _requestBody, _responseBody;
+    [System.Text.Json.Serialization.JsonPropertyOrder(1)]
+    public long? RequestBodyBytes { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyOrder(1)]
+    public long? ResponseBodyBytes { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyOrder(1)]
+    public bool RequestBodyTruncated { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyOrder(1)]
+    public bool ResponseBodyTruncated { get; set; }
     public string? Connector { get; set; }
     public string? Operation { get; set; }
     public Dictionary<string, object?>? RequestMetadata { get; set; }
@@ -16,13 +27,31 @@ public class HttpCallDetails
     public double? DurationMs { get; set; }
     public double? TimeoutMs { get; set; }
     public Dictionary<string, string[]>? RequestHeaders { get; set; }
-    public string? RequestBody { get; set; }
+    public string? RequestBody
+    {
+        get => _requestBody;
+        set { (_requestBody, var bytes, var truncated) = Preview(value); RequestBodyBytes = bytes; RequestBodyTruncated = truncated; }
+    }
     public Dictionary<string, string[]>? ResponseHeaders { get; set; }
-    public string? ResponseBody { get; set; }
+    public string? ResponseBody
+    {
+        get => _responseBody;
+        set { (_responseBody, var bytes, var truncated) = Preview(value); ResponseBodyBytes = bytes; ResponseBodyTruncated = truncated; }
+    }
     public int? StatusCode { get; set; }
     public string? ReasonPhrase { get; set; }
     public string? HttpVersion { get; set; }
     public string? Error { get; set; }
+
+    private (string?, long?, bool) Preview(string? value)
+    {
+        if (value is null) return (null, null, false);
+        var size = System.Text.Encoding.UTF8.GetByteCount(value);
+        if (BodyLimit <= 0) return (null, size, size > 0);
+        if (size <= BodyLimit) return (value, size, false);
+        var prefix = System.Text.Encoding.UTF8.GetBytes(value[..Math.Min(value.Length, BodyLimit)]);
+        return (System.Text.Encoding.UTF8.GetString(prefix, 0, BodyLimit), size, true);
+    }
 }
 
 /// <summary>Scopes tracing to one connector call without changing connector interfaces or shared clients.</summary>
@@ -63,7 +92,9 @@ public static class HttpCallCapture
         var timer = Stopwatch.StartNew();
         try
         {
-            call.RequestBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
+            if (call.BodyLimit > 0)
+                call.RequestBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
+            else { call.RequestBodyBytes = request.Content?.Headers.ContentLength; call.RequestBodyTruncated = request.Content is not null; }
             call.RequestHeaders = Headers(request.Headers, request.Content?.Headers);
             foreach (var header in client.DefaultRequestHeaders)
                 if (!call.RequestHeaders.ContainsKey(header.Key)) call.RequestHeaders[header.Key] = SafeHeader(header.Key, header.Value);
@@ -73,7 +104,8 @@ public static class HttpCallCapture
             call.HttpVersion = response.Version.ToString();
             call.ResponseHeaders = Headers(response.Headers, response.Content.Headers);
             // Capture before connectors apply status acceptance, including rejected responses.
-            call.ResponseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (call.BodyLimit > 0) call.ResponseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            else { call.ResponseBodyBytes = response.Content.Headers.ContentLength; call.ResponseBodyTruncated = call.ResponseBodyBytes != 0; }
             return response;
         }
         catch (Exception ex)
@@ -93,7 +125,7 @@ public static class HttpCallCapture
             .GroupBy(h => h.Key, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => SafeHeader(g.Key, g.SelectMany(h => h.Value)), StringComparer.OrdinalIgnoreCase);
 
-    private static string[] SafeHeader(string name, IEnumerable<string> values)
+    public static string[] SafeHeader(string name, IEnumerable<string> values)
         => !name.Equals("Access-Control-Allow-Credentials", StringComparison.OrdinalIgnoreCase) && Sensitive(name) ? [Redacted] : values.Select(value =>
             name.Equals("Location", StringComparison.OrdinalIgnoreCase) || name.Equals("Content-Location", StringComparison.OrdinalIgnoreCase)
                 ? SafeUrl(value) ?? Redacted : value).ToArray();
@@ -101,7 +133,7 @@ public static class HttpCallCapture
     private static bool Sensitive(string name)
     {
         var key = name.Replace("-", "").Replace("_", "").ToLowerInvariant();
-        return key.Contains("authorization") || key.Contains("cookie") || key.Contains("token") ||
+        return key.Contains("authorization") || key.Contains("authenticate") || key.Contains("cookie") || key.Contains("token") ||
             key.Contains("key") || key.Contains("secret") || key.Contains("password") || key.Contains("signature") ||
             key.Contains("credential") || key is "sig" or "auth" or "pwd" or "code";
     }

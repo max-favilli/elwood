@@ -10,6 +10,10 @@ public interface IRecoverableStateStore : IStateStore
 {
     Task<IAsyncDisposable?> TryLockAsync(string executionId);
     Task<List<State.ExecutionState>> ListAllAsync();
+    // Hosts must query these sets without loading the retained terminal population
+    // on every recovery tick. ListAllAsync is for explicit administration only.
+    Task<List<State.ExecutionState>> ListRecoverableAsync();
+    Task<List<State.ExecutionState>> ListRetainedAsync();
     Task DeleteExecutionAsync(string executionId);
 }
 

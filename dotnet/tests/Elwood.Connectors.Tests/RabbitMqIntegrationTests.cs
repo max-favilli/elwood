@@ -8,6 +8,47 @@ namespace Elwood.Connectors.Tests;
 [Trait("Category", "Integration")]
 public sealed class RabbitMqIntegrationTests
 {
+    [Theory]
+    [InlineData("oversized")]
+    [InlineData("missing-id")]
+    [InlineData("conflict")]
+    public async Task PermanentRejectionDeadLettersOnceAndProcessesNextMessage(string invalid)
+    {
+        var uri = Environment.GetEnvironmentVariable("ELWOOD_TEST_RABBITMQ") ?? "amqp://guest:guest@127.0.0.1:5672/";
+        await using var connection = await new ConnectionFactory { Uri = new Uri(uri) }.CreateConnectionAsync();
+        await using var channel = await connection.CreateChannelAsync();
+        var queue = "elwood-poison-" + Guid.NewGuid().ToString("N"); var dead = queue + "-dead";
+        await channel.QueueDeclareAsync(dead, false, false, false);
+        await channel.QueueDeclareAsync(queue, false, false, false, new Dictionary<string, object?>
+            { ["x-dead-letter-exchange"] = "", ["x-dead-letter-routing-key"] = dead });
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        Task? consumer = null;
+        try
+        {
+            await channel.BasicPublishAsync("", queue, false, new BasicProperties { MessageId = invalid == "missing-id" ? null : "poison" },
+                Encoding.UTF8.GetBytes(invalid == "oversized" ? new string('x', 100) : "{}"));
+            await channel.BasicPublishAsync("", queue, false, new BasicProperties { MessageId = "good" }, Encoding.UTF8.GetBytes("{}"));
+            var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var failures = new List<RabbitMessageFailure>();
+            consumer = new RabbitMqConsumer().RunAsync(new() { ConnectionString = uri, Queue = queue, MaxMessageBytes = 20 }, message =>
+            {
+                if (message.MessageId == "poison") throw new PermanentRabbitMessageException("Conflicting payload.");
+                Assert.Equal("good", message.MessageId); received.SetResult(); return Task.CompletedTask;
+            }, timeout.Token, failures.Add);
+            await received.Task.WaitAsync(timeout.Token);
+            var rejected = Assert.Single(failures);
+            Assert.False(rejected.Requeued); Assert.Equal(queue, rejected.RoutingKey);
+            Assert.NotNull(await channel.BasicGetAsync(dead, true));
+            Assert.Null(await channel.BasicGetAsync(dead, true));
+        }
+        finally
+        {
+            timeout.Cancel();
+            if (consumer is not null) try { await consumer; } catch (OperationCanceledException) { }
+            await channel.QueueDeleteAsync(queue, false, false); await channel.QueueDeleteAsync(dead, false, false);
+        }
+    }
+
     [Fact]
     public async Task FailedAcceptanceRedeliversAndAcknowledgementWaitsForDurableAcceptance()
     {

@@ -90,7 +90,10 @@ internal sealed class ExecutionOperations
                 fetched = await Call(state, attempt, config.Name, null, from.Sql is { ReadOnly: false } ? "WRITE" : from.Http?.Method ?? "GET",
                     () => _test is null ? Real() : _test.FetchAsync(config.Name, from, Real));
                 // Commit a successful external response before mapping. A failed map/resume must not repeat the write.
-                step.FetchedRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/fetched", JsonSerializer.Serialize(fetched));
+                var checkpoint = new SourceFetchResult(fetched.Content, fetched.ContentType,
+                    fetched.Headers?.ToDictionary(h => h.Key, h => string.Join(", ", HttpCallCapture.SafeHeader(h.Key, [h.Value]))),
+                    fetched.StatusCode, fetched.Metadata);
+                step.FetchedRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/fetched", JsonSerializer.Serialize(checkpoint));
                 attempt.ExternalCallStarted = false;
                 await _states.SaveExecutionAsync(state);
             }
@@ -176,7 +179,7 @@ internal sealed class ExecutionOperations
 
     private async Task<T> Call<T>(ExecutionState state, StepAttempt attempt, string name, int? index, string method, Func<Task<T>> action)
     {
-        var call = new ConnectorCall { Step = name, Kind = index is null ? "source" : "output", DestinationIndex = index };
+        var call = new ConnectorCall { Step = name, Kind = index is null ? "source" : "output", DestinationIndex = index, BodyLimit = 0 };
         var previous = _test?.Calls.Count ?? 0;
         attempt.ExternalCallStarted = true;
         attempt.MayHaveWritten = _test?.Mode != "mock" && method.ToUpperInvariant() is not ("GET" or "HEAD" or "OPTIONS");

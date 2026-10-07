@@ -188,10 +188,27 @@ public sealed class DurableExecutionTests
             Assert.Equal(ExecutionStatus.AwaitingReview, (await states.GetExecutionAsync(id))!.Status);
             Assert.Equal(1, connector.Count);
             await Assert.ThrowsAsync<RecoveryConflictException>(() => runner.ResumeAsync(id));
+            await Assert.ThrowsAsync<RecoveryConflictException>(() => runner.ReplayAsync(id));
             await runner.ResumeAsync(id, acknowledgeUncertain: true); await Drain(runner, queue);
         }
         Assert.Equal(ExecutionStatus.Completed, (await states.GetExecutionAsync(id))!.Status);
         Assert.Equal(2, connector.Count);
+    }
+
+    [Fact]
+    public async Task ReplayRequiresAcknowledgementOfUncertainWrite()
+    {
+        var states = new InMemoryStateStore(); var docs = new InMemoryDocumentStore(); var queue = new InMemoryStepQueue();
+        var connector = new Source(_ => throw new HttpRequestException("Connection lost after sending"));
+        var runner = new AsyncExecutor(states, docs, queue, sourceConnectors: [connector]);
+        var id = await runner.StartAsync(Pipeline("retry: { mode: manual }", "POST"), Factory.Parse("{}"));
+        await Drain(runner, queue);
+        Assert.Equal(ExecutionStatus.AwaitingReview, (await states.GetExecutionAsync(id))!.Status);
+        await Assert.ThrowsAsync<RecoveryConflictException>(() => runner.ReplayAsync(id));
+        Assert.Single(await states.ListAllAsync());
+        var replay = await runner.ReplayAsync(id, acknowledgeUncertain: true);
+        Assert.Equal(id, (await states.GetExecutionAsync(replay))!.ReplayOf);
+        Assert.Equal(1, connector.Count);
     }
 
     [Fact]
@@ -277,7 +294,7 @@ public sealed class DurableExecutionTests
         Assert.Equal(id, await runner.StartAsync(changed, Factory.Parse("{\"id\":42}"), idempotencyKey: "event-42"));
         Assert.Equal(original.RevisionId, (await states.GetExecutionAsync(id))!.RevisionId);
         Assert.Single(await states.ListAllAsync());
-        await Assert.ThrowsAsync<RecoveryConflictException>(() => runner.StartAsync(original, Factory.Parse("{\"id\":43}"), idempotencyKey: "event-42"));
+        await Assert.ThrowsAnyAsync<RecoveryConflictException>(() => runner.StartAsync(original, Factory.Parse("{\"id\":43}"), idempotencyKey: "event-42"));
     }
 
     [Fact]

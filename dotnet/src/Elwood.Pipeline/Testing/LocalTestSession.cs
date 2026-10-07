@@ -48,9 +48,12 @@ public sealed class LocalTestSession
     public string Mode { get; }
     public MockFixtures? Mocks { get; }
     public List<ConnectorCall> Calls { get; } = [];
+    public int BodyLimit { get; }
 
-    public LocalTestSession(string? mode, MockFixtures? mocks, ParsedPipeline pipeline)
+    public LocalTestSession(string? mode, MockFixtures? mocks, ParsedPipeline pipeline, int bodyLimit = 64 * 1024)
     {
+        if (bodyLimit is < 0 or > 1024 * 1024) throw new ArgumentException("Test body preview limit must be between 0 and 1048576 bytes.");
+        BodyLimit = bodyLimit;
         if (mode is not ("real" or "mock"))
             throw new ArgumentException("Choose testMode explicitly: 'real' or 'mock'.");
         if (mode == "real" && mocks is not null)
@@ -121,7 +124,7 @@ public sealed class LocalTestSession
 
     public async Task<SourceFetchResult> FetchAsync(string name, PullSourceConfig config, Func<Task<SourceFetchResult>> real)
     {
-        var call = new ConnectorCall { Step = name, Kind = "source", RequestBody = config.Http?.BodyContent };
+        var call = new ConnectorCall { Step = name, Kind = "source", BodyLimit = BodyLimit, RequestBody = config.Http?.BodyContent };
         Calls.Add(call);
         call.StartedAt = DateTimeOffset.UtcNow;
         var timer = System.Diagnostics.Stopwatch.StartNew();
@@ -164,7 +167,7 @@ public sealed class LocalTestSession
     public async Task<DeliveryResult> DeliverAsync(string name, int index, string type, object config,
         string content, string contentType, Func<Task<DeliveryResult>> real)
     {
-        var call = new ConnectorCall { Step = name, Kind = "output", DestinationIndex = index, RequestBody = content };
+        var call = new ConnectorCall { Step = name, Kind = "output", DestinationIndex = index, BodyLimit = BodyLimit, RequestBody = content };
         Calls.Add(call);
         call.StartedAt = DateTimeOffset.UtcNow;
         var timer = System.Diagnostics.Stopwatch.StartNew();
@@ -181,9 +184,10 @@ public sealed class LocalTestSession
                     var fixture = fixtures[index];
                     call.Connector = type; call.Operation = type == "sql" ? "storedProcedure" : "upload";
                     AssertFixture(fixture, content, call);
-                    call.ResponseBody = FixtureBody(fixture);
+                    var response = FixtureBody(fixture);
+                    call.ResponseBody = response;
                     call.ResponseMetadata = fixture.Metadata is null ? null : JsonSerializer.Deserialize<Dictionary<string, object?>>(fixture.Metadata.ToJsonString());
-                    return DeliveryResult.Ok(receipt: type == "sql" ? new JsonObject { ["rows"] = fixture.Body?.DeepClone(), ["sql"] = fixture.Metadata?["sql"]?.DeepClone() }.ToJsonString() : call.ResponseBody);
+                    return DeliveryResult.Ok(receipt: type == "sql" ? new JsonObject { ["rows"] = fixture.Body?.DeepClone(), ["sql"] = fixture.Metadata?["sql"]?.DeepClone() }.ToJsonString() : response);
                 }
                 var copy = JsonSerializer.Deserialize<HttpDestinationConfig>(JsonSerializer.Serialize(config))!;
                 copy.User = null; copy.Password = null; copy.Oauth2 = null;

@@ -21,7 +21,7 @@ test('hosted RabbitMQ reconnect, durable acceptance and restart retain revision 
   const queuePath = `/api/queues/${vhost}/${queue}`;
   const root = await mkdtemp(join(tmpdir(), 'elwood-rabbitmq-api-'));
   const token = 'local-rabbitmq-management';
-  const dll = resolve('dotnet/src/Elwood.Runtime.Api/bin/Debug/net10.0/Elwood.Runtime.Api.dll');
+  const dll = resolve(process.env.ELWOOD_TEST_RUNTIME_DLL ?? 'dotnet/src/Elwood.Runtime.Api/bin/Debug/net10.0/Elwood.Runtime.Api.dll');
   let child, base, logs = '', declared = false;
   const deliveries = [];
   const destination = createServer(async (req, res) => {

@@ -150,6 +150,8 @@ internal sealed class SnapshotStateStore : IRecoverableStateStore
     private readonly ExecutionLocks _locks = new();
     public Task<IAsyncDisposable?> TryLockAsync(string id) => _locks.TryLockAsync(id);
     public Task<List<ExecutionState>> ListAllAsync() => ListExecutionsAsync(limit: int.MaxValue);
+    public async Task<List<ExecutionState>> ListRecoverableAsync() => (await ListAllAsync()).Where(s => s.Durable && s.Status is ExecutionStatus.Pending or ExecutionStatus.Running or ExecutionStatus.Retrying).ToList();
+    public async Task<List<ExecutionState>> ListRetainedAsync() => (await ListAllAsync()).Where(s => s.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview).ToList();
     public Task DeleteExecutionAsync(string id) { _states.Remove(id); return Task.CompletedTask; }
     private readonly Dictionary<string, string> _states = [];
     public Task SaveExecutionAsync(ExecutionState state)

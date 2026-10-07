@@ -47,6 +47,8 @@ public sealed class SyncExecutor
         public Task UpdateSourceStepAsync(string id, string name, SourceStepState step) => inner.UpdateSourceStepAsync(id, name, step);
         public Task UpdateOutputStepAsync(string id, string name, OutputStepState step) => inner.UpdateOutputStepAsync(id, name, step);
         public Task<List<ExecutionState>> ListAllAsync() => throw new NotSupportedException();
+        public Task<List<ExecutionState>> ListRecoverableAsync() => throw new NotSupportedException();
+        public Task<List<ExecutionState>> ListRetainedAsync() => throw new NotSupportedException();
         public Task DeleteExecutionAsync(string id) => throw new NotSupportedException();
     }
 }

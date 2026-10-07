@@ -68,3 +68,6 @@ public sealed class ManagementSecurity
 
     public static ManagementIdentity Identity(HttpContext context) => (ManagementIdentity)context.Items["identity"]!;
 }
+
+public sealed record ManagementPermission(string? Name, bool PipelineScoped = false);
+public sealed record PublicEndpoint;

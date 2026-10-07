@@ -33,7 +33,7 @@ test('durable HTTP acceptance, process restart, retry, resume, replay and recove
   });
   upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
   const remote = `http://127.0.0.1:${upstream.address().port}`;
-  const apiDll = resolve('dotnet/src/Elwood.Runtime.Api/bin/Debug/net10.0/Elwood.Runtime.Api.dll');
+  const apiDll = resolve(process.env.ELWOOD_TEST_RUNTIME_DLL ?? 'dotnet/src/Elwood.Runtime.Api/bin/Debug/net10.0/Elwood.Runtime.Api.dll');
   const hash = token => createHash('sha256').update(token).digest('hex');
   async function stop() {
     if (child && child.exitCode === null) { const exited = once(child, 'exit'); child.kill('SIGKILL'); await exited; }
@@ -174,6 +174,7 @@ outputs:
     await stop(); await start(true);
     const uncertain = await stateWhen(crash.executionId, 5);
     assert.equal(uncertain.sources.remote.outcomeUncertain, true); assert.equal(crashCalls, 1);
+    assert.equal((await request(`/api/executions/${crash.executionId}/replay/`, 'POST', {})).status, 409);
     assert.equal(uncertain.sources.remote.attempts[0].status, 'Interrupted');
     assert.equal((await request(`/api/executions/${crash.executionId}/resume`, 'POST', {})).status, 409);
     assert.equal((await request(`/api/executions/${crash.executionId}/resume`, 'POST', { acknowledgeUncertain: true })).status, 202);

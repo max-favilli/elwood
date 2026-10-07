@@ -33,6 +33,7 @@ test('Runtime API exposes warnings, validation errors and failed execution histo
       { Name: 'admin', TokenSha256: createHash('sha256').update(admin).digest('hex'), Permissions: ['read', 'write', 'test', 'deploy'], Pipelines: ['*'] },
       { Name: 'reader', TokenSha256: createHash('sha256').update(reader).digest('hex'), Permissions: ['read'], Pipelines: ['orders'] },
       { Name: 'writer', TokenSha256: createHash('sha256').update(writer).digest('hex'), Permissions: ['read', 'write', 'test'], Pipelines: ['orders'] },
+      { Name: 'write-only', TokenSha256: createHash('sha256').update('write-only').digest('hex'), Permissions: ['write'], Pipelines: ['orders'] },
       { Name: 'tester', TokenSha256: createHash('sha256').update('test-only').digest('hex'), Permissions: ['test'], Pipelines: ['orders'] },
       { Name: 'scoped', TokenSha256: createHash('sha256').update(scoped).digest('hex'), Permissions: ['read', 'write', 'test', 'deploy'], Pipelines: ['another'] },
     ] }, SecretGrants: { orders: { Run: ['allowed'] } } } }));
@@ -57,7 +58,7 @@ outputs:
     const port = portReservation.address().port;
     await new Promise(resolve => portReservation.close(resolve));
     const base = `http://127.0.0.1:${port}`;
-    child = spawn('dotnet', [resolve('dotnet/src/Elwood.Runtime.Api/bin/Debug/net10.0/Elwood.Runtime.Api.dll'), '--urls', base], {
+    child = spawn('dotnet', [resolve(process.env.ELWOOD_TEST_RUNTIME_DLL ?? 'dotnet/src/Elwood.Runtime.Api/bin/Debug/net10.0/Elwood.Runtime.Api.dll'), '--urls', base], {
       cwd: root, windowsHide: true,
       env: { ...process.env, Elwood__PipelinesDir: pipelines, Elwood__StateDir: join(root, 'state'),
         Elwood__Management__LocalDevelopment: 'false', ELWOOD_SECRET_ALLOWED: `http://127.0.0.1:${upstream.address().port}`, Elwood__AppConfiguration: '', ELWOOD_APP_CONFIGURATION: '', APPLICATIONINSIGHTS_CONNECTION_STRING: '' },
@@ -116,6 +117,10 @@ outputs:
     assert.equal((await request('/api/executions', 'POST', { testMode: 'real', pipelineId: 'orders', payload: {} }, reader)).status, 403);
     assert.equal((await request('/api/executions', 'POST', { testMode: 'real', pipelineId: 'regression', payload: {} }, writer)).status, 403);
     assert.equal((await request('/api/pipelines/orders/deploy', 'POST', { expectedRevisionId: 'x' }, writer)).status, 403);
+    for (const suffix of ['deploy', 'migrate', 'scripts/example.elwood/test', 'test-template']) {
+      for (const trailing of ['', '/'])
+        assert.equal((await request('/api/pipelines/orders/' + suffix + trailing, 'POST', {}, 'write-only')).status, 403, suffix + trailing);
+    }
     assert.deepEqual(await (await request('/api/executions', 'GET', undefined, reader)).json(), []);
     assert.equal((await request(`/api/executions/${result.executionId}`, 'GET', undefined, reader)).status, 404);
     const legacy = await (await request('/api/pipelines/regression')).json();

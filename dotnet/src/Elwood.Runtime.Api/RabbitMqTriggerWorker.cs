@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Elwood.Json;
 using Elwood.Pipeline;
+using Elwood.Pipeline.Async;
 using Elwood.Pipeline.RabbitMq;
 using Elwood.Pipeline.Registry;
 using Elwood.Pipeline.Schema;
@@ -61,6 +62,7 @@ public sealed class RabbitMqTriggerWorker(FileSystemDeploymentStore catalog, Dur
 
     private async Task Consume(string id, string sourceName, RabbitMqTriggerConfig original, CancellationToken token)
     {
+        var failures = 0;
         while (!token.IsCancellationRequested)
         {
             try
@@ -76,23 +78,38 @@ public sealed class RabbitMqTriggerWorker(FileSystemDeploymentStore catalog, Dur
                     var source = parsed.Config.Sources.Single(s => s.Name == sourceName);
                     if (JsonSerializer.Serialize(source.Rabbitmq) != JsonSerializer.Serialize(original)) throw new InvalidOperationException("Subscription configuration changed.");
                     var factory = JsonNodeValueFactory.Instance;
-                    var text = new UTF8Encoding(false, true).GetString(message.Body);
-                    var payload = source.ContentType == "json" ? factory.Parse(text) : factory.CreateString(text);
+                    Elwood.Core.Abstractions.IElwoodValue payload;
+                    try
+                    {
+                        var text = new UTF8Encoding(false, true).GetString(message.Body);
+                        payload = source.ContentType == "json" ? factory.Parse(text) : factory.CreateString(text);
+                    }
+                    catch (Exception ex) when (ex is DecoderFallbackException or JsonException)
+                    { throw new PermanentRabbitMessageException("Message is not valid UTF-8 or JSON for this source."); }
                     var endpoint = new Uri(config.ConnectionString);
                     var key = string.IsNullOrEmpty(message.MessageId) ? null : "rabbitmq-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
                         endpoint.Host + ":" + endpoint.Port + endpoint.AbsolutePath + "\n" + config.Queue + "\n" + message.MessageId)));
                     var metadata = factory.Parse(JsonSerializer.Serialize(new { name = sourceName, trigger = "queue", rabbitmq = new
                         { message.MessageId, message.Exchange, message.RoutingKey, message.Redelivered, message.ContentType, queue = config.Queue } }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
-                    await runtime.Runner(id).StartAsync(parsed, payload, sourceName, key, triggerMetadata: metadata);
-                }, token);
+                    try { await runtime.Runner(id).StartAsync(parsed, payload, sourceName, key, triggerMetadata: metadata); }
+                    catch (IdempotencyPayloadConflictException)
+                    { throw new PermanentRabbitMessageException("MessageId was already accepted with a different payload."); }
+                    failures = 0;
+                }, token, failure => logger.LogWarning(
+                    "RabbitMQ {Pipeline}/{Source}: MessageId={MessageId}, exchange={Exchange}, routingKey={RoutingKey}, requeued={Requeued}: {Reason}",
+                    id, sourceName, LogValue(failure.MessageId), LogValue(failure.Exchange), LogValue(failure.RoutingKey), failure.Requeued, failure.Reason));
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
             catch (Exception ex)
             {
                 // Connection exception text can contain credentials. Keep logs scoped to safe identities.
-                logger.LogWarning("RabbitMQ source {Pipeline}/{Source} interrupted ({ErrorType}); unacknowledged messages remain with the broker. Retrying in 5 seconds.", id, sourceName, ex.GetType().Name);
+                logger.LogWarning("RabbitMQ source {Pipeline}/{Source} interrupted ({ErrorType}); unacknowledged messages remain with the broker.", id, sourceName, ex.GetType().Name);
             }
-            await Task.Delay(5000, token);
+            var delay = Math.Min(60, Math.Pow(2, Math.Min(failures++, 6)));
+            logger.LogInformation("RabbitMQ source {Pipeline}/{Source} reconnecting in {DelaySeconds} seconds.", id, sourceName, delay);
+            await Task.Delay(TimeSpan.FromSeconds(delay), token);
         }
     }
+
+    private static string LogValue(string? value) => new((value ?? "<missing>").Take(256).Select(c => char.IsControl(c) ? ' ' : c).ToArray());
 }

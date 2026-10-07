@@ -11,6 +11,8 @@ public sealed class InMemoryStateStore : IRecoverableStateStore
     private static ExecutionState Copy(ExecutionState state) => JsonSerializer.Deserialize<ExecutionState>(JsonSerializer.Serialize(state))!;
     public Task<IAsyncDisposable?> TryLockAsync(string id) => _locks.TryLockAsync(id);
     public Task<List<ExecutionState>> ListAllAsync() => Task.FromResult(_executions.Values.Select(Copy).ToList());
+    public Task<List<ExecutionState>> ListRecoverableAsync() => Task.FromResult(_executions.Values.Where(s => s.Durable && s.Status is ExecutionStatus.Pending or ExecutionStatus.Running or ExecutionStatus.Retrying).Select(Copy).ToList());
+    public Task<List<ExecutionState>> ListRetainedAsync() => Task.FromResult(_executions.Values.Where(s => s.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview).Select(Copy).ToList());
     public Task DeleteExecutionAsync(string id) { _executions.TryRemove(id, out _); return Task.CompletedTask; }
 
     public Task SaveExecutionAsync(ExecutionState state)

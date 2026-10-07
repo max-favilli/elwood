@@ -6,6 +6,8 @@ namespace Elwood.Pipeline.Storage;
 public sealed class FileSystemStateStore : IRecoverableStateStore
 {
     private readonly string _baseDir;
+    private bool _indexesReady;
+    private readonly SemaphoreSlim _initializeIndexes = new(1, 1);
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         WriteIndented = true,
@@ -21,9 +23,74 @@ public sealed class FileSystemStateStore : IRecoverableStateStore
 
     public async Task SaveExecutionAsync(ExecutionState state)
     {
+        await EnsureIndexesAsync();
         var path = SafePath.Within(_baseDir, $"{SafePath.Id(state.ExecutionId)}.json");
         var json = JsonSerializer.Serialize(state, JsonOpts);
+        // Publish intent before state: a crash can leave an extra marker, never a
+        // committed execution missing from recovery/retention. Readers check state.
+        var index = IndexFor(state);
+        if (index is not null) Mark(index, state.ExecutionId);
         await WriteAtomicAsync(path, json);
+        foreach (var other in new[] { "active", "terminal" }.Where(i => i != index))
+            File.Delete(IndexPath(other, state.ExecutionId));
+    }
+
+    private static string? IndexFor(ExecutionState state) => state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview
+        ? "terminal" : state.Durable ? "active" : null;
+    private string IndexPath(string index, string id) => SafePath.Within(_baseDir, $"indexes/{index}/{SafePath.Id(id)}");
+    private void Mark(string index, string id)
+    {
+        var path = IndexPath(index, id);
+        if (File.Exists(path)) return;
+        using var marker = new FileStream(path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read);
+        marker.Flush(flushToDisk: true);
+    }
+    private async Task EnsureIndexesAsync()
+    {
+        if (_indexesReady) return;
+        await _initializeIndexes.WaitAsync();
+        try
+        {
+            if (_indexesReady) return;
+            await using var access = await AtomicExecutionFile.LockAsync(SafePath.Within(_baseDir, "index-initialization"));
+            foreach (var index in new[] { "active", "terminal" }) Directory.CreateDirectory(SafePath.Within(_baseDir, "indexes/" + index));
+            var ready = SafePath.Within(_baseDir, "indexes/ready-v1");
+            if (!File.Exists(ready))
+            {
+                // One-time upgrade of pre-index stores; interrupted upgrades are repeatable.
+                foreach (var state in await ListAllAsync())
+                    if (IndexFor(state) is { } index) Mark(index, state.ExecutionId);
+                await WriteAtomicAsync(ready, "1");
+            }
+            _indexesReady = true;
+        }
+        finally { _initializeIndexes.Release(); }
+    }
+    public Task<List<ExecutionState>> ListRecoverableAsync() => ListIndexAsync("active");
+    public Task<List<ExecutionState>> ListRetainedAsync() => ListIndexAsync("terminal");
+    private async Task<List<ExecutionState>> ListIndexAsync(string index)
+    {
+        await EnsureIndexesAsync();
+        var result = new List<ExecutionState>();
+        foreach (var marker in Directory.EnumerateFiles(SafePath.Within(_baseDir, "indexes/" + index)))
+        {
+            var id = Path.GetFileName(marker);
+            var state = await GetExecutionAsync(id);
+            if (state is not null && IndexFor(state) == index) result.Add(state);
+            else if (state is not null)
+            {
+                // Reconcile a crashed transition only while owning the execution.
+                await using var claim = await TryLockAsync(id);
+                if (claim is null) continue;
+                state = await GetExecutionAsync(id);
+                if (state is not null && IndexFor(state) != index)
+                {
+                    if (IndexFor(state) is { } current) Mark(current, id);
+                    File.Delete(marker);
+                }
+            }
+        }
+        return result;
     }
 
     private static async Task WriteAtomicAsync(string path, string json)
@@ -102,6 +169,7 @@ public sealed class FileSystemStateStore : IRecoverableStateStore
     public Task DeleteExecutionAsync(string executionId)
     {
         File.Delete(SafePath.Within(_baseDir, SafePath.Id(executionId) + ".json"));
+        foreach (var index in new[] { "active", "terminal" }) File.Delete(IndexPath(index, executionId));
         return Task.CompletedTask;
     }
 
@@ -192,7 +260,7 @@ internal static class AtomicExecutionFile
         catch (FileNotFoundException) { return null; }
     }
 
-    private static async Task<FileStream> LockAsync(string path)
+    internal static async Task<FileStream> LockAsync(string path)
     {
         var lockPath = SafePath.Within(Path.GetDirectoryName(path)!, Path.GetFileName(path) + ".access.lock");
         for (var retry = 0; ; retry++)

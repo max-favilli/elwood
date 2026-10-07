@@ -52,7 +52,7 @@ public sealed class AsyncExecutor
         if (existing is not null)
         {
             if (existing.Deleting || existing.ExpiresAt <= Now) throw new RecoveryConflictException("The idempotency record is expiring. Use a new event key.");
-            if (existing.InputHash != Hash(input)) throw new RecoveryConflictException("Idempotency-Key was already used with a different payload.");
+            if (existing.InputHash != Hash(input)) throw new IdempotencyPayloadConflictException();
             return id;
         }
         var state = new ExecutionState
@@ -181,7 +181,7 @@ public sealed class AsyncExecutor
     /// <summary>Recover dropped queue hints, checkpoint-to-publish gaps and interrupted attempts.</summary>
     public async Task RecoverAsync(CancellationToken cancellationToken = default)
     {
-        foreach (var snapshot in await _states.ListAllAsync())
+        foreach (var snapshot in await _states.ListRecoverableAsync())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!snapshot.Durable || snapshot.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview || snapshot.Deleting) continue;
@@ -246,12 +246,14 @@ public sealed class AsyncExecutor
         await Notify(Ready(state, Stages(pipeline)));
     }
 
-    public async Task<string> ReplayAsync(string id, ParsedPipeline? revision = null)
+    public async Task<string> ReplayAsync(string id, ParsedPipeline? revision = null, bool acknowledgeUncertain = false)
     {
         await using var claim = await _states.TryLockAsync(id) ?? throw new RecoveryConflictException("An attempt is still running.");
         var state = await _states.GetExecutionAsync(id) ?? throw new KeyNotFoundException("Execution not found.");
         if (!state.Durable || state.IsTest || state.Deleting || state.ExpiresAt <= Now || state.Status is ExecutionStatus.Running or ExecutionStatus.Pending or ExecutionStatus.Retrying)
             throw new RecoveryConflictException("Only retained terminal executions can be replayed.");
+        if (state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values).Any(s => s.OutcomeUncertain) && !acknowledgeUncertain)
+            throw new RecoveryConflictException("Confirm that you reviewed the uncertain external write before replaying.");
         var original = await Load(state);
         if (revision is not null && revision.PipelineId != state.PipelineId) throw new ArgumentException("Replay revision must belong to the original pipeline.");
         var pipeline = revision ?? new ParsedPipeline(original.Yaml, ".", original.Scripts, [])
@@ -267,7 +269,7 @@ public sealed class AsyncExecutor
         if (_documents is not IExecutionDocumentStore documents) throw new InvalidOperationException("Retention requires execution-scoped document deletion.");
         var deleted = 0;
         var failures = new List<Exception>();
-        foreach (var snapshot in await _states.ListAllAsync())
+        foreach (var snapshot in await _states.ListRetainedAsync())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!snapshot.Deleting && !(snapshot.ExpiresAt <= Now)) continue;
@@ -311,14 +313,16 @@ public sealed class AsyncExecutor
         }
     }
 
+    private int _savedTestCallCount = -1;
+    private string? _testInput;
+
     private async Task Save(ExecutionState state)
     {
-        if (state.TriggerRef is not null)
+        if (_test is not null && state.TriggerRef is not null && _test.Calls.Count != _savedTestCallCount)
         {
-            var input = await _documents.GetAsync(state.TriggerRef) ?? "null";
-            var calls = state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values).SelectMany(s => s.Attempts).SelectMany(a => a.Calls).ToList();
-            state.TestContextRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/test", JsonSerializer.Serialize(new
-            { input = JsonSerializer.Deserialize<JsonElement>(input), mocks = _test?.Mocks, calls }, LocalTestSession.JsonOptions));
+            _testInput ??= await _documents.GetAsync(state.TriggerRef) ?? "null";
+            state.TestContextRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/test", _test.Serialize(_testInput));
+            _savedTestCallCount = _test.Calls.Count;
         }
         await _states.SaveExecutionAsync(state);
     }
@@ -355,7 +359,8 @@ public sealed class AsyncExecutor
     private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 }
 
-public sealed class RecoveryConflictException(string message) : Exception(message);
+public class RecoveryConflictException(string message) : Exception(message);
+public sealed class IdempotencyPayloadConflictException() : RecoveryConflictException("Idempotency-Key was already used with a different payload.");
 internal sealed class PipelineContentDto
 {
     public string? PipelineId { get; set; }

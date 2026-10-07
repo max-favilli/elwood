@@ -34,7 +34,7 @@ test('M5 samples, authenticated HTTP chain, Event Grid acceptance and scoped con
       SecretGrants: { 'sample-order-auth': { Test: ['crm.url','crm.tokenUrl','crm.clientId','crm.clientSecret','emarsys.url','emarsys.user','emarsys.password'] } },
     } }));
     await writeFile(join(root, 'secrets.json'), JSON.stringify({ 'crm.url': remoteBase + '/crm', 'crm.tokenUrl': remoteBase + '/token', 'crm.clientId': 'client', 'crm.clientSecret': 'client-secret', 'emarsys.url': remoteBase + '/emarsys', 'emarsys.user': 'user', 'emarsys.password': 'password' }));
-    child = spawn('dotnet', [resolve('dotnet/src/Elwood.Runtime.Api/bin/Debug/net10.0/Elwood.Runtime.Api.dll'), '--urls', base], {
+    child = spawn('dotnet', [resolve(process.env.ELWOOD_TEST_RUNTIME_DLL ?? 'dotnet/src/Elwood.Runtime.Api/bin/Debug/net10.0/Elwood.Runtime.Api.dll'), '--urls', base], {
       cwd: root, windowsHide: true, env: { ...process.env, Elwood__PipelinesDir: join(root,'pipelines'), Elwood__StateDir: join(root,'state'), Elwood__SecretsFile: join(root,'secrets.json'), Elwood__Management__LocalDevelopment: 'false', Elwood__AppConfiguration: '', ELWOOD_APP_CONFIGURATION: '', APPLICATIONINSIGHTS_CONNECTION_STRING: '' }, stdio: ['ignore','pipe','pipe'],
     });
     child.stdout.on('data', c => logs = (logs + c).slice(-6000)); child.stderr.on('data', c => logs = (logs + c).slice(-6000));
