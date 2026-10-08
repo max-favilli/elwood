@@ -24,7 +24,12 @@ public sealed class M6StorageServiceTests
     }
 
     [M6AzureFact, Trait("Category", "Integration")]
-    public async Task ExpiredLeaseCannotWriteAfterAnotherOwnerTakesOver()
+    public Task BrokenLeaseCannotWriteAfterAnotherOwnerTakesOver() => VerifyLeaseTakeover(breakLease: true);
+
+    [M6AzureFact, Trait("Category", "Integration")]
+    public Task ExpiredLeaseCannotWriteAfterAnotherOwnerTakesOver() => VerifyLeaseTakeover(breakLease: false);
+
+    private static async Task VerifyLeaseTakeover(bool breakLease)
     {
         var container = Container(); var blob = container.GetBlobClient("probe-" + Guid.NewGuid().ToString("N"));
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
@@ -39,7 +44,10 @@ public sealed class M6StorageServiceTests
             var held = await Assert.ThrowsAsync<RequestFailedException>(() => contender.AcquireAsync(TimeSpan.FromSeconds(15), cancellationToken: timeout.Token));
             Assert.Equal(409, held.Status);
             await first.RenewAsync(cancellationToken: timeout.Token);
-            await first.BreakAsync(TimeSpan.Zero, cancellationToken: timeout.Token);
+            if (breakLease)
+                await first.BreakAsync(TimeSpan.Zero, cancellationToken: timeout.Token);
+            else
+                await Task.Delay(TimeSpan.FromSeconds(17), timeout.Token); // Real expiry after the 15-second renewal.
             current = null;
             await contender.AcquireAsync(TimeSpan.FromSeconds(15), cancellationToken: timeout.Token);
             current = contender;
@@ -52,7 +60,8 @@ public sealed class M6StorageServiceTests
         }
         finally
         {
-            try { if (current is not null) await current.ReleaseAsync(); }
+            using var cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+            try { if (current is not null) await current.ReleaseAsync(cancellationToken: cleanupTimeout.Token); }
             finally { await Cleanup(container, blob); }
         }
     }
@@ -87,6 +96,9 @@ public sealed class M6StorageServiceTests
         await foreach (var item in container.GetBlobsAsync(states: BlobStates.Version, prefix: blob.Name, cancellationToken: timeout.Token))
             if (item.Name == blob.Name && item.VersionId is not null)
                 await blob.WithVersion(item.VersionId).DeleteIfExistsAsync(cancellationToken: timeout.Token);
+        Assert.False((await blob.ExistsAsync(timeout.Token)).Value);
+        await foreach (var item in container.GetBlobsAsync(states: BlobStates.Version, prefix: blob.Name, cancellationToken: timeout.Token))
+            Assert.NotEqual(blob.Name, item.Name); // Soft-deleted versions are excluded and expire after seven days.
     }
 }
 

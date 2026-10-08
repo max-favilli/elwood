@@ -260,3 +260,9 @@ Verification: 197 pipeline, 374 Core, 22 CLI, 7 Parquet and 17 non-integration c
 The portal production audit after compatible transitive updates has no critical/high/moderate findings and two low findings through Monaco/DOMPurify. The full developer audit also has five high findings in the ESLint → fast-glob → micromatch → braces chain; npm's proposed downgrade to eslint-config-next 14 is not applied. These residual advisories remain tracked, not claimed fixed.
 
 M6 input: bound synchronous work below the chosen provider gateway deadline; retain per-record fault isolation in cloud adapters; use bounded due/expiry queries and storage-enforced fencing. Azure resource creation requires the owner's approval of the proposed isolated resource group and costs. Subscription access was checked read-only; no cloud resources were created by this follow-up.
+
+### M6 storage lab verification — 8 October 2026
+
+The maintainer approved temporary `elwood-m6-rg` with a €10 total allowance; exceeding it requires approval. The storage-only lab is now deployed in West Europe. Three live Blob probes pass: takeover after lease break, takeover after natural expiry, and ETag-safe/version-specific cleanup. A real permission gap was found and fixed: deleting previous versions requires `deleteBlobVersion/action`, absent from Blob Data Contributor. The lab now uses account-scoped Blob Data Owner, plus Queue/Table Data Contributor. All synthetic live blobs/versions were cleaned up; 100 bytes remain soft-deleted under the seven-day lab policy. The billing query has no data yet.
+
+This is service and infrastructure evidence, not M6 completion. Durable cloud adapters, hosted management/catalog parity, Functions hosting, production retention and end-to-end native integration verification remain. See [the Azure profile](m6-azure-profile.md#live-lab-verification--8-october-2026) for exact results and limits. No production resources were touched.

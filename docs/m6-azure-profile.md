@@ -1,10 +1,10 @@
 # M6: small Azure profile and verification estimate
 
-Status: implementation/design work has started after the second-review package. Nothing has been deployed. The existing Functions/Redis prototype does not satisfy M6's durable ownership, catalog or retention contract and is not a release-ready deployment target.
+Status: implementation/design work has started after the second-review package. The temporary storage-only lab is deployed and three live Blob service probes pass (8 October 2026). No Elwood cloud runtime is deployed yet. The existing Functions/Redis prototype does not satisfy M6's durable ownership, catalog or retention contract and is not a release-ready deployment target.
 
 ## Cost proposal
 
-The maintainer asked for an estimate before approving paid resources. For a short campaign with synthetic payloads, limited retries and cleanup afterwards, reserve **€10 total**, with **€2–5 expected**. The initial storage-only template should be well below €1/month at <=1 GiB and <=100,000 requests. These are engineering planning allowances, not Azure quotations or enforced spending caps; exclude tax and currency/offer differences.
+The maintainer approved the temporary `elwood-m6-rg` and **€10 total** on 8 October 2026; ask before exceeding that allowance. The estimate for a short campaign with synthetic payloads, limited retries and cleanup afterwards remains **€2–5 expected**. The initial storage-only template should be well below €1/month at <=1 GiB and <=100,000 requests. These are engineering planning allowances, not Azure quotations or enforced spending caps; exclude tax and currency/offer differences.
 
 A provisional light-use Elwood footprint is **€3–8/month**, excluding the business application's SQL database/application and a separately hosted portal. The pet project's €3–5 Elwood target remains something to measure, not a guarantee. For verification the portal stays local. The proposed production baseline is native .NET 10 isolated Functions on Flex Consumption, Blob documents/bundles, Table metadata/indexes, Storage Queue notifications, Event Grid and managed identity. No Redis, always-ready instance, dedicated App Service plan, AI resource or private endpoint is assumed.
 
@@ -23,7 +23,23 @@ Published grants are subscription-wide. Other projects may consume them, so reco
 
 The account returned the maintainer's expected personal subscription and tenant, state Enabled. The West Europe Flex runtime list includes dotnet-isolated 10.0 with 512/2048/4096 MiB instance options. Microsoft.Storage and Microsoft.EventGrid returned NotRegistered. Bicep 0.48.1 is already installed. No provider registration, group creation, role assignment, resource creation, login or production-resource inspection was performed.
 
-The first reviewable provisioning unit is [isolated contract-test storage](../infra/azure-small/README.md), proposed group `elwood-m6-rg`. Approval is required before the first group creation or chargeable resource. Do not reuse or modify unrelated production groups, plans, databases, identities or services.
+The first provisioning unit is [isolated contract-test storage](../infra/azure-small/README.md), group `elwood-m6-rg`. The approval described above covers this temporary lab; unrelated production groups, plans, databases, identities and services remain out of scope.
+
+## Live lab verification — 8 October 2026
+
+Microsoft.Storage registration, group creation in West Europe, the scoped what-if preview and deployment all succeeded. Readback confirms Standard LRS StorageV2, HTTPS/TLS 1.2, disabled anonymous Blob/shared-key access, Blob versioning, seven-day Blob/container soft delete and the lab-only lifecycle rule. Queue and Table authenticated reads succeeded with empty results. No compute, Event Grid, SQL, Redis or hosted portal was provisioned.
+
+The first two live probes failed with `OperationNotAllowedOnAutomaticSnapshot`: Blob Data Contributor lacks `deleteBlobVersion/action`. The corrected template grants Blob Data Owner on the new test account only. The redundant contributor grant from the first deployment was removed and the three intended data roles were verified. Production cleanup must explicitly include version-delete rights; a base-blob delete is insufficient evidence of retention.
+
+The corrected live run passed **3 tests, 0 failures, 0 skips** in 23 seconds:
+
+- Concurrent lease acquisition is rejected, renewal succeeds, and an owner whose lease was forcibly broken cannot overwrite the new owner's data.
+- The same stale-write protection holds after natural expiry of the renewed 15-second lease.
+- An old ETag cannot delete a replacement; an older version can be deleted independently without changing the replacement's content or ETag.
+
+Every test verifies cleanup of its current blob and live versions. The first run's four leftover versions were also deleted explicitly. Final inventory across all three containers found **0 live objects**, **10 soft-deleted versions totaling 100 content bytes**, and no objects in the documents/output containers. Soft-deleted content follows the seven-day configured window; physical reclamation was not observed. The resource-group-scoped month-to-date cost query succeeded with no rows, so an actual charge is not yet available. This does not establish zero cost. The lab remains allocated for subsequent M6 adapter verification and must be removed when that verification is finished.
+
+These results verify service behavior and provisioning permissions. They do not certify the still-pending runtime adapters, 30-day production cleanup, queue redelivery, Table concurrency, hosted endpoint delivery or managed-identity hosting. Testcontainers' pre-existing SSH.NET advisories remain; no Docker, RabbitMQ or Erlang software was installed for these probes.
 
 ## Runtime design inputs
 
@@ -41,8 +57,8 @@ The first reviewable provisioning unit is [isolated contract-test storage](../in
 Provider contract tests; native Functions/API/portal parity; all three real integration families; live Event Grid subscription validation and duplicate delivery; managed identity and deployment authorization; crash/lease-loss/replay tests; actual default and overridden retention cleanup with drift detection; bounded growth/health; deployment, upgrade/rollback and recovery instructions; and measured service costs. The storage-only lab and passing M5 tests do not close M6.
 
 
-## Preparation verification
+## Historical preparation verification
 
-The storage Bicep compiles locally without warnings/errors. The two opt-in service probes compile and are reported as **skipped** because no approved live endpoint is configured. They are not counted as passed cloud tests. The Azure test project's existing Testcontainers dependency still brings SSH.NET security advisories; no Docker or broker software was installed for this preparation.
+Before deployment, the storage Bicep compiled locally without warnings/errors. The original two opt-in service probes compiled and were reported as **skipped** because no approved live endpoint was configured. The live results above supersede that preparation status. The Azure test project's existing Testcontainers dependency still brings SSH.NET security advisories; no Docker or broker software was installed for this preparation.
 
 Backend review follow-up: `be7b6c2`. Portal review follow-up: `b6af335`. Both are local commits; neither was pushed during this work.
