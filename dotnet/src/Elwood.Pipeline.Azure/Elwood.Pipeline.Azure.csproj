@@ -32,6 +32,7 @@
     -->
     <PackageReference Include="Azure.Storage.Blobs" Version="[12.20.0,12.21.0)" />
     <PackageReference Include="Azure.Data.AppConfiguration" Version="1.*" />
+    <PackageReference Include="Azure.Data.Tables" Version="12.13.0" />
     <ProjectReference Include="..\Elwood.Pipeline\Elwood.Pipeline.csproj" />
   </ItemGroup>
 

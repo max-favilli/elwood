@@ -12,7 +12,7 @@ namespace Elwood.Pipeline.Azure.Tests;
 /// </summary>
 public sealed class M6StorageServiceTests
 {
-    internal static BlobContainerClient Container()
+    internal static BlobContainerClient Container(string containerName = "contract-state")
     {
         var uri = new Uri(Environment.GetEnvironmentVariable("ELWOOD_M6_BLOB_URL")!);
         if (uri.Scheme != "https" || !uri.Host.StartsWith("elwoodm6", StringComparison.Ordinal) ||
@@ -20,7 +20,8 @@ public sealed class M6StorageServiceTests
             !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query))
             throw new InvalidOperationException("ELWOOD_M6_BLOB_URL must identify the approved elwoodm6* Azure test account, without credentials or path.");
         var options = new BlobClientOptions(); options.Retry.MaxRetries = 0; options.Retry.NetworkTimeout = TimeSpan.FromSeconds(15);
-        return new BlobServiceClient(uri, new AzureIdentity::Azure.Identity.AzureCliCredential(), options).GetBlobContainerClient("contract-state");
+        if (containerName is not ("contract-state" or "contract-documents" or "contract-outputs")) throw new ArgumentException("Only lab containers are allowed.");
+        return new BlobServiceClient(uri, new AzureIdentity::Azure.Identity.AzureCliCredential(), options).GetBlobContainerClient(containerName);
     }
 
     [M6AzureFact, Trait("Category", "Integration")]

@@ -89,28 +89,29 @@ Depends on 6.0 for live verification.
 - [x] Implement renewable Azure Blob claims with bounded renewal attempts, conservative loss handling and storage-enforced conditional writes.
 - [x] Verify forced/natural loss, late connector completion, concurrent owners and local-runtime compatibility.
 
-### 6.2 — Durable cloud state and indexes — Active
+### 6.2 — Durable cloud state and indexes — Complete
 
 Depends on 6.1.
 
-- [ ] Implement Blob-backed execution state with immutable/checkpoint identity and fenced state changes.
-- [ ] Add bounded Table indexes for due work, retained/expired executions and management listing; avoid full retained-history scans on recovery ticks.
-- [ ] Recover acceptance/index/state/notification gaps without acknowledging unrecoverable work.
-- [ ] Isolate corrupt records per item and expose adapter health; reconcile stale indexes safely.
-- [ ] Retain idempotency and pinned revision semantics across workers and restarts.
-- [ ] Verify concurrent duplicate acceptance, conditional writes, interrupted transitions, indexed queries and per-record failure handling.
+- [x] Implement Blob-backed execution state with immutable/checkpoint identity and fenced state changes.
+- [x] Add bounded Table indexes for due work, retained/expired executions and management listing; avoid full retained-history scans on recovery ticks.
+- [x] Recover acceptance/index/state/notification gaps without acknowledging unrecoverable work.
+- [x] Isolate corrupt records per item and expose adapter health; reconcile stale indexes safely.
+- [x] Retain idempotency and pinned revision semantics across workers and restarts.
+- [x] Verify concurrent duplicate acceptance, conditional writes, interrupted transitions, indexed queries and per-record failure handling.
 
 ### 6.3 — Execution documents and immutable bundles
 
 Depends on 6.1; coordinates with 6.2 and 6.5.
 
-- [ ] Store execution documents using ownership-safe immutable identities; prevent stale writers from changing referenced data.
-- [ ] Implement execution-scoped deletion including versions/snapshots and restartable progress.
-- [ ] Recover/clean failed-acceptance and temporary uploads without deleting active writers' data.
+- [x] Store execution documents using ownership-safe immutable identities; prevent stale writers from changing referenced data.
+- [x] Implement execution-scoped deletion including versions/snapshots and restartable progress.
+- [x] Recover/clean failed acceptance through a durable initialization intent and a grace period, protected by the execution lease.
+- [ ] Cover uploads arriving after lease loss/deletion and temporary/uncommitted provider data with the final lifecycle/admission policy (6.7).
 - [ ] Keep drafts and referenced immutable definitions separate from expiring execution data.
 - [ ] Verify restart, prefix isolation, missing/corrupt documents, stale writes and cleanup.
 
-### 6.4 — Queue transport and recovery scheduling
+### 6.4 — Queue transport and recovery scheduling — Active
 
 Depends on 6.1–6.3.
 
@@ -181,6 +182,6 @@ Depends on the preceding implementation packages.
 |---|---|---|
 | 8 October 2026 | Baseline | M1–M5 and review follow-ups recorded in implementation-plan.md; no new rerun claimed here. |
 | 8 October 2026 | 6.0 | Temporary storage lab deployed; 3 live Blob tests passed; `3b3b85b`. Actual billing query still had no rows. |
-| 8 October 2026 | Checklist | Master WBS created; 6.1 is the next implementation package. |
-
+| 8 October 2026 | Checklist | Master WBS created; subsequent packages are tracked below. |
 | 8 October 2026 | 6.1 | Fenced claim contract, runtime ownership-loss handling and renewable Blob claims. 202 pipeline tests passed before the final additional case; all 6 ownership cases then passed. Three simulated renewal-failure tests, 2 live Azure claim tests and 5 isolated API contracts passed. Cloud state/index/document integration remains 6.2–6.3. |
+| 8 October 2026 | 6.2 / part of 6.3 | Leased Blob state, bounded Table work/expiry indexes, immutable documents, abandoned-acceptance cleanup and version-deletion journals. Six live Azure adapter tests passed; 203 pipeline tests passed. Hosted wiring, late-upload lifecycle safeguards and catalog bundles remain open. |

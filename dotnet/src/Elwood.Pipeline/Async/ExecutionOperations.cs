@@ -118,6 +118,7 @@ internal sealed class ExecutionOperations
             var bindings = Bindings(state, config.Name, idm); bindings["$source"] = metadata;
             payload = _evaluator.Evaluate(config.Map, payload, bindings, pipeline.Scripts, step.Diagnostics);
         }
+        await claim.ValidateAsync(cancellationToken);
         step.DocumentRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/source", Json(payload));
         attempt.DocumentRef = step.DocumentRef;
         // Compatibility alias only; scheduling and assembly read the immutable attempt reference.
@@ -142,6 +143,7 @@ internal sealed class ExecutionOperations
             if (config.Response && !string.IsNullOrWhiteSpace(config.ResponseStatusCode))
                 step.ResponseStatusCode = Status(_evaluator.Evaluate(config.ResponseStatusCode, idm, bindings, pipeline.Scripts, step.Diagnostics));
             content = Json(data);
+            await claim.ValidateAsync(cancellationToken);
             step.ItemCount = data.Kind == ElwoodValueKind.Array ? data.GetArrayLength() : 1;
             step.DocumentRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/output", content);
             await _documents.StoreAsync($"exec/{state.ExecutionId}/output/{config.Name}", content);

@@ -88,7 +88,9 @@ public sealed class BlobExecutionClaim : IExecutionClaim
         }
     }
 
-    public async Task SaveAsync(ExecutionState state)
+    public Task SaveAsync(ExecutionState state) => SaveAsync(state, null);
+
+    internal async Task SaveAsync(ExecutionState state, IDictionary<string, string>? metadata)
     {
         if (state.ExecutionId != ExecutionId) throw new ArgumentException("A claim can save only its own execution.", nameof(state));
         ThrowIfLost();
@@ -100,6 +102,7 @@ public sealed class BlobExecutionClaim : IExecutionClaim
             await _blob.UploadAsync(content, new BlobUploadOptions
             {
                 Conditions = new BlobRequestConditions { LeaseId = _lease.LeaseId },
+                Metadata = metadata,
                 HttpHeaders = new BlobHttpHeaders { ContentType = "application/json" }
             }, request.Token);
             ThrowIfLost();

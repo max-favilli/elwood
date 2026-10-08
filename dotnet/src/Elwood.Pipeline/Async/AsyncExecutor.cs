@@ -213,6 +213,7 @@ public sealed class AsyncExecutor
         if (state.Sources.Values.All(s => s.Status == ExecutionStatus.Completed) && state.IdmRef is null)
         {
             var idm = await _operations.Assemble(state, stages.SelectMany(s => s));
+            await claim.ValidateAsync();
             state.IdmRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/idm", ExecutionOperations.Json(idm));
         }
         if (state.Sources.Values.All(s => s.Status == ExecutionStatus.Completed) && state.Outputs.Values.All(s => s.Status == ExecutionStatus.Completed))

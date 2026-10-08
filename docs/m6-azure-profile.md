@@ -58,6 +58,10 @@ Provider contract tests; native Functions/API/portal parity; all three real inte
 
 Current task status is maintained in the [master checklist](master-checklist.md). WBS 6.1 verification added six runtime ownership cases, three simulated renewal-failure/cancellation cases, two live Azure claim tests, and five passing API contracts against an isolated runtime build. Azure reported EUR 0.0000201 in the resource-group cost query on 8 October 2026; billing delay means this is not the final campaign cost.
 
+WBS 6.2 and the document portion of 6.3 now add `AzureExecutionStateStore` and `AzureExecutionDocumentStore`. State is committed to a leased Blob; Table work/expiry records precede the checkpoint and are verified against its atomic metadata. Each recovery/retention call reads one bounded index page, rotating its continuation rather than repeatedly loading the oldest corrupt record. History has a separate index. Large state/document reads have byte limits. Unfenced state writes are rejected.
+
+Execution documents use unique physical references even when the logical key is reused. Failed acceptance has an initialization record written before Blob creation; a ten-minute grace period and an execution claim protect cleanup. State-version deletion has independent Table records so interruption after deleting the base Blob does not lose cleanup obligations. Six live tests passed for cross-instance recovery, duplicate acceptance, replay/expiry, immutable references, corrupt-record isolation, abandoned acceptance and reconciliation while a writer holds its lease. The 203-test pipeline suite also passed. These adapters are not wired into a released cloud host yet; final late-upload/native lifecycle safeguards, operational quotas, catalog bundles and delivered-output retention remain open.
+
 
 ## Historical preparation verification
 
