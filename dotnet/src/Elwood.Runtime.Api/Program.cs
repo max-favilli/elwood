@@ -29,7 +29,7 @@ builder.Services.AddSingleton<IPipelineStore>(sp => new FileSystemPipelineStore(
 builder.Services.AddSingleton<IStateStore>(sp => new FileSystemStateStore(stateDir, sp.GetRequiredService<ILogger<FileSystemStateStore>>()));
 builder.Services.AddSingleton<IDocumentStore>(new FileSystemDocumentStore(Path.Combine(stateDir, "documents")));
 builder.Services.AddSingleton<JsonNodeValueFactory>(_ => JsonNodeValueFactory.Instance);
-builder.Services.AddSingleton(sp => new FileSystemDeploymentStore(sp.GetRequiredService<IPipelineStore>(), Path.Combine(stateDir, "deployments"), sp.GetRequiredService<ILogger<FileSystemDeploymentStore>>()));
+builder.Services.AddSingleton<IDeploymentStore>(sp => new FileSystemDeploymentStore(sp.GetRequiredService<IPipelineStore>(), Path.Combine(stateDir, "deployments"), sp.GetRequiredService<ILogger<FileSystemDeploymentStore>>()));
 builder.Services.AddSingleton(new ManagementSecurity(builder.Configuration, stateDir));
 builder.Services.AddSingleton<RuntimeStepQueue>();
 builder.Services.AddSingleton<DurableRuntime>();
@@ -148,7 +148,7 @@ app.MapGet("/api/session", (HttpContext context) =>
     return Results.Ok(new { identity.Name, identity.Permissions, identity.Pipelines });
 }).WithMetadata(new ManagementPermission(null, false));
 
-app.MapGet("/api/pipelines", async (FileSystemDeploymentStore store, HttpContext context, string? name) =>
+app.MapGet("/api/pipelines", async (IDeploymentStore store, HttpContext context, string? name) =>
 {
     var identity = ManagementSecurity.Identity(context);
     var definitions = (await store.ListAsync()).Where(d => identity.Can("read", d.Id));
@@ -160,50 +160,50 @@ app.MapGet("/api/pipelines", async (FileSystemDeploymentStore store, HttpContext
     });
     return Results.Ok(results.Where(d => name is null || d.name.Contains(name, StringComparison.OrdinalIgnoreCase) || d.Id.Contains(name, StringComparison.OrdinalIgnoreCase)));
 }).WithMetadata(new ManagementPermission("read", false));
-app.MapGet("/api/pipelines/{id}", async (string id, FileSystemDeploymentStore store, HttpContext context) =>
+app.MapGet("/api/pipelines/{id}", async (string id, IDeploymentStore store, HttpContext context) =>
 {
     var definition = await store.GetAsync(id);
     if (definition is null) return Results.NotFound();
     context.Response.Headers.ETag = $"\"{definition.DraftRevisionId}\"";
     return Results.Ok(definition);
 }).WithMetadata(new ManagementPermission("read", true));
-app.MapPost("/api/pipelines/{id}", async (string id, PipelineContent content, FileSystemDeploymentStore store) =>
+app.MapPost("/api/pipelines/{id}", async (string id, PipelineContent content, IDeploymentStore store) =>
     Results.Created($"/api/pipelines/{id}", await store.SaveDraftAsync(id, content, null, create: true))).WithMetadata(new ManagementPermission("write", true));
-app.MapPut("/api/pipelines/{id}", async (string id, PipelineContent content, FileSystemDeploymentStore store, HttpRequest request) =>
+app.MapPut("/api/pipelines/{id}", async (string id, PipelineContent content, IDeploymentStore store, HttpRequest request) =>
     Results.Ok(await store.SaveDraftAsync(id, content, Expected(request)))).WithMetadata(new ManagementPermission("write", true));
-app.MapDelete("/api/pipelines/{id}", async (string id, FileSystemDeploymentStore store, HttpRequest request) =>
+app.MapDelete("/api/pipelines/{id}", async (string id, IDeploymentStore store, HttpRequest request) =>
 {
     await store.DeleteAsync(id, Expected(request));
     return Results.NoContent();
 }).WithMetadata(new ManagementPermission("deploy", true));
-app.MapPost("/api/pipelines/{id}/migrate", async (string id, RevisionRequest body, FileSystemDeploymentStore store, HttpContext context) =>
+app.MapPost("/api/pipelines/{id}/migrate", async (string id, RevisionRequest body, IDeploymentStore store, HttpContext context) =>
     Results.Ok(await store.MigrateAsync(id, body.ExpectedRevisionId, ManagementSecurity.Identity(context).Name))).WithMetadata(new ManagementPermission("deploy", true));
-app.MapPost("/api/pipelines/{id}/deploy", async (string id, RevisionRequest body, FileSystemDeploymentStore store, HttpContext context) =>
+app.MapPost("/api/pipelines/{id}/deploy", async (string id, RevisionRequest body, IDeploymentStore store, HttpContext context) =>
 {
     var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
     var errors = RuntimeErrors(new PipelineParser().ParseContent(draft.Content));
     if (errors.Count > 0) return Results.BadRequest(new { errors });
     return Results.Ok(await store.DeployAsync(id, body.ExpectedRevisionId, ManagementSecurity.Identity(context).Name));
 }).WithMetadata(new ManagementPermission("deploy", true));
-app.MapGet("/api/pipelines/{id}/revisions", async (string id, FileSystemDeploymentStore store) =>
+app.MapGet("/api/pipelines/{id}/revisions", async (string id, IDeploymentStore store) =>
     Results.Ok((await store.RevisionsAsync(id)).Select(b => new { b.RevisionId, b.Author, timestamp = b.CreatedAt }))).WithMetadata(new ManagementPermission("read", true));
-app.MapGet("/api/pipelines/{id}/revisions/{revision}", async (string id, string revision, FileSystemDeploymentStore store) =>
+app.MapGet("/api/pipelines/{id}/revisions/{revision}", async (string id, string revision, IDeploymentStore store) =>
 {
     var bundle = (await store.RevisionsAsync(id)).FirstOrDefault(b => b.RevisionId == revision);
     return bundle is null ? Results.NotFound() : Results.Ok(bundle);
 }).WithMetadata(new ManagementPermission("read", true));
-app.MapGet("/api/pipelines/{id}/scripts", async (string id, FileSystemDeploymentStore store) =>
+app.MapGet("/api/pipelines/{id}/scripts", async (string id, IDeploymentStore store) =>
 {
     var draft = await store.GetAsync(id);
     return draft is null ? Results.NotFound() : Results.Ok(draft.Content.Scripts.Select(s => new { name = s.Key, length = s.Value.Length }));
 }).WithMetadata(new ManagementPermission("read", true));
-app.MapGet("/api/pipelines/{id}/scripts/{name}", async (string id, string name, FileSystemDeploymentStore store) =>
+app.MapGet("/api/pipelines/{id}/scripts/{name}", async (string id, string name, IDeploymentStore store) =>
 {
     SafePath.Script(name);
     var draft = await store.GetAsync(id);
     return draft is not null && draft.Content.Scripts.TryGetValue(name, out var script) ? Results.Text(script, "text/plain") : Results.NotFound();
 }).WithMetadata(new ManagementPermission("read", true));
-app.MapPut("/api/pipelines/{id}/scripts/{name}", async (string id, string name, HttpRequest request, FileSystemDeploymentStore store) =>
+app.MapPut("/api/pipelines/{id}/scripts/{name}", async (string id, string name, HttpRequest request, IDeploymentStore store) =>
 {
     SafePath.Script(name);
     var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
@@ -211,14 +211,14 @@ app.MapPut("/api/pipelines/{id}/scripts/{name}", async (string id, string name, 
     draft.Content.Scripts[name] = await reader.ReadToEndAsync();
     return Results.Ok(await store.SaveDraftAsync(id, draft.Content, Expected(request)));
 }).WithMetadata(new ManagementPermission("write", true));
-app.MapDelete("/api/pipelines/{id}/scripts/{name}", async (string id, string name, HttpRequest request, FileSystemDeploymentStore store) =>
+app.MapDelete("/api/pipelines/{id}/scripts/{name}", async (string id, string name, HttpRequest request, IDeploymentStore store) =>
 {
     SafePath.Script(name);
     var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
     draft.Content.Scripts.Remove(name);
     return Results.Ok(await store.SaveDraftAsync(id, draft.Content, Expected(request)));
 }).WithMetadata(new ManagementPermission("write", true));
-app.MapPost("/api/pipelines/{id}/scripts/{name}/test", async (string id, string name, HttpRequest request, FileSystemDeploymentStore store) =>
+app.MapPost("/api/pipelines/{id}/scripts/{name}/test", async (string id, string name, HttpRequest request, IDeploymentStore store) =>
 {
     SafePath.Script(name);
     var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
@@ -240,7 +240,7 @@ app.MapPost("/api/pipelines/{id}/scripts/{name}/test", async (string id, string 
         request.HttpContext.Response.Headers["X-Elwood-Warnings"] = JsonSerializer.Serialize(result.Diagnostics.Select(d => d.ToString()));
     return Results.Bytes(output.WrittenMemory, "application/json");
 }).WithMetadata(new ManagementPermission("test", true));
-app.MapPost("/api/pipelines/{id}/validate", async (string id, DraftRequest body, FileSystemDeploymentStore store) =>
+app.MapPost("/api/pipelines/{id}/validate", async (string id, DraftRequest body, IDeploymentStore store) =>
 {
     var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
     var content = body.Content ?? draft.Content;
@@ -249,7 +249,7 @@ app.MapPost("/api/pipelines/{id}/validate", async (string id, DraftRequest body,
     return Results.Ok(new { valid = errors.Count == 0, errors, revisionId = PipelineBundle.Hash(content) });
 }).WithMetadata(new ManagementPermission("write", true));
 
-app.MapPost("/api/pipelines/{id}/test-template", async (string id, DraftRequest body, FileSystemDeploymentStore store) =>
+app.MapPost("/api/pipelines/{id}/test-template", async (string id, DraftRequest body, IDeploymentStore store) =>
 {
     var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
     var content = body.Content ?? draft.Content;
@@ -272,7 +272,7 @@ app.MapGet("/api/executions/{id}", async (string id, IStateStore store, HttpCont
     var execution = await store.GetExecutionAsync(id);
     return execution is null || !CanReadExecution(context, execution) ? Results.NotFound() : Results.Ok(execution);
 }).WithMetadata(new ManagementPermission("read", false));
-app.MapPost("/api/executions", async (ExecutionRequest body, FileSystemDeploymentStore store, HttpContext context) =>
+app.MapPost("/api/executions", async (ExecutionRequest body, IDeploymentStore store, HttpContext context) =>
 {
     SafePath.Id(body.PipelineId);
     if (!ManagementSecurity.Identity(context).Can("test", body.PipelineId)) throw new PermissionDeniedException("Pipeline test permission required.");
@@ -302,7 +302,7 @@ app.MapPost("/api/executions/{id}/resume", async (string id, ResumeRequest body,
     await runtime.Runner(state.PipelineId).ResumeAsync(id, body.AcknowledgeUncertain);
     return Results.Accepted($"/api/executions/{id}", new { executionId = id });
 }).WithMetadata(new ManagementPermission("recover", false));
-app.MapPost("/api/executions/{id}/replay", async (string id, ReplayRequest body, IStateStore states, FileSystemDeploymentStore store, DurableRuntime runtime, HttpContext context) =>
+app.MapPost("/api/executions/{id}/replay", async (string id, ReplayRequest body, IStateStore states, IDeploymentStore store, DurableRuntime runtime, HttpContext context) =>
 {
     var state = await RecoveryExecution(id, states, context);
     ParsedPipeline? revision = null;
@@ -318,7 +318,7 @@ app.MapPost("/api/executions/{id}/replay", async (string id, ReplayRequest body,
     var replay = await runtime.Runner(state.PipelineId).ReplayAsync(id, revision, body.AcknowledgeUncertain);
     return Results.Accepted($"/api/executions/{replay}", new { executionId = replay, replayOf = id });
 }).WithMetadata(new ManagementPermission("recover", false));
-app.MapPost("/api/v1/trigger/{**path}", async (string path, HttpContext context, FileSystemDeploymentStore store) =>
+app.MapPost("/api/v1/trigger/{**path}", async (string path, HttpContext context, IDeploymentStore store) =>
 {
     var match = await store.MatchAsync("/" + path);
     if (match is null) return Results.NotFound(new { error = "No deployed pipeline matches this endpoint." });
@@ -424,7 +424,7 @@ static SyncExecutor Executor(HttpContext context, string id, bool isTest, LocalT
     logger: context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger<SyncExecutor>());
 static List<string> RuntimeErrors(ParsedPipeline parsed)
 {
-    var errors = FileSystemDeploymentStore.ValidationErrors(parsed);
+    var errors = DeploymentValidation.Errors(parsed);
     if (parsed.Config.Sources.Any(s => s.From?.FileShare is not null) || parsed.Config.Outputs.Any(o => o.Destinations?.FileShare?.Count > 0))
         errors.Add("Host filesystem connectors are disabled in the management runtime. Use the trusted CLI for local files.");
     return errors;

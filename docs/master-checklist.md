@@ -108,28 +108,29 @@ Depends on 6.1; coordinates with 6.2 and 6.5.
 - [x] Implement execution-scoped deletion including versions/snapshots and restartable progress.
 - [x] Recover/clean failed acceptance through a durable initialization intent and a grace period, protected by the execution lease.
 - [ ] Cover uploads arriving after lease loss/deletion and temporary/uncommitted provider data with the final lifecycle/admission policy (6.7).
-- [ ] Keep drafts and referenced immutable definitions separate from expiring execution data.
+- [x] Keep drafts and referenced immutable definitions separate from expiring execution data; bounded cloud catalog with retained content-addressed revisions.
 - [ ] Verify restart, prefix isolation, missing/corrupt documents, stale writes and cleanup.
 
 ### 6.4 — Queue transport and recovery scheduling — Active
 
 Depends on 6.1–6.3.
 
-- [ ] Implement Azure Storage Queue transport with bounded messages, visibility/redelivery and poison-message handling.
-- [ ] Treat queues as wake-up hints; persisted state remains authoritative.
+- [x] Implement bounded, versioned Azure Storage Queue messages and a dispatcher that discards malformed hints without logging payloads; verify actual visibility/redelivery and stale receipt rejection.
+- [ ] Wire queue triggers, bounded host retries and finite poison-queue cleanup into native hosting.
+- [x] Treat queues as wake-up hints; persisted state remains authoritative, including pipeline identity used to select secret grants.
 - [ ] Implement bounded recovery scheduling, deduplication and backoff without one-second full-store scans.
 - [ ] Verify lost notifications, duplicate/redelivered messages, worker restarts and delayed retries.
 - [ ] Define/verify the workplace Service Bus profile separately; preserve external RabbitMQ as third-party ingress.
 
-### 6.5 — Shared catalog and management parity
+### 6.5 — Shared catalog and management parity — Active
 
 Depends on 6.2–6.3.
 
-- [ ] Extract a deployment-store contract from the filesystem implementation.
-- [ ] Implement shared drafts, concurrency tokens, immutable bundles and atomic active-route publication.
+- [x] Extract a deployment-store contract from the filesystem implementation and use it in the API and RabbitMQ ingress.
+- [x] Implement shared drafts, concurrency tokens, immutable bundles and atomic active-route publication using Blob ETag compare-and-swap; enforce small-profile catalog limits.
 - [ ] Retain management scopes, authentication, secret grants and per-pipeline history authorization in the hosted runtime.
 - [ ] Connect the portal to the hosted management API; save/validate/test/deploy behave consistently with local use.
-- [ ] Verify concurrent deployment, collision handling, rollback and executions pinned to earlier versions.
+- [x] Verify concurrent deployment, collision handling, rollback and executions pinned to earlier versions against the live Azure catalog.
 
 ### 6.6 — Native Azure hosting
 
@@ -185,3 +186,4 @@ Depends on the preceding implementation packages.
 | 8 October 2026 | Checklist | Master WBS created; subsequent packages are tracked below. |
 | 8 October 2026 | 6.1 | Fenced claim contract, runtime ownership-loss handling and renewable Blob claims. 202 pipeline tests passed before the final additional case; all 6 ownership cases then passed. Three simulated renewal-failure tests, 2 live Azure claim tests and 5 isolated API contracts passed. Cloud state/index/document integration remains 6.2–6.3. |
 | 8 October 2026 | 6.2 / part of 6.3 | Leased Blob state, bounded Table work/expiry indexes, immutable documents, abandoned-acceptance cleanup and version-deletion journals. Six live Azure adapter tests passed; 203 pipeline tests passed. Hosted wiring, late-upload lifecycle safeguards and catalog bundles remain open. |
+| 8 October 2026 | 6.4 / 6.5 | Eight queue codec/dispatch/transport tests passed, including one live redelivery test; five live catalog tests passed for concurrency, revision pinning, rollback, size limits and corrupt-control-data rejection. Pipeline suite: 203 passed. Functions bindings, shared hosted API security and Service Bus remain open. |

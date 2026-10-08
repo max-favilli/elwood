@@ -4,7 +4,7 @@ namespace Elwood.Pipeline.Async;
 /// Queue abstraction for async pipeline execution. The HTTP trigger enqueues
 /// source/output step messages; the queue trigger dequeues and processes them.
 ///
-/// Implementations: InMemoryStepQueue (tests), Service Bus (production, 6d).
+/// Implementations include InMemoryStepQueue and Azure Storage Queue scheduling hints.
 /// </summary>
 public interface IStepQueue
 {

@@ -11,7 +11,7 @@ using Elwood.Pipeline.Secrets;
 
 namespace Elwood.Runtime.Api;
 
-public sealed class RabbitMqTriggerWorker(FileSystemDeploymentStore catalog, DurableRuntime runtime,
+public sealed class RabbitMqTriggerWorker(IDeploymentStore catalog, DurableRuntime runtime,
     ManagementSecurity security, ISecretProvider secrets, ILogger<RabbitMqTriggerWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -29,7 +29,7 @@ public sealed class RabbitMqTriggerWorker(FileSystemDeploymentStore catalog, Dur
                         var bundle = await catalog.GetActiveAsync(entry.Id);
                         if (bundle is null) continue;
                         var parsed = new PipelineParser().ParseContent(bundle.Content, entry.Id, bundle.RevisionId);
-                        if (FileSystemDeploymentStore.ValidationErrors(parsed).Count > 0) continue;
+                        if (DeploymentValidation.Errors(parsed).Count > 0) continue;
                         foreach (var source in parsed.Config.Sources.Where(s => s.Rabbitmq is not null))
                             desired[entry.Id + "/" + source.Name + "/" + bundle.RevisionId] = (entry.Id, source.Name, source.Rabbitmq!);
                     }

@@ -1,39 +1,8 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 using Elwood.Pipeline.Storage;
 using Microsoft.Extensions.Logging;
 
 namespace Elwood.Pipeline.Registry;
-
-public sealed class PipelineBundle
-{
-    public string RevisionId { get; set; } = "";
-    public PipelineContent Content { get; set; } = new();
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    public string? Author { get; set; }
-
-    public static string Hash(PipelineContent content)
-    {
-        var canonical = JsonSerializer.SerializeToUtf8Bytes(new
-        {
-            content.Yaml,
-            Scripts = (content.Scripts ?? []).OrderBy(kv => kv.Key, StringComparer.Ordinal).ToArray(),
-        });
-        return Convert.ToHexString(SHA256.HashData(canonical)).ToLowerInvariant();
-    }
-}
-
-public sealed class DeploymentDefinition
-{
-    public string Id { get; set; } = "";
-    public PipelineContent Content { get; set; } = new();
-    public string DraftRevisionId { get; set; } = "";
-    public string? ActiveRevisionId { get; set; }
-    public bool MigrationRequired { get; set; }
-    public DateTime LastModified { get; set; }
-}
-
-public sealed class DeploymentConflictException(string message) : Exception(message);
 
 /// <summary>
 /// Local deployment catalog. Each atomic manifest contains a draft, append-only bundles,
@@ -41,7 +10,7 @@ public sealed class DeploymentConflictException(string message) : Exception(mess
 /// All writers (including different API processes) serialize on the same filesystem lock.
 /// Cloud catalogs must implement the equivalent conditional transaction before M6 rollout.
 /// </summary>
-public sealed class FileSystemDeploymentStore
+public sealed class FileSystemDeploymentStore : IDeploymentStore
 {
     private readonly IPipelineStore _legacy;
     private readonly string _root;
@@ -129,7 +98,7 @@ public sealed class FileSystemDeploymentStore
         foreach (var source in parsed.Config.Sources.Where(s => s.Trigger == "queue" && s.Rabbitmq is null))
             errors.Add($"Source '{source.Name}': this runtime requires rabbitmq configuration to deploy a queue trigger.");
         if (errors.Count > 0) throw new ArgumentException(string.Join("; ", errors));
-        var routes = Endpoints(parsed).ToList();
+        var routes = DeploymentValidation.Endpoints(parsed).ToList();
         if (routes.Distinct(StringComparer.OrdinalIgnoreCase).Count() != routes.Count)
             throw new DeploymentConflictException("Duplicate HTTP endpoints in this pipeline.");
         foreach (var other in await ListAsync())
@@ -137,7 +106,7 @@ public sealed class FileSystemDeploymentStore
             if (other.Id.Equals(id, StringComparison.OrdinalIgnoreCase)) continue;
             var active = await GetActiveAsync(other.Id);
             if (active is null) continue;
-            var otherRoutes = Endpoints(new PipelineParser().ParseContent(active.Content));
+            var otherRoutes = DeploymentValidation.Endpoints(new PipelineParser().ParseContent(active.Content));
             if (otherRoutes.Intersect(routes, StringComparer.OrdinalIgnoreCase).Any())
                 throw new DeploymentConflictException($"An endpoint is already deployed by pipeline '{other.Id}'.");
         }
@@ -193,23 +162,8 @@ public sealed class FileSystemDeploymentStore
         return match;
     }
 
-    public static List<string> ValidationErrors(ParsedPipeline parsed)
-    {
-        var errors = parsed.Errors.ToList();
-        errors.AddRange(PipelineParser.ValidateExecutionConfig(parsed.Config));
-        try { DependencyResolver.ResolveStages(parsed.Config.Sources); }
-        catch (InvalidOperationException ex) { errors.Add(ex.Message); }
-        foreach (var source in parsed.Config.Sources)
-        {
-            if (source.Endpoint is { } endpoint && (!endpoint.StartsWith('/') || endpoint.Contains('?') || endpoint.Contains('#') || endpoint.Contains("..") || endpoint.Contains('\\')))
-                errors.Add($"Source '{source.Name}': endpoint must be a literal absolute URL path.");
-            if (source.Auth is { } auth && auth.Type != "basic") errors.Add($"Source '{source.Name}': unsupported trigger authentication '{auth.Type}'.");
-        }
-        return errors;
-    }
+    public static List<string> ValidationErrors(ParsedPipeline parsed) => DeploymentValidation.Errors(parsed);
 
-    private static IEnumerable<string> Endpoints(ParsedPipeline parsed) => parsed.Config.Sources
-        .Where(s => s.Trigger is "http" or "http-request" && !string.IsNullOrEmpty(s.Endpoint)).Select(s => s.Endpoint!);
     private static PipelineBundle Bundle(PipelineContent content, string author) => new()
         { Content = content, RevisionId = PipelineBundle.Hash(content), Author = author };
     private static DeploymentDefinition Definition(string id, Manifest manifest) => new()
