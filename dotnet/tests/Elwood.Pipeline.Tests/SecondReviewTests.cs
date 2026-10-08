@@ -133,7 +133,7 @@ public sealed class SecondReviewTests
             var logger = new Warnings();
             var states = new FileSystemStateStore(root, logger);
             Assert.Equal(id, Assert.Single(await states.ListRecoverableAsync()).ExecutionId);
-            Assert.True(File.Exists(Path.Combine(root, "indexes", "ready-v1")));
+            Assert.True(File.Exists(Path.Combine(root, "indexes", "ready-v2")));
             Assert.Equal(2, (await states.ListAllAsync()).Count);
             Assert.Equal(2, (await states.ListExecutionsAsync()).Count);
             await File.WriteAllTextAsync(Path.Combine(root, "indexes", "active", "truncated"), "");

@@ -231,7 +231,8 @@ public sealed class AsyncExecutor
         foreach (var snapshot in await _states.ListRecoverableAsync())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!snapshot.Durable || snapshot.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview || snapshot.Deleting) continue;
+            if ((!snapshot.Durable && snapshot.ExecutionDeadlineAt is null) ||
+                snapshot.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview || snapshot.Deleting) continue;
             await using var claim = await _states.TryClaimAsync(snapshot.ExecutionId, cancellationToken);
             if (claim is null) continue;
             await claim.ValidateAsync(cancellationToken);

@@ -10,6 +10,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Azure.Identity" Version="1.17.1" Aliases="AzureIdentity" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Storage.Queues" Version="5.5.5" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Timer" Version="4.3.1" />
+    <ProjectReference Include="../Elwood.Runtime.Hosting/Elwood.Runtime.Hosting.csproj" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker" Version="2.*" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Sdk" Version="2.*" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Http" Version="3.*" />
@@ -25,4 +29,7 @@
     <ProjectReference Include="..\Elwood.Pipeline.Azure\Elwood.Pipeline.Azure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="host.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

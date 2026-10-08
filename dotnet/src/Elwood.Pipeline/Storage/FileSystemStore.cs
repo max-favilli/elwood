@@ -39,7 +39,7 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
     }
 
     private static string? IndexFor(ExecutionState state) => state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview
-        ? "terminal" : state.Durable ? "active" : null;
+        ? "terminal" : state.Durable || state.ExecutionDeadlineAt is not null ? "active" : null;
     private string IndexPath(string index, string id) => SafePath.Within(_baseDir, $"indexes/{index}/{SafePath.Id(id)}");
     private void Mark(string index, string id)
     {
@@ -57,13 +57,13 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
             if (_indexesReady) return;
             await using var access = await AtomicExecutionFile.LockAsync(SafePath.Within(_baseDir, "index-initialization"));
             foreach (var index in new[] { "active", "terminal" }) Directory.CreateDirectory(SafePath.Within(_baseDir, "indexes/" + index));
-            var ready = SafePath.Within(_baseDir, "indexes/ready-v1");
+            var ready = SafePath.Within(_baseDir, "indexes/ready-v2");
             if (!File.Exists(ready))
             {
-                // One-time upgrade of pre-index stores; interrupted upgrades are repeatable.
+                // v2 also discovers abandoned synchronous/test deadlines from v1 stores.
                 foreach (var state in await ListAllAsync())
                     if (IndexFor(state) is { } index) Mark(index, state.ExecutionId);
-                await WriteAtomicAsync(ready, "1");
+                await WriteAtomicAsync(ready, "2");
             }
             _indexesReady = true;
         }

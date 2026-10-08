@@ -28,7 +28,7 @@ public sealed class RuntimeStepQueue : IStepQueue
     }
 }
 
-public sealed class DurableRuntime(IStateStore states, IDocumentStore documents, RuntimeStepQueue queue,
+public sealed class DurableRuntime(IStateStore states, IDocumentStore documents, IStepQueue queue,
     ManagementSecurity security, ISecretProvider secrets, RuntimeConnectors connectors)
 {
     public AsyncExecutor Runner(string? pipelineId = null) => new(states, documents, queue,

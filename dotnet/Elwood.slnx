@@ -11,10 +11,12 @@
     <Project Path="src/Elwood.Pipeline.Sql/Elwood.Pipeline.Sql.csproj" />
     <Project Path="src/Elwood.Pipeline/Elwood.Pipeline.csproj" />
     <Project Path="src/Elwood.Pipeline.Azure/Elwood.Pipeline.Azure.csproj" />
+    <Project Path="src/Elwood.Runtime.Hosting/Elwood.Runtime.Hosting.csproj" />
     <Project Path="src/Elwood.Runtime.Api/Elwood.Runtime.Api.csproj" />
     <Project Path="src/Elwood.Runtime.Azure.Functions/Elwood.Runtime.Azure.Functions.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Elwood.Runtime.Hosting.Tests/Elwood.Runtime.Hosting.Tests.csproj" />
     <Project Path="tests/Elwood.Connectors.Tests/Elwood.Connectors.Tests.csproj" />
     <Project Path="tests/Elwood.Core.Tests/Elwood.Core.Tests.csproj" />
     <Project Path="tests/Elwood.Cli.Tests/Elwood.Cli.Tests.csproj" />

@@ -40,7 +40,7 @@ Every command result/error must be checked before continuing. Do not print acces
 
 Cloud adapter contract tests must prove lease acquisition/renewal/loss, rejection of stale conditional writes, concurrent duplicate acceptance, corrupt-record isolation, indexed due-work/expiry queries, durable queues, restartable deletion and version-safe output cleanup. A successful template deployment is not evidence that these behaviors work.
 
-Three opt-in live Blob service probes are supplied (they do not yet prove the unimplemented M6 adapters):
+Three opt-in live Blob service probes are supplied (adapter contract tests are additional coverage):
 
 ```powershell
 $env:ELWOOD_M6_BLOB_URL = 'https://<approved-elwoodm6-account>.blob.core.windows.net/'
@@ -51,7 +51,7 @@ They refuse non-lab account URLs, use the signed-in CLI identity, generate uniqu
 
 The test harness must limit generated data and request counts, delete its queue/table rows and Blob versions, and report any failed cleanup. Blob lifecycle does not clean Table entities or guarantee immediate deletion. Check the account's actual retained bytes before leaving it allocated.
 
-The production profile still needs Functions hosting, a shared management API/catalog, durable Table/Blob/Queue adapters, fencing in the runtime, independent cleanup, quotas, monitoring, installed lifecycle checks and live Event Grid verification. Production retention remains 30 days by default, configurable per pipeline/destination. **Never copy this lab's seven-day blanket rule onto production execution or business-output containers.**
+The durable adapters, shared catalog and native Functions preview are now implemented and verified below. The production profile still needs delivered-output cleanup, quotas, monitoring, installed lifecycle checks, live Event Grid verification and the full hosted integration campaign. Production retention remains 30 days by default, configurable per pipeline/destination. **Never copy this lab's seven-day blanket rule onto production execution or business-output containers.**
 
 See [M6 Azure design and estimate](../../docs/m6-azure-profile.md).
 
@@ -69,3 +69,23 @@ az group exists --name elwood-m6-rg --subscription $subscription
 ```
 
 The cost allowance covers the entire campaign, including storage left allocated between runs. Check resource-group-scoped Cost Management data before adding hosting or other meters; allow for billing delay rather than interpreting missing rows as zero cost.
+
+## Temporary Functions verification
+
+`test-runtime.bicep` adds a Flex Consumption .NET 10 isolated app to this **existing synthetic lab only**. It uses the existing account, an account-scoped managed identity, 512 MiB on-demand instances, no always-ready capacity and no Redis. It creates separate preview catalog/package containers. This is not a production installer: the lab's seven-day execution-data rule is incompatible with the production 30-day contract. The runtime explicitly requires `Elwood:VerificationOnly=true`; `/api/health` is liveness, while `/api/readiness` returns 503 until cloud retention and release verification are complete.
+
+Prepare a random management token in a private, ignored local file and supply only its SHA-256 hash as the secure `managementTokenSha256` parameter. Never print or commit the bearer token. Preview with `az deployment group what-if`, deploy only to the approved temporary group, publish the Functions project in Release, ZIP the **contents** of the publish folder (including `host.json`, `functions.metadata` and `.azurefunctions`), then deploy with `az functionapp deployment source config-zip`. SCM/FTP basic publishing is disabled; the operator uses Azure CLI authentication. No service-principal password is needed.
+
+Opt-in hosted smoke test, after the package deployment succeeds:
+
+```powershell
+$env:ELWOOD_M6_HOST_URL = 'https://<approved-elwood-m6-api-name>.azurewebsites.net/'
+$env:ELWOOD_M6_HOST_TOKEN_FILE = (Resolve-Path '.private/m6-host-token').Path
+node --test scripts/m6-hosted.test.mjs
+```
+
+The test verifies management authentication, unpublished drafts, explicit mock testing, deployment, durable queue completion, duplicate acceptance, inspection and replay of the original revision after redeployment. Its execution TTL is five minutes; the independent retention function runs every five minutes. It retires its pipeline afterwards. Confirm removal of execution data separately; retired catalog entries and deployment packages remain until this temporary lab is removed. Stop the temporary function app between verification sessions and remove the group after the campaign.
+
+The hosted runtime processes one bounded due-index page each minute and one expiry page every five minutes. Queue messages use Base64, four-message batches, five transport attempts and a one-minute retry visibility delay. Poison hints are consumed without retaining/logging their bodies; authoritative work remains in execution state. Recovery/retention use separate Functions timers and do not depend on a permanently running application loop. This small profile deliberately rejects RabbitMQ queue deployment until a separately provisioned always-running ingress is configured.
+
+West Europe EUR retail meters checked on 8 October 2026: paid on-demand compute EUR 0.000023 per GB-second, paid executions EUR 0.000004 per ten. Thus 20,000 GB-seconds costs EUR 0.46 and 10,000 invocations EUR 0.004 before available subscription-wide grants, tax or storage. The Retail Prices API's legacy output rounded tiny values; the preview API and full-precision values were used. Actual group cost before compute was EUR 0.0000201126, with billing delay. The approved total campaign allowance remains EUR 10. Sources: [Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices), [Functions pricing](https://azure.microsoft.com/en-us/pricing/details/functions/).

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../Elwood.Pipeline.Sql/Elwood.Pipeline.Sql.csproj" />
+    <ProjectReference Include="../Elwood.Pipeline.RabbitMq/Elwood.Pipeline.RabbitMq.csproj" />
+    <ProjectReference Include="../Elwood.Pipeline.Azure/Elwood.Pipeline.Azure.csproj" />
+  </ItemGroup>
+</Project>

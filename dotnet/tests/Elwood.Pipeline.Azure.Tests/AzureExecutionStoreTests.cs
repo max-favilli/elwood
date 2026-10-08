@@ -13,6 +13,21 @@ namespace Elwood.Pipeline.Azure.Tests;
 
 public sealed class AzureExecutionStoreTests
 {
+    [M6AzureFact, Trait("Category", "Integration")]
+    public async Task AbandonedSynchronousTestIsIndexedAndSettledAtItsDeadline()
+    {
+        await using var lab = new Lab(); var states = lab.States(); var queue = new InMemoryStepQueue();
+        var runner = new AsyncExecutor(states, lab.Documents, queue, timeProvider: lab.Clock);
+        var id = await runner.StartAsync(Pipeline(), JsonNodeValueFactory.Instance.Parse("{}"), isTest: true, durable: false,
+            executionDeadlineAt: lab.Clock.GetUtcNow().UtcDateTime.AddSeconds(5));
+        Assert.Empty(await states.ListRecoverableAsync());
+        lab.Clock.Advance(TimeSpan.FromSeconds(6)); queue.DrainAll();
+        await new AsyncExecutor(lab.States(), lab.Documents, queue, timeProvider: lab.Clock).RecoverAsync();
+        var settled = (await states.GetExecutionAsync(id))!;
+        Assert.Equal(ExecutionStatus.Failed, settled.Status); Assert.Equal(504, settled.ResponseStatusCode);
+        Assert.Empty(queue.DrainAll()); Assert.NotNull(settled.ExpiresAt);
+    }
+
     private static ParsedPipeline Pipeline() => new PipelineParser().ParseContent(new PipelineContent
     {
         Yaml = """

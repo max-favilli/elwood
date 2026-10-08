@@ -116,10 +116,12 @@ Depends on 6.1; coordinates with 6.2 and 6.5.
 Depends on 6.1–6.3.
 
 - [x] Implement bounded, versioned Azure Storage Queue messages and a dispatcher that discards malformed hints without logging payloads; verify actual visibility/redelivery and stale receipt rejection.
-- [ ] Wire queue triggers, bounded host retries and finite poison-queue cleanup into native hosting.
+- [x] Wire queue triggers, bounded host retries and a poison-hint consumer into the native host; generated binding metadata verified.
+- [ ] Verify those bindings, poison cleanup and recovery scheduling in the deployed service.
 - [x] Treat queues as wake-up hints; persisted state remains authoritative, including pipeline identity used to select secret grants.
-- [ ] Implement bounded recovery scheduling, deduplication and backoff without one-second full-store scans.
-- [ ] Verify lost notifications, duplicate/redelivered messages, worker restarts and delayed retries.
+- [x] Implement bounded recovery scheduling with a one-minute Functions timer, one Table page per sweep, claim-based exclusion and authored retry timestamps; hosted verification remains open.
+- [x] Verify lost notifications/recovery across state-store instances and Azure queue visibility redelivery; hosted duplicate acceptance and completion pass.
+- [ ] Exercise native worker restart, delayed retries and poison recovery end to end.
 - [ ] Define/verify the workplace Service Bus profile separately; preserve external RabbitMQ as third-party ingress.
 
 ### 6.5 — Shared catalog and management parity — Active
@@ -128,7 +130,7 @@ Depends on 6.2–6.3.
 
 - [x] Extract a deployment-store contract from the filesystem implementation and use it in the API and RabbitMQ ingress.
 - [x] Implement shared drafts, concurrency tokens, immutable bundles and atomic active-route publication using Blob ETag compare-and-swap; enforce small-profile catalog limits.
-- [ ] Retain management scopes, authentication, secret grants and per-pipeline history authorization in the hosted runtime.
+- [x] Share HTTP handlers, authentication, management scopes, secret grants and history authorization between the local API and Functions. Five API contracts and nine direct Functions/configuration tests passed; live host verification remains open.
 - [ ] Connect the portal to the hosted management API; save/validate/test/deploy behave consistently with local use.
 - [x] Verify concurrent deployment, collision handling, rollback and executions pinned to earlier versions against the live Azure catalog.
 
@@ -136,13 +138,17 @@ Depends on 6.2–6.3.
 
 Depends on 6.1–6.5; review estimated cost against the remaining allowance before deploying compute.
 
-- [ ] Replace the legacy Functions/Redis prototype with .NET isolated native hosting and the durable adapters.
-- [ ] Provide repeatable Bicep deployment/configuration with managed identities and appropriately scoped data/secret permissions; no mandatory Redis in the small profile.
-- [ ] Host HTTP triggers, management endpoints, queue consumers, recovery and independent retention workers.
+- [x] Replace the legacy Functions/Redis prototype with .NET isolated native hosting and the durable adapters; build and entry-point tests pass. Azure hosting remains explicitly verification-only until release gates pass.
+- [x] Compile, preview and deploy a temporary synthetic Functions Bicep profile with account-scoped managed identity and no Redis.
+- [ ] Finish the production Bicep profile with verified retention, health, quotas and deployment/configuration instructions.
+- [x] Deploy HTTP triggers, management endpoints, queue consumers and independent recovery/retention Functions; Azure indexed all five functions and hosted execution/replay passed.
+- [x] Verify the independent retention timer physically removed all preview state/documents and live versions/snapshots; data-plane inventory returned zero.
+- [ ] Complete retention health/drift reporting and production lifecycle enforcement.
 - [ ] Keep sync budgets below gateway deadlines and verify real disconnect/cancellation behavior.
 - [ ] Deploy Event Grid validation/delivery and verify duplicate events and authorization.
 - [ ] Document/provide the always-running ingress option needed for external RabbitMQ; price it separately from scale-to-zero Deldo hosting.
-- [ ] Verify deploy, startup/readiness, restart and hosted management/portal parity.
+- [x] Verify deployment, startup, bearer management access and the explicit verification-only readiness gate against Azure.
+- [ ] Verify restart and hosted portal parity; production readiness requires 6.7.
 
 ### 6.7 — Mandatory internal and delivered-output retention
 
@@ -187,3 +193,7 @@ Depends on the preceding implementation packages.
 | 8 October 2026 | 6.1 | Fenced claim contract, runtime ownership-loss handling and renewable Blob claims. 202 pipeline tests passed before the final additional case; all 6 ownership cases then passed. Three simulated renewal-failure tests, 2 live Azure claim tests and 5 isolated API contracts passed. Cloud state/index/document integration remains 6.2–6.3. |
 | 8 October 2026 | 6.2 / part of 6.3 | Leased Blob state, bounded Table work/expiry indexes, immutable documents, abandoned-acceptance cleanup and version-deletion journals. Six live Azure adapter tests passed; 203 pipeline tests passed. Hosted wiring, late-upload lifecycle safeguards and catalog bundles remain open. |
 | 8 October 2026 | 6.4 / 6.5 | Eight queue codec/dispatch/transport tests passed, including one live redelivery test; five live catalog tests passed for concurrency, revision pinning, rollback, size limits and corrupt-control-data rejection. Pipeline suite: 203 passed. Functions bindings, shared hosted API security and Service Bus remain open. |
+| 8 October 2026 | 6.5 / 6.6 | Shared HTTP/security implementation and Redis-free Functions host; five API contracts and nine direct host tests passed. Temporary managed-identity app provisioned and live test passed for draft/mock test/deploy, queue completion, inspection, duplicate acceptance and replay of the original revision. Production readiness deliberately returns 503. |
+| 8 October 2026 | Recovery hardening | Abandoned synchronous tests now enter recovery indexes and settle at their deadline without repeating connector calls; v1 filesystem indexes upgrade to v2. Pipeline suite: 208 passed. One additional live Azure deadline test passed. |
+| 8 October 2026 | Hosted internal cleanup | Independent five-minute retention timer removed the hosted smoke test's state and documents, including live versions/snapshots. Azure inventory: zero remaining under the preview namespace in both containers. The delayed initialization records also reached zero. Soft delete remains seven days; output retention is still open. |
+| 8 October 2026 | Lab closeout for this package | Final preview package deployed and checked (200 liveness, 503 readiness, 405 wrong method); app stopped and ARM state verified. Sampled retained content ~64.3 MB, mostly packages; reported cost still EUR 0.0000201 with billing delay. Lab storage retained for remaining M6 verification. |
