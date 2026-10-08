@@ -18,15 +18,14 @@ internal sealed class ExecutionOperations
     private readonly StepEvaluator _evaluator;
     private readonly StringResolver _resolver;
     private readonly IDocumentStore _documents;
-    private readonly IStateStore _states;
     private readonly List<ISourceConnector> _sources;
     private readonly List<IDestinationConnector> _destinations;
     private readonly LocalTestSession? _test;
 
-    public ExecutionOperations(IStateStore states, IDocumentStore documents, ISecretProvider? secrets,
+    public ExecutionOperations(IDocumentStore documents, ISecretProvider? secrets,
         IEnumerable<ISourceConnector>? sources, IEnumerable<IDestinationConnector>? destinations, ElwoodEngine? engine, LocalTestSession? test)
     {
-        _states = states; _documents = documents; _test = test;
+        _documents = documents; _test = test;
         _evaluator = new StepEvaluator(engine ?? new ElwoodEngine(_factory));
         _resolver = new StringResolver(secrets);
         _sources = sources?.ToList() ?? [new HttpSourceConnector(), new FileSourceConnector()];
@@ -57,7 +56,7 @@ internal sealed class ExecutionOperations
         return _factory.CreateObject(properties);
     }
 
-    public async Task Source(ExecutionState state, PipelineContentDto pipeline, SourceConfig config, IElwoodValue idm, StepAttempt attempt, CancellationToken cancellationToken)
+    public async Task Source(ExecutionState state, PipelineContentDto pipeline, SourceConfig config, IElwoodValue idm, StepAttempt attempt, IExecutionClaim claim, CancellationToken cancellationToken)
     {
         var step = state.Sources[config.Name];
         IElwoodValue payload;
@@ -89,14 +88,14 @@ internal sealed class ExecutionOperations
                     return await connector.FetchAsync(from, idm, cancellationToken);
                 }
                 fetched = await Call(state, attempt, config.Name, null, from.Sql is { ReadOnly: false } ? "WRITE" : from.Http?.Method ?? "GET",
-                    () => _test is null ? Real() : _test.FetchAsync(config.Name, from, Real), cancellationToken);
+                    () => _test is null ? Real() : _test.FetchAsync(config.Name, from, Real), claim, cancellationToken);
                 // Commit a successful external response before mapping. A failed map/resume must not repeat the write.
                 var checkpoint = new SourceFetchResult(fetched.Content, fetched.ContentType,
                     fetched.Headers?.ToDictionary(h => h.Key, h => string.Join(", ", HttpCallCapture.SafeHeader(h.Key, [h.Value]))),
                     fetched.StatusCode, fetched.Metadata);
                 step.FetchedRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/fetched", JsonSerializer.Serialize(checkpoint));
                 attempt.ExternalCallStarted = false;
-                await _states.SaveExecutionAsync(state);
+                await claim.SaveAsync(state);
             }
             payload = fetched.ContentType is "csv" or "txt" or "xml" or "text" ? _factory.CreateString(fetched.Content) : _factory.Parse(fetched.Content);
         }
@@ -125,7 +124,7 @@ internal sealed class ExecutionOperations
         await _documents.StoreAsync($"exec/{state.ExecutionId}/source/{config.Name}", Json(payload));
     }
 
-    public async Task Output(ExecutionState state, PipelineContentDto pipeline, OutputConfig config, IElwoodValue idm, StepAttempt attempt, CancellationToken cancellationToken)
+    public async Task Output(ExecutionState state, PipelineContentDto pipeline, OutputConfig config, IElwoodValue idm, StepAttempt attempt, IExecutionClaim claim, CancellationToken cancellationToken)
     {
         var step = state.Outputs[config.Name];
         string content;
@@ -146,7 +145,7 @@ internal sealed class ExecutionOperations
             step.ItemCount = data.Kind == ElwoodValueKind.Array ? data.GetArrayLength() : 1;
             step.DocumentRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/output", content);
             await _documents.StoreAsync($"exec/{state.ExecutionId}/output/{config.Name}", content);
-            await _states.SaveExecutionAsync(state);
+            await claim.SaveAsync(state);
         }
         attempt.DocumentRef = step.DocumentRef;
         var destinations = new List<(string Type, object Config)>();
@@ -170,25 +169,31 @@ internal sealed class ExecutionOperations
             }
             var index = i;
             var result = await Call(state, attempt, config.Name, i, (destination as HttpDestinationConfig)?.Method ?? "POST",
-                () => _test is null ? Real() : _test.DeliverAsync(config.Name, index, type, destination, deliveryContent, config.ContentType, Real), cancellationToken);
+                () => _test is null ? Real() : _test.DeliverAsync(config.Name, index, type, destination, deliveryContent, config.ContentType, Real), claim, cancellationToken);
             if (!result.Success) throw new ConnectorFailure(result.Error ?? "Delivery failed.", result.StatusCode);
             if (result.Receipt is not null) step.Receipts[i] = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/receipt/{i}", result.Receipt);
             step.CompletedDestinations.Add(i); step.DeliveredCount = step.CompletedDestinations.Count;
             attempt.ExternalCallStarted = false;
-            await _states.SaveExecutionAsync(state);
+            await claim.SaveAsync(state);
         }
     }
 
-    private async Task<T> Call<T>(ExecutionState state, StepAttempt attempt, string name, int? index, string method, Func<Task<T>> action, CancellationToken cancellationToken)
+    private async Task<T> Call<T>(ExecutionState state, StepAttempt attempt, string name, int? index, string method, Func<Task<T>> action, IExecutionClaim claim, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var call = new ConnectorCall { Step = name, Kind = index is null ? "source" : "output", DestinationIndex = index, BodyLimit = 0 };
         var previous = _test?.Calls.Count ?? 0;
         attempt.ExternalCallStarted = true;
         attempt.MayHaveWritten = _test?.Mode != "mock" && method.ToUpperInvariant() is not ("GET" or "HEAD" or "OPTIONS");
-        await _states.SaveExecutionAsync(state); // Claim and attempt identity precede the external effect.
+        await claim.SaveAsync(state); // Claim and attempt identity precede the external effect.
         using var capture = HttpCallCapture.Begin(call);
-        try { return await action(); }
+        try
+        {
+            await claim.ValidateAsync(cancellationToken);
+            var result = await action();
+            await claim.ValidateAsync(cancellationToken);
+            return result;
+        }
         catch (HttpRequestException ex) when (call.Error is not null) { throw new HttpRequestException(call.Error, ex, ex.StatusCode); }
         finally
         {

@@ -9,6 +9,23 @@ namespace Elwood.Pipeline.Storage;
 public interface IRecoverableStateStore : IStateStore
 {
     Task<IAsyncDisposable?> TryLockAsync(string executionId);
+
+    /// <summary>
+    /// Acquire fenced execution ownership. The default is only valid for non-expiring
+    /// locks. Cloud adapters must override this and reject unfenced state mutations.
+    /// </summary>
+    async Task<IExecutionClaim?> TryClaimAsync(string executionId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var handle = await TryLockAsync(executionId);
+        if (handle is null) return null;
+        if (cancellationToken.IsCancellationRequested)
+        {
+            await handle.DisposeAsync();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        return handle as IExecutionClaim ?? new NonExpiringExecutionClaim(this, executionId, handle);
+    }
     Task<List<State.ExecutionState>> ListAllAsync();
     // Hosts must query these sets without loading the retained terminal population
     // on every recovery tick. ListAllAsync is for explicit administration only.

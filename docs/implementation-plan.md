@@ -1,5 +1,7 @@
 # Elwood integration platform implementation plan
 
+Current task-by-task progress is tracked in the [master checklist and WBS](master-checklist.md). This document preserves design rationale and historical verification evidence.
+
 Milestones 1–5 are implemented and the three M5 verification gaps were closed on 7 October 2026. The independent review findings have been addressed in separate follow-up packages; see the review closeout below. Review those commits before M6 native cloud installations. The first adoption tests after M6 will be the Eagle SAP integration and the pet project’s Deldo integration. Follow the confirmed [product direction](product-direction.md); M5 completion is not a production-readiness claim.
 
 This plan covers the backend and the sibling `elwood-portal` repository. Each milestone ends with a demonstrable behavior and focused automated checks. Milestones describe proposed delivery order; they do not expand the agreed product scope.

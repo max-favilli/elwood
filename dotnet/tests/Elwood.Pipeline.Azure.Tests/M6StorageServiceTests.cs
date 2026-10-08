@@ -12,7 +12,7 @@ namespace Elwood.Pipeline.Azure.Tests;
 /// </summary>
 public sealed class M6StorageServiceTests
 {
-    private static BlobContainerClient Container()
+    internal static BlobContainerClient Container()
     {
         var uri = new Uri(Environment.GetEnvironmentVariable("ELWOOD_M6_BLOB_URL")!);
         if (uri.Scheme != "https" || !uri.Host.StartsWith("elwoodm6", StringComparison.Ordinal) ||
@@ -87,7 +87,7 @@ public sealed class M6StorageServiceTests
         finally { await Cleanup(container, blob); }
     }
 
-    private static async Task Cleanup(BlobContainerClient container, BlobClient blob)
+    internal static async Task Cleanup(BlobContainerClient container, BlobClient blob)
     {
         // Exact random blob name only; no account/container-wide deletion. Soft-deleted
         // versions remain billable for the lab's configured seven-day window.

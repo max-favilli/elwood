@@ -214,6 +214,7 @@ Both implementations share the same conformance test suite (`spec/test-cases/`).
 
 ## Documentation
 
+- **[Master delivery checklist](docs/master-checklist.md)** — Milestone WBS, current work and verification evidence
 - **[Playground](https://max-favilli.github.io/elwood/)** — Try Elwood in your browser
 - **[Syntax Reference](docs/syntax-reference.md)** — Complete language reference
 - **[Why Functional?](docs/functional-programming.md)** — Design philosophy and functional programming concepts

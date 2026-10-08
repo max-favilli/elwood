@@ -44,7 +44,7 @@ These results verify service behavior and provisioning permissions. They do not 
 ## Runtime design inputs
 
 1. Persist acceptance intent before acknowledging, and recover the gap between payload, state/index and queue writes. Queue messages are wake-up hints, not the sole recovery record.
-2. Use storage-enforced conditional writes and lease identity. The current IAsyncDisposable claim alone cannot notify the engine that a cloud lease was lost. Introduce a claim cancellation/fencing contract before advertising cross-worker safety. Validate ownership before effects; interrupt and conservatively classify calls on lease loss. External exactly-once delivery remains destination-dependent.
+2. Use storage-enforced conditional writes and lease identity. WBS 6.1 now provides `IExecutionClaim`, explicit claim-bound state writes/deletes, ownership-loss cancellation and `BlobExecutionClaim`. The engine validates ownership before/after external calls and leaves the last durable checkpoint for the new owner on loss. Live tests verify renewal and stale-writer rejection. Cloud state/index and immutable document integration remain necessary before advertising end-to-end cross-worker safety. External exactly-once delivery remains destination-dependent.
 3. Keep large execution/attempt documents in Blob storage. Table entity limits make a single unbounded serialized ExecutionState unsuitable. Bound metadata/attempt history and index queries. Use due/expiry partitions and paging; skip/log individual corrupt records while reporting adapter health.
 4. Shared immutable bundles, draft concurrency tokens and atomic active-route publication must replace the filesystem catalog. Management permissions and scoped secrets must apply equally to Functions and local API hosts.
 5. Keep the 60-second sync budget below the gateway deadline; persist it and link request/host cancellation. Azure HTTP-triggered Functions have a [230-second response ceiling](https://learn.microsoft.com/en-us/azure/azure-functions/functions-scale). Test actual disconnect behavior under the selected Functions integration; framework cancellation propagation must not be assumed.
@@ -55,6 +55,8 @@ These results verify service behavior and provisioning permissions. They do not 
 ## M6 completion evidence still required
 
 Provider contract tests; native Functions/API/portal parity; all three real integration families; live Event Grid subscription validation and duplicate delivery; managed identity and deployment authorization; crash/lease-loss/replay tests; actual default and overridden retention cleanup with drift detection; bounded growth/health; deployment, upgrade/rollback and recovery instructions; and measured service costs. The storage-only lab and passing M5 tests do not close M6.
+
+Current task status is maintained in the [master checklist](master-checklist.md). WBS 6.1 verification added six runtime ownership cases, three simulated renewal-failure/cancellation cases, two live Azure claim tests, and five passing API contracts against an isolated runtime build. Azure reported EUR 0.0000201 in the resource-group cost query on 8 October 2026; billing delay means this is not the final campaign cost.
 
 
 ## Historical preparation verification

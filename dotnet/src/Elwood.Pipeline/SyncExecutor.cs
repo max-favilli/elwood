@@ -40,7 +40,7 @@ public sealed class SyncExecutor
         using var budget = new CancellationTokenSource(_executionBudget);
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, budget.Token);
         var id = await _runner.StartAsync(pipeline, triggerPayload, triggerSourceName, isTest: isTest,
-            triggerMetadata: triggerMetadata, durable: _durable, executionDeadlineAt: deadline);
+            triggerMetadata: triggerMetadata, durable: _durable, executionDeadlineAt: deadline, cancellationToken: lifetime.Token);
         return await _runner.RunToCompletion(id, lifetime.Token, budget.Token);
     }
 
