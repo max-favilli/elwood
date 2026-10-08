@@ -215,6 +215,9 @@ Both implementations share the same conformance test suite (`spec/test-cases/`).
 ## Documentation
 
 - **[Master delivery checklist](docs/master-checklist.md)** — Milestone WBS, current work and verification evidence
+- **[Native Azure installation](infra/azure-small/README.md)** — Functions, Blob/Table/Queue, optional Service Bus and RabbitMQ ingress
+- **[Azure operations and limits](docs/azure-operations.md)** — Retention, identity, capacity, recovery, upgrades and cost
+- **[M6 review handoff](docs/m6-release-evidence.md)** — Verified behavior and remaining adoption requirements
 - **[Playground](https://max-favilli.github.io/elwood/)** — Try Elwood in your browser
 - **[Syntax Reference](docs/syntax-reference.md)** — Complete language reference
 - **[Why Functional?](docs/functional-programming.md)** — Design philosophy and functional programming concepts

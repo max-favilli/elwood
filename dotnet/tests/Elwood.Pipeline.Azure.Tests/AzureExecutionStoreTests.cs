@@ -8,11 +8,135 @@ using Elwood.Pipeline.Async;
 using Elwood.Pipeline.Registry;
 using Elwood.Pipeline.State;
 using Elwood.Pipeline.Storage;
+using Elwood.Pipeline.Connectors;
 
 namespace Elwood.Pipeline.Azure.Tests;
 
 public sealed class AzureExecutionStoreTests
 {
+    [M6AzureFact, Trait("Category", "Integration")]
+    public async Task ExhaustionAfterWritePreservesUncertaintyAndPrunesWithoutLeakingRejectedIntents()
+    {
+        await using var lab = new Lab();
+        var ledger = new AzureBlobRetentionLedger(lab.StateContainer.GetBlobClient(lab.Scope + "/ledger.json"), lab.Clock, maxObjects: 32);
+        var documents = new AzureExecutionDocumentStore(lab.DocumentContainer, lab.Scope, retention: ledger, timeProvider: lab.Clock);
+        var states = new AzureExecutionStateStore(lab.StateContainer, lab.Table, documents, lab.Scope, timeProvider: lab.Clock, retention: ledger);
+        var writes = 0;
+        var connector = new CallbackDestination(async () =>
+        {
+            writes++;
+            while (true)
+            {
+                try { await ledger.RegisterAsync(new BlobRetentionEntry { BlobUri = lab.DocumentContainer.GetBlobClient(lab.Scope + "/unused").Uri.ToString(),
+                    RegisteredAt = lab.Clock.GetUtcNow(), ExpiresAt = lab.Clock.GetUtcNow().AddDays(1), Bytes = 1 }); }
+                catch (InvalidOperationException) { break; }
+            }
+            return DeliveryResult.Ok(receipt: "{\"written\":true}");
+        });
+        var queue = new InMemoryStepQueue();
+        var runner = new AsyncExecutor(states, documents, queue, destinationConnectors: [connector], timeProvider: lab.Clock);
+        var pipeline = new PipelineParser().ParseContent(new PipelineContent { Scripts = [], Yaml = """
+            name: quota
+            mode: async
+            ttlSeconds: 60
+            sources:
+              - { name: input, trigger: http }
+            outputs:
+              - name: result
+                destinations:
+                  http:
+                    - { url: 'https://fixture.invalid/write', method: POST }
+            """ }, "quota");
+        Assert.Empty(pipeline.Errors);
+        var id = await runner.StartAsync(pipeline, JsonNodeValueFactory.Instance.Parse("{}"));
+        await Drain(runner, queue);
+        var saved = (await states.GetExecutionAsync(id))!;
+        Assert.Equal(1, writes);
+        Assert.Equal(ExecutionStatus.AwaitingReview, saved.Status);
+        Assert.True(saved.Outputs["result"].OutcomeUncertain);
+        Assert.True(saved.RecoveryCapacityExhausted);
+        for (var i = 0; i < 12; i++)
+            await Assert.ThrowsAsync<InvalidOperationException>(() => states.TryClaimAsync("rejected-" + i));
+        var intents = new List<TableEntity>();
+        await foreach (var row in lab.Table.QueryAsync<TableEntity>(TableClient.CreateQueryFilter($"PartitionKey eq {lab.Scope + "-init"}"))) intents.Add(row);
+        Assert.Empty(intents);
+        await Assert.ThrowsAsync<RecoveryConflictException>(() => runner.ResumeAsync(id, true));
+        lab.Clock.Advance(TimeSpan.FromSeconds(61));
+        Assert.Equal(1, await runner.PruneAsync());
+        Assert.Null(await states.GetExecutionAsync(id));
+        Assert.False((await ledger.ReadAsync()).Entries.ContainsKey("execution-" + id));
+    }
+
+    [M6AzureFact, Trait("Category", "Integration")]
+    public async Task ReservationSweepRotatesPastLiveEntries()
+    {
+        await using var lab = new Lab();
+        var ledger = new AzureBlobRetentionLedger(lab.StateContainer.GetBlobClient(lab.Scope + "/ledger.json"), lab.Clock);
+        var states = new AzureExecutionStateStore(lab.StateContainer, lab.Table, lab.Documents, lab.Scope, pageSize: 1, timeProvider: lab.Clock, retention: ledger);
+        await using (var claim = await states.TryClaimAsync("a-live"))
+            await claim!.SaveAsync(new ExecutionState { ExecutionId = "a-live", Status = ExecutionStatus.Running });
+        await ledger.RegisterAsync(new BlobRetentionEntry { Id = "execution-z-orphan", Kind = "execution", ExecutionId = "z-orphan",
+            BlobUri = lab.StateContainer.GetBlobClient(lab.Scope + "/states/z-orphan.json").Uri.ToString(),
+            RegisteredAt = lab.Clock.GetUtcNow(), ExpiresAt = lab.Clock.GetUtcNow().AddDays(1), Bytes = 12 * 1024 * 1024, ObjectSlots = 3 });
+        lab.Clock.Advance(TimeSpan.FromMinutes(11));
+        await states.CleanupArtifactsAsync();
+        Assert.True((await ledger.ReadAsync()).Entries.ContainsKey("execution-z-orphan"));
+        await states.CleanupArtifactsAsync();
+        Assert.False((await ledger.ReadAsync()).Entries.ContainsKey("execution-z-orphan"));
+        Assert.NotNull(await states.GetExecutionAsync("a-live"));
+    }
+
+    private sealed class CallbackDestination(Func<Task<DeliveryResult>> deliver) : IDestinationConnector
+    {
+        public bool CanHandle(string type) => type == "restEndpoint";
+        public Task<DeliveryResult> DeliverAsync(string type, object config, string content, string contentType, Dictionary<string, string>? metadata = null, CancellationToken cancellationToken = default) => deliver();
+    }
+    [M6AzureFact, Trait("Category", "Integration")]
+    public async Task HistoryCleanupJournalSurvivesMissingFirstOrDeletedLastCheckpoint()
+    {
+        await using var lab = new Lab(); var states = lab.States();
+        await using (var claim = await states.TryClaimAsync("healthy"))
+            await claim!.SaveAsync(new ExecutionState { ExecutionId = "healthy", Durable = true, Status = ExecutionStatus.Running, PipelineName = "test" });
+        var pipelineKind = "pipeline-" + new string('a', 64);
+        foreach (var kind in new[] { "history", pipelineKind, "history-gc" })
+            await lab.Table.AddEntityAsync(new TableEntity(lab.Scope + "-" + kind, "interrupted-history")
+            { ["execution"] = "missing", ["pipelineKind"] = pipelineKind, ["notBefore"] = DateTimeOffset.UtcNow.AddHours(-1) });
+        await states.CleanupArtifactsAsync();
+        foreach (var kind in new[] { "history", pipelineKind, "history-gc" })
+            Assert.False((await lab.Table.GetEntityIfExistsAsync<TableEntity>(lab.Scope + "-" + kind, "interrupted-history")).HasValue);
+        Assert.Single(await states.ListExecutionsAsync());
+    }
+
+    [M6AzureFact, Trait("Category", "Integration")]
+    public async Task JournalBoundsCloudAdmissionAndCleansDocumentsAndCheckpointsAfterRestart()
+    {
+        await using var lab = new Lab();
+        var ledgerBlob = lab.StateContainer.GetBlobClient(lab.Scope + "/ledger.json");
+        var ledger = new AzureBlobRetentionLedger(ledgerBlob, lab.Clock);
+        var documents = new AzureExecutionDocumentStore(lab.DocumentContainer, lab.Scope, retention: ledger, timeProvider: lab.Clock);
+        var states = new AzureExecutionStateStore(lab.StateContainer, lab.Table, documents, lab.Scope, timeProvider: lab.Clock, retention: ledger);
+        var queue = new InMemoryStepQueue(); var runner = new AsyncExecutor(states, documents, queue, timeProvider: lab.Clock);
+        var id = await runner.StartAsync(Pipeline(), JsonNodeValueFactory.Instance.Parse("{\"value\":41}"));
+        await Drain(runner, queue);
+        var registered = await ledger.ReadAsync();
+        Assert.Contains(registered.Entries.Values, e => e.Kind == "execution");
+        Assert.Contains(registered.Entries.Values, e => e.Kind == "document");
+        Assert.Contains(registered.Entries.Values, e => e.Kind == "checkpoint");
+        lab.Clock.Advance(TimeSpan.FromSeconds(61));
+        Assert.Equal(1, await runner.PruneAsync());
+        var restarted = new AzureBlobRetentionLedger(ledgerBlob, lab.Clock);
+        var cleanup = new BlobOutputRetention(restarted, uri =>
+        {
+            var identity = new BlobUriBuilder(uri);
+            Assert.StartsWith(lab.Scope + "/", identity.BlobName);
+            return (identity.BlobContainerName == lab.StateContainer.Name ? lab.StateContainer : lab.DocumentContainer).GetBlobClient(identity.BlobName);
+        }, lab.Clock);
+        await cleanup.SweepAsync();
+        Assert.Empty((await restarted.ReadAsync()).Entries);
+        Assert.True((await cleanup.HealthAsync()).Healthy);
+        Assert.Null(await states.GetExecutionAsync(id));
+    }
+
     [M6AzureFact, Trait("Category", "Integration")]
     public async Task AbandonedSynchronousTestIsIndexedAndSettledAtItsDeadline()
     {

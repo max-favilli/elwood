@@ -1,6 +1,6 @@
 # M5 connector contracts
 
-The filesystem Runtime API supports HTTP, SQL Server procedures, Azure Blob Storage, external RabbitMQ queues and Event Grid webhooks. These connectors use the shared execution engine, revision snapshots, diagnostics, checkpoints and [retry/recovery policies](durable-processing.md). Native cloud hosting and cloud state/queue adapters remain M6. Adding a connector does not make the legacy Azure Functions host support the new deployment catalog or recovery contract.
+The filesystem API and native Azure host support HTTP, SQL Server procedures, Azure Blob Storage, external RabbitMQ ingress and Event Grid webhooks through the shared engine, revision snapshots, diagnostics, checkpoints and [retry/recovery policies](durable-processing.md). Azure hosting uses Blob/Table with Storage Queue or Service Bus internal scheduling; RabbitMQ requires an always-running ingress host. See [installation](../infra/azure-small/README.md) and [verified scope](m6-release-evidence.md).
 
 Start with the [three sample bundles](examples/connectors/README.md). In the portal use **New Pipeline → Start from**, then **Test draft → Connectors → Mocks**. Real-system tests require your own endpoints and scoped credentials. A supplied trigger replaces the external message in local tests; testing a draft never subscribes to a broker or creates an Event Grid subscription.
 
@@ -174,7 +174,7 @@ This adapter handles **Event Grid schema**, not CloudEvents or a Service Bus wra
 
 With `aeg-event-type: SubscriptionValidation`, a valid single validation event returns `{ "validationResponse": "<code>" }` and creates no execution. With `aeg-event-type: Notification`, the adapter validates the whole batch, then durably accepts **one execution per event**, each receiving a one-element array. HTTP 202 is returned only after all events are committed. Invalid shapes/filter mismatches return 400 and oversized bodies return 413. Limits can be raised to 5,000 events and 10 MiB.
 
-Identity is derived from topic plus event ID, scoped to the pipeline/source. Partial storage failures may leave part of a batch accepted; redelivery reuses those execution identities instead of starting them again. Live Azure subscription delivery and native hosting are M6 verification, separate from these local webhook contract tests.
+Identity derives from topic plus event ID, scoped to pipeline/source. Partial storage failures may leave part of a batch accepted; redelivery reuses those identities. Live authenticated Azure subscription delivery was verified in M6. Different events containing identical bytes are not content-deduplicated yet; see [the confirmed requirement](content-deduplication.md).
 
 ## Mocks, inspection and verification
 

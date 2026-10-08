@@ -14,7 +14,8 @@ namespace Elwood.Pipeline.Azure;
 
 public sealed class BlobConnector(TokenCredential? credential = null,
     Func<string?, string?, string, string, BlobClient>? clientFactory = null,
-    Action<string?, string?>? authorize = null) : ISourceConnector, IDestinationConnector
+    Action<string?, string?>? authorize = null, BlobOutputRetention? retention = null,
+    Action<string?, string?, string, string>? authorizePath = null) : ISourceConnector, IDestinationConnector
 {
     private static readonly Lazy<TokenCredential> DefaultCredential = new(() => new AzureIdentity::Azure.Identity.DefaultAzureCredential());
 
@@ -24,6 +25,7 @@ public sealed class BlobConnector(TokenCredential? credential = null,
     private BlobClient Client(string? connection, string? account, string container, string path)
     {
         authorize?.Invoke(connection, account);
+        authorizePath?.Invoke(connection, account, container, path);
         if (clientFactory is not null) return clientFactory(connection, account, container, path);
         var options = new BlobClientOptions(); options.Retry.MaxRetries = 0;
         if (!string.IsNullOrWhiteSpace(connection)) return new BlobClient(connection, container, path, options);
@@ -79,17 +81,24 @@ public sealed class BlobConnector(TokenCredential? credential = null,
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadline.CancelAfter(TimeSpan.FromSeconds(blob.TimeoutSeconds));
             var bytes = Encoding.UTF8.GetBytes(content);
+            if (retention is null) throw new ConnectorException("Blob delivery requires a durable output retention service.", "blob.retention");
+            var ownership = await retention.RegisterAsync(client, bytes.Length, blob.TtlSeconds, blob.TimeoutSeconds, deadline.Token);
             using var stream = new MemoryStream(bytes);
             if (call is not null) call.RequestBody = content;
             sent = true;
             var result = await client.UploadAsync(stream, new BlobUploadOptions
             {
+                Metadata = new Dictionary<string, string> { [BlobOutputRetention.OwnerMetadata] = ownership.Id },
                 HttpHeaders = new BlobHttpHeaders { ContentType = contentType switch { "text" => "text/plain; charset=utf-8", "xml" => "application/xml", _ => "application/json" } },
                 Conditions = blob.IfMatch is not null ? new BlobRequestConditions { IfMatch = Match(blob.IfMatch) }
                     : blob.Overwrite ? null : new BlobRequestConditions { IfNoneMatch = ETag.All }
             }, deadline.Token);
+            try { await retention.CompleteAsync(ownership, result.Value, deadline.Token); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            { throw new ConnectorException("Blob upload completed, but its receipt checkpoint failed. Cleanup remains registered.", "blob.retention.checkpoint", true, true, innerException: ex); }
             var receipt = new JsonObject { ["url"] = HttpCallCapture.SafeUrl(client.Uri.ToString()), ["etag"] = result.Value.ETag.ToString(),
-                ["versionId"] = result.Value.VersionId, ["size"] = bytes.Length };
+                ["versionId"] = result.Value.VersionId, ["size"] = bytes.Length, ["retentionSeconds"] = ownership.RetentionSeconds,
+                ["expiresAt"] = ownership.ExpiresAt.ToString("O"), ["cleanupId"] = ownership.Id };
             if (call is not null) { call.ResponseBody = receipt.ToJsonString(); call.ResponseMetadata = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(receipt.ToJsonString()); }
             return DeliveryResult.Ok(receipt: receipt.ToJsonString());
         }

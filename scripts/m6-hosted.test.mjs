@@ -42,8 +42,8 @@ outputs:
       assert.fail('Hosted queue execution did not complete within two minutes.');
     }
     assert.equal((await request('/api/session', { authenticated: false })).status, 401);
-    assert.equal((await request('/api/readiness', { authenticated: false })).status, 503);
-    assert.equal((await json(await request('/api/session'), 200)).name, 'm6-test-operator');
+    assert.equal((await request('/api/readiness', { authenticated: false })).status, Number(process.env.ELWOOD_M6_EXPECT_READINESS ?? 200));
+    assert.equal((await json(await request('/api/session'), 200)).name, process.env.ELWOOD_M6_OPERATOR ?? 'operator');
     let revision;
     try {
       const draft = await json(await request(`/api/pipelines/${id}`, { method: 'POST', body: content(1) }), 201);

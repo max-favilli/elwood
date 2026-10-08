@@ -66,6 +66,7 @@ public sealed class AsyncExecutor
             Durable = durable && !isTest && _test is null, IsTest = isTest || _test is not null, TestMode = _test?.Mode,
             TriggerSourceName = triggerSourceName, ReplayOf = replayOf, InputHash = Hash(input),
             ExecutionDeadlineAt = executionDeadlineAt,
+            LifetimeExpiresAt = Now.AddSeconds(Math.Clamp(pipeline.Config.MaxExecutionSeconds, 1, RetentionPolicy.MaximumExecutionSeconds)),
             RetentionSeconds = pipeline.Config.TtlSeconds ?? 30 * 24 * 60 * 60,
         };
         foreach (var source in pipeline.Config.Sources) state.Sources[source.Name] = new() { SourceName = source.Name };
@@ -111,6 +112,10 @@ public sealed class AsyncExecutor
     {
         var state = await _states.GetExecutionAsync(message.ExecutionId);
         if (state is null || state.Deleting || state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) return;
+        if (await StopExpiredLifetime(state, claim)) return;
+        using var executionBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        executionBudget.CancelAfter(Lifetime(state) - Now);
+        cancellationToken = executionBudget.Token;
         var step = Step(state, message);
         if (step is null || step.Status == ExecutionStatus.Completed) return;
         if (step.NextAttemptAt > Now) return;
@@ -158,6 +163,11 @@ public sealed class AsyncExecutor
         }
         catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
+            if (Lifetime(state) <= Now)
+            {
+                await StopExpiredLifetime(state, claim);
+                return;
+            }
             // Preserve the pre-call durable checkpoint. Recovery must classify any
             // interrupted write as uncertain, never assume cancellation rolled it back.
             if (!state.Durable && state.ExecutionDeadlineAt is null)
@@ -238,6 +248,7 @@ public sealed class AsyncExecutor
             await claim.ValidateAsync(cancellationToken);
             var state = await _states.GetExecutionAsync(snapshot.ExecutionId);
             if (state is null || state.Deleting || state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) continue;
+            if (await StopExpiredLifetime(state, claim)) continue;
             if (state.ExecutionDeadlineAt is not null)
             {
                 if (state.ExecutionDeadlineAt <= Now) await StopSync(state, claim, expired: true);
@@ -288,7 +299,11 @@ public sealed class AsyncExecutor
     {
         await using var claim = await _states.TryClaimAsync(id) ?? throw new RecoveryConflictException("An attempt is still running.");
         var state = await _states.GetExecutionAsync(id) ?? throw new KeyNotFoundException("Execution not found.");
+        if (state.RecoveryCapacityExhausted) throw new RecoveryConflictException("This execution used reserved recovery capacity. Reclaim storage and explicitly replay it instead of resuming.");
         if (!state.Durable || state.IsTest || state.Deleting || state.ExpiresAt <= Now) throw new RecoveryConflictException("This execution cannot be resumed.");
+        if (Lifetime(state) <= Now) throw new RecoveryConflictException("Execution lifetime expired. Replay to start a new execution.");
+        if (state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values).Any(s => s.Attempts.Count >= 100))
+            throw new RecoveryConflictException("The limit of 100 attempts per step was reached. Replay to start a new execution.");
         if (state.Status is not (ExecutionStatus.Failed or ExecutionStatus.AwaitingReview)) throw new RecoveryConflictException("Only failed or awaiting-review executions can be resumed.");
         if (state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values).Any(s => s.OutcomeUncertain) && !acknowledgeUncertain)
             throw new RecoveryConflictException("Confirm that you reviewed the uncertain external write before resuming.");
@@ -338,7 +353,7 @@ public sealed class AsyncExecutor
                 if (claim is null) continue;
                 var state = await _states.GetExecutionAsync(snapshot.ExecutionId);
                 if (state is null || state.Status is ExecutionStatus.Running or ExecutionStatus.Retrying or ExecutionStatus.Pending || !(state.ExpiresAt <= Now)) continue;
-                state.Deleting = true; await claim.SaveAsync(state); // Restartable tombstone; resume/replay cannot race cleanup.
+                if (!state.Deleting) { state.Deleting = true; await claim.SaveAsync(state); } // One restartable tombstone, including cleanup retries.
                 await claim.ValidateAsync(cancellationToken);
                 await documents.DeleteExecutionAsync(state.ExecutionId);
                 await claim.DeleteAsync(); deleted++;
@@ -426,11 +441,20 @@ public sealed class AsyncExecutor
         }
     }
 
-    private async Task StopSync(ExecutionState state, IExecutionClaim claim, bool expired)
+    private static DateTime Lifetime(ExecutionState state) => state.LifetimeExpiresAt ?? state.StartedAt.AddSeconds(RetentionPolicy.MaximumExecutionSeconds);
+
+    private async Task<bool> StopExpiredLifetime(ExecutionState state, IExecutionClaim claim)
+    {
+        if (Lifetime(state) > Now) return false;
+        await StopSync(state, claim, true, "Execution lifetime exceeded; no further automatic attempts or manual resumes are allowed. Replay to start a new execution.");
+        return true;
+    }
+
+    private async Task StopSync(ExecutionState state, IExecutionClaim claim, bool expired, string? reason = null)
     {
         if (state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) return;
-        var message = expired ? "Synchronous execution budget exceeded; no further automatic attempts will run."
-            : "Synchronous execution canceled by the caller or host; no further automatic attempts will run.";
+        var message = reason ?? (expired ? "Synchronous execution budget exceeded; no further automatic attempts will run."
+            : "Synchronous execution canceled by the caller or host; no further automatic attempts will run.");
         var uncertain = false;
         foreach (var step in state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values).Where(s => s.Status != ExecutionStatus.Completed))
         {
@@ -461,9 +485,15 @@ public sealed class AsyncExecutor
         await claim.ValidateAsync();
         if (_test is not null && state.TriggerRef is not null && _test.Calls.Count != _savedTestCallCount)
         {
-            _testInput ??= await _documents.GetAsync(state.TriggerRef) ?? "null";
-            state.TestContextRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/test", _test.Serialize(_testInput));
-            _savedTestCallCount = _test.Calls.Count;
+            try
+            {
+                _testInput ??= await _documents.GetAsync(state.TriggerRef) ?? "null";
+                state.TestContextRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/test", _test.Serialize(_testInput));
+                _savedTestCallCount = _test.Calls.Count;
+            }
+            catch (Exception ex) when (state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview &&
+                ex is not ExecutionOwnershipLostException && !claim.OwnershipLost.IsCancellationRequested)
+            { state.Errors.Add("Latest test inspection capture could not be stored (" + ex.GetType().Name + "); prior capture retained."); }
         }
         await claim.SaveAsync(state);
     }
@@ -483,7 +513,7 @@ public sealed class AsyncExecutor
         return state.Outputs.Where(s => Due(s.Value)).Select(s => new StepMessage { ExecutionId = state.ExecutionId, PipelineId = state.PipelineId ?? state.PipelineName, Type = StepType.Output, StepName = s.Key }).ToList();
     }
     private bool Due(StepState step) => step.Status is ExecutionStatus.Pending or ExecutionStatus.Retrying && !(step.NextAttemptAt > Now);
-    private static bool CanRetry(StepState step, RetryPolicy? policy) => policy is { Mode: "automatic" } && step.Attempts.Count - step.RetryBase < policy.MaxAttempts;
+    private static bool CanRetry(StepState step, RetryPolicy? policy) => policy is { Mode: "automatic" } && step.Attempts.Count < 100 && step.Attempts.Count - step.RetryBase < policy.MaxAttempts;
     private void ScheduleRetry(ExecutionState state, StepState step, RetryPolicy policy)
     {
         var delay = Math.Min(policy.MaxDelayMs, policy.DelayMs * Math.Pow(policy.BackoffMultiplier, Math.Max(0, step.Attempts.Count - step.RetryBase - 1)));
@@ -491,7 +521,11 @@ public sealed class AsyncExecutor
         state.CompletedAt = null; state.ExpiresAt = null; state.Errors.Clear();
     }
     private void Terminal(ExecutionState state, ExecutionStatus status)
-    { state.Status = status; state.CompletedAt = Now; state.ExpiresAt = state.CompletedAt.Value.AddSeconds(state.RetentionSeconds); }
+    {
+        state.Status = status; state.CompletedAt = Now;
+        var retention = Math.Clamp(state.RetentionSeconds, 1, RetentionPolicy.MaximumSeconds);
+        state.ExpiresAt = (state.CompletedAt.Value < Lifetime(state) ? state.CompletedAt.Value : Lifetime(state)).AddSeconds(retention);
+    }
     private async Task Notify(IEnumerable<StepMessage> messages)
     {
         try { await _queue.EnqueueBatchAsync(messages); }

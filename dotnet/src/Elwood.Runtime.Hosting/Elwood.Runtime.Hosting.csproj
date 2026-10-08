@@ -6,6 +6,7 @@
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Azure.Identity" Version="1.17.1" Aliases="AzureIdentity" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="../Elwood.Pipeline.Sql/Elwood.Pipeline.Sql.csproj" />
     <ProjectReference Include="../Elwood.Pipeline.RabbitMq/Elwood.Pipeline.RabbitMq.csproj" />

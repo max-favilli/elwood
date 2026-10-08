@@ -27,6 +27,8 @@ jobs:
           node-version: '22'
       - name: Runtime API contract
         run: node --test scripts/runtime-api.test.mjs scripts/durable-runtime.test.mjs scripts/connectors-api.test.mjs scripts/sync-cancellation.test.mjs
+      - name: Compile native Azure infrastructure
+        run: az bicep build --file infra/azure-small/main.bicep --outfile /tmp/elwood-azure.json
 
   connectors:
     name: SQL, Blob and RabbitMQ connectors

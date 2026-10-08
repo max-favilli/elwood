@@ -8,6 +8,7 @@ using Azure.Data.Tables;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Elwood.Pipeline.State;
+using Elwood.Pipeline.Async;
 using Elwood.Pipeline.Storage;
 using Microsoft.Extensions.Logging;
 
@@ -30,17 +31,19 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
     private readonly ILogger<AzureExecutionStateStore>? _logger;
     private readonly ConcurrentDictionary<string, string> _cursors = new();
     private readonly int _pageSize;
+    private readonly BlobRetentionLedger? _retention;
     private long _faults;
     public long ObservedRecordFailures => Interlocked.Read(ref _faults);
     private DateTime Now => _time.GetUtcNow().UtcDateTime;
 
     public AzureExecutionStateStore(BlobContainerClient container, TableClient index, IExecutionDocumentStore documents,
         string storageNamespace = "elwood", int pageSize = 100, TimeProvider? timeProvider = null,
-        ILogger<AzureExecutionStateStore>? logger = null)
+        ILogger<AzureExecutionStateStore>? logger = null, BlobRetentionLedger? retention = null)
     {
         _blobs = container; _table = index; _documents = documents; _scope = SafePath.Id(storageNamespace);
         _pageSize = pageSize is >= 1 and <= 1000 ? pageSize : throw new ArgumentOutOfRangeException(nameof(pageSize));
         _time = timeProvider ?? TimeProvider.System; _logger = logger;
+        _retention = retention;
     }
 
     private BlobClient Blob(string id) => _blobs.GetBlobClient($"{_scope}/states/{SafePath.Id(id)}.json");
@@ -56,9 +59,16 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
     public async Task<IExecutionClaim?> TryClaimAsync(string executionId, CancellationToken cancellationToken = default)
     {
         var blob = Blob(executionId);
-        // A unique, durable intent precedes even creation of the placeholder blob.
-        // Failed acceptance is discoverable without scanning all retained executions.
-        var intent = new TableEntity(Partition("init"), Ticks(Now.AddMinutes(10)) + "-" + Guid.NewGuid().ToString("N")) { ["execution"] = executionId };
+        // The ledger itself makes a reservation discoverable after a crash. Reject
+        // capacity before adding Table work, so rejected traffic cannot grow indexes.
+        var reservation = new BlobRetentionEntry
+            {
+                Id = "execution-" + executionId, Kind = "execution", ExecutionId = executionId, BlobUri = blob.Uri.ToString(),
+                RegisteredAt = _time.GetUtcNow(), ExpiresAt = _time.GetUtcNow().AddDays(372), Bytes = 12 * 1024 * 1024, ObjectSlots = 3
+            };
+        if (_retention is not null) await _retention.RegisterAsync(reservation, cancellationToken, allowExisting: true);
+        var intent = new TableEntity(Partition("init"), Ticks(Now.AddMinutes(10)) + "-" + Guid.NewGuid().ToString("N"))
+            { ["execution"] = executionId, ["reservationGeneration"] = reservation.Generation };
         await _table.AddEntityAsync(intent, cancellationToken);
         try
         {
@@ -191,6 +201,10 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
 
     private async Task AddHistory(ExecutionState state, CancellationToken token)
     {
+        // Independent journal survives a crash before the first checkpoint or
+        // after deleting the checkpoint but before removing either history index.
+        await _table.UpsertEntityAsync(new TableEntity(Partition("history-gc"), HistoryKey(state))
+        { ["execution"] = state.ExecutionId, ["pipelineKind"] = PipelineIndex(state), ["notBefore"] = new DateTimeOffset(Now.AddMinutes(10)) }, TableUpdateMode.Replace, token);
         foreach (var kind in new[] { "history", PipelineIndex(state) })
         {
             try { await _table.AddEntityAsync(new TableEntity(Partition(kind), HistoryKey(state)) { ["execution"] = state.ExecutionId }, token); }
@@ -206,9 +220,16 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
         public async Task SaveAsync(ExecutionState state)
         {
             if (state.ExecutionId != ExecutionId) throw new ArgumentException("A claim can save only its own execution.", nameof(state));
-            if (JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions).Length > 4 * 1024 * 1024) throw new InvalidOperationException("Execution checkpoint exceeds its size limit.");
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions).Length;
+            if (bytes > 4 * 1024 * 1024 - 1024) throw new InvalidOperationException("Execution checkpoint exceeds its size limit.");
             await lease.ValidateAsync();
             var previous = await owner.Read(ExecutionId, OwnershipLost);
+            if (previous.State?.Deleting == true && state.Deleting) return;
+            if (previous.State?.RecoveryCapacityExhausted == true && !state.Deleting)
+            {
+                if (Terminal(state)) return; // An uncertain response cannot append another emergency version.
+                throw new RecoveryConflictException("This execution used reserved recovery capacity. Reclaim storage and replay it instead of resuming.");
+            }
             var kind = Terminal(state) ? "expiry" : "due";
             var pending = state.Sources.Values.Any(s => s.Status != ExecutionStatus.Completed)
                 ? state.Sources.Values.Cast<StepState>() : state.Outputs.Values.Cast<StepState>();
@@ -216,10 +237,34 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
                 : pending.Where(s => s.Status == ExecutionStatus.Retrying).Select(s => s.NextAttemptAt ?? owner.Now).DefaultIfEmpty(owner.Now).Min();
             var due = Terminal(state) ? state.ExpiresAt ?? throw new InvalidOperationException("Terminal executions require finite expiry.")
                 : state.ExecutionDeadlineAt ?? retryDue;
+            if (!Terminal(state) && state.LifetimeExpiresAt is { } lifetime && lifetime < due) due = lifetime;
             var key = Ticks(due) + "-" + ExecutionId + "-" + Guid.NewGuid().ToString("N");
+            var metadata = new Dictionary<string, string> { ["workkind"] = kind, ["workkey"] = key };
+            if (owner._retention is not null && !state.Deleting)
+            {
+                var entry = new BlobRetentionEntry { BlobUri = owner.Blob(ExecutionId).Uri.ToString(), Kind = "checkpoint", ExecutionId = ExecutionId,
+                    RegisteredAt = owner._time.GetUtcNow(), ExpiresAt = owner._time.GetUtcNow().AddDays(372), Bytes = bytes, ETag = "leased" };
+                try
+                {
+                    await owner._retention.RegisterAsync(entry, OwnershipLost);
+                    metadata[BlobOutputRetention.OwnerMetadata] = entry.Id;
+                }
+                catch (InvalidOperationException) when (Terminal(state))
+                {
+                    await owner._retention.ReserveEmergencyCheckpointAsync(ExecutionId, false, OwnershipLost);
+                    state.RecoveryCapacityExhausted = true;
+                    state.Errors.Add("Storage admission is closed. Reserved capacity preserved this result; reclaim storage before explicit replay. Resume is disabled.");
+                    metadata[BlobOutputRetention.OwnerMetadata] = "execution-" + ExecutionId;
+                }
+            }
+            else if (owner._retention is not null)
+            {
+                await owner._retention.ReserveEmergencyCheckpointAsync(ExecutionId, true, OwnershipLost);
+                metadata[BlobOutputRetention.OwnerMetadata] = "execution-" + ExecutionId;
+            }
             await owner._table.AddEntityAsync(new TableEntity(owner.Partition(kind), key) { ["execution"] = ExecutionId }, OwnershipLost);
             if (previous.State is null) await owner.AddHistory(state, OwnershipLost);
-            await lease.SaveAsync(state, new Dictionary<string, string> { ["workkind"] = kind, ["workkey"] = key });
+            await lease.SaveAsync(state, metadata);
             // Only this prior unique checkpoint's markers are removed. A new owner's
             // markers cannot be selected through a mutable "current owner" mapping.
             if (previous.Metadata.TryGetValue("workkind", out var priorKind) && previous.Metadata.TryGetValue("workkey", out var priorKey))
@@ -237,8 +282,10 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
             // maintenance pass finishes these exact deletions if this worker stops.
             await owner.RegisterVersionCleanup(ExecutionId, OwnershipLost);
             await lease.DeleteAsync();
+            if (owner._retention is not null) await owner._retention.RemoveReservationAsync(ExecutionId, intent.GetString("reservationGeneration"), OwnershipLost);
             await owner.DeleteRow(new TableEntity(owner.Partition("history"), HistoryKey(state)));
             await owner.DeleteRow(new TableEntity(owner.Partition(PipelineIndex(state)), HistoryKey(state)));
+            await owner.DeleteRow(new TableEntity(owner.Partition("history-gc"), HistoryKey(state)));
             if (snapshot.Metadata.TryGetValue("workkind", out var kind) && snapshot.Metadata.TryGetValue("workkey", out var key))
                 await owner.DeleteRow(new TableEntity(owner.Partition(kind), key));
             await owner.DeleteRow(intent);
@@ -283,6 +330,49 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
     public async Task CleanupArtifactsAsync()
     {
         await CleanupVersions();
+        if (_retention is not null)
+        {
+            // Covers a crash around acceptance registration, or provider lifecycle
+            // removal after a prolonged outage. Never release a live checkpoint's
+            // capacity reservation, even if its retained lifetime has elapsed.
+            var registered = await _retention.ReadAsync();
+            foreach (var entry in registered.Entries.Values.Where(e => e.Kind == "execution" && e.RegisteredAt < _time.GetUtcNow().AddMinutes(-10))
+                .OrderBy(e => e.LastAttemptAt).ThenBy(e => e.Id, StringComparer.Ordinal).Take(_pageSize))
+            {
+                try
+                {
+                    if (!(await Blob(entry.ExecutionId!).ExistsAsync()).Value) await _retention.RemoveReservationAsync(entry.ExecutionId!, entry.Generation);
+                }
+                catch (Exception ex) when (RecordFailure(ex)) { Report(entry.Id, ex); }
+                finally
+                {
+                    // Keep failed lookups behind unvisited entries as well.
+                    if ((await _retention.ReadAsync()).Entries.ContainsKey(entry.Id))
+                        await _retention.UpdateAsync(entry.Id, current => current.LastAttemptAt = _time.GetUtcNow());
+                }
+            }
+        }
+        foreach (var row in await Page("history-gc"))
+        {
+            try
+            {
+                if (row.GetDateTimeOffset("notBefore") > new DateTimeOffset(Now)) continue;
+                var id = SafePath.Id(row.GetString("execution")!);
+                var pipelineKind = row.GetString("pipelineKind") ?? throw new JsonException("Missing history cleanup identity.");
+                if (!System.Text.RegularExpressions.Regex.IsMatch(pipelineKind, "^pipeline-[0-9a-f]{64}$")) throw new JsonException("Invalid history partition.");
+                BlobExecutionClaim? lease = null;
+                try { lease = await BlobExecutionClaim.TryAcquireAsync(Blob(id), id); if (lease is null) continue; }
+                catch (RequestFailedException ex) when (ex.Status == 404) { }
+                await using (lease)
+                {
+                    if ((await Read(id)).State is not null) continue;
+                    await DeleteRow(new TableEntity(Partition("history"), row.RowKey));
+                    await DeleteRow(new TableEntity(Partition(pipelineKind), row.RowKey));
+                    await DeleteRow(row);
+                }
+            }
+            catch (Exception ex) when (RecordFailure(ex)) { Report(row.RowKey, ex); }
+        }
         foreach (var row in await Page("init", Ticks(Now) + "~"))
         {
             try
@@ -290,7 +380,11 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
                 var id = SafePath.Id(row.GetString("execution")!);
                 BlobExecutionClaim? lease;
                 try { lease = await BlobExecutionClaim.TryAcquireAsync(Blob(id), id); }
-                catch (RequestFailedException ex) when (ex.Status == 404) { await DeleteRow(row); continue; }
+                catch (RequestFailedException ex) when (ex.Status == 404)
+                {
+                    if (_retention is not null) await _retention.RemoveReservationAsync(id, row.GetString("reservationGeneration"));
+                    await DeleteRow(row); continue;
+                }
                 if (lease is null) continue;
                 await using (lease)
                 {
@@ -300,6 +394,7 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
                         await _documents.DeleteExecutionAsync(id);
                         await RegisterVersionCleanup(id, lease.OwnershipLost);
                         await lease.DeleteAsync();
+                        if (_retention is not null) await _retention.RemoveReservationAsync(id, row.GetString("reservationGeneration"));
                     }
                     await DeleteRow(row);
                 }

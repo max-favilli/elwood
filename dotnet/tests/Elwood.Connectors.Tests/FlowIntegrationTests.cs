@@ -142,7 +142,8 @@ public sealed class FlowIntegrationTests
             var states = new FileSystemStateStore(Path.Combine(root, "states"));
             var documents = new FileSystemDocumentStore(Path.Combine(root, "documents"));
             var queue = new InMemoryStepQueue();
-            var blob = new BlobConnector(); var sql = new SqlConnector();
+            var blob = new BlobConnector(retention: new(new FileBlobRetentionLedger(Path.Combine(root, "retention")),
+                uri => snapshots.GetBlobClient(new BlobUriBuilder(uri).BlobName))); var sql = new SqlConnector();
             AsyncExecutor Runner() => new(states, documents, queue, secrets, [blob, sql], [blob, sql]);
             var runner = Runner();
             var id = Assert.Single(await EventGridIngress.AcceptAsync(runner, pipeline, pipeline.Config.Sources[0], events));

@@ -15,6 +15,8 @@ public sealed class ExecutionState
     public DateTime StartedAt { get; set; } = DateTime.UtcNow;
     /// <summary>Persisted HTTP execution budget; queued recovery must not continue synchronous work.</summary>
     public DateTime? ExecutionDeadlineAt { get; set; }
+    /// <summary>Absolute limit for asynchronous work and manual resumes; replay creates a new execution.</summary>
+    public DateTime? LifetimeExpiresAt { get; set; }
     public DateTime? CompletedAt { get; set; }
     public long DurationMs => CompletedAt.HasValue
         ? (long)(CompletedAt.Value - StartedAt).TotalMilliseconds
@@ -42,6 +44,8 @@ public sealed class ExecutionState
     public int RetentionSeconds { get; set; } = 30 * 24 * 60 * 60;
     public DateTime? ExpiresAt { get; set; }
     public bool Deleting { get; set; }
+    /// <summary>Reserved terminal capacity was used; recovery requires fresh replay admission.</summary>
+    public bool RecoveryCapacityExhausted { get; set; }
     public int? ResponseStatusCode { get; set; }
     public string? FailureResponseRef { get; set; }
 

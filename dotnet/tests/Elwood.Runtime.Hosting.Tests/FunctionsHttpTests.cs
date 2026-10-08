@@ -23,6 +23,9 @@ public sealed class FunctionsHttpTests
     private static Dictionary<string, string?> Settings() => new()
     {
         ["Elwood:VerificationOnly"] = "true",
+        ["Elwood:Retention:Enforced"] = "true",
+        ["Elwood:Azure:OutputContainer"] = "outputs",
+        ["Elwood:Azure:StorageResourceId"] = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/test/providers/Microsoft.Storage/storageAccounts/unused",
         ["Elwood:Management:BehindProxy"] = "true",
         ["Elwood:Management:Tokens:0:Name"] = "operator",
         ["Elwood:Management:Tokens:0:TokenSha256"] = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Token))),
@@ -44,11 +47,13 @@ public sealed class FunctionsHttpTests
 
     [Theory]
     [InlineData("Elwood:Management:LocalDevelopment", "true")]
-    [InlineData("Elwood:VerificationOnly", "false")]
+    [InlineData("Elwood:Retention:Enforced", "false")]
     [InlineData("Elwood:Management:BehindProxy", "false")]
     [InlineData("Elwood:Sync:ExecutionBudgetSeconds", "230")]
     [InlineData("Elwood:Sync:ExecutionBudgetSeconds", "NaN")]
     [InlineData("Elwood:Azure:CatalogContainer", "documents")]
+    [InlineData("Elwood:Azure:OutputContainer", "states")]
+    [InlineData("Elwood:Retention:BlobTargets:0:AccountUrl", "https://unverified.blob.core.windows.net/")]
     [InlineData("Elwood:Azure:BlobServiceUri", "http://insecure.example.test/")]
     public void InvalidCloudConfigurationFailsBeforeServing(string key, string value)
     {

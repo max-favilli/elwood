@@ -60,7 +60,11 @@ internal static class ConnectorValidation
                 Sql(o.Name, sql.ConnectionString, sql.StoredProcedure, sql.CommandTimeoutSeconds, sql.MaxRows, sql.MaxResultBytes);
                 Require(o.ContentType == "json" && Name(sql.Parameter?.TrimStart('@')), $"Output '{o.Name}': SQL requires JSON and a valid parameter name.");
             }
-            foreach (var blob in o.Destinations?.BlobStorage ?? []) Blob(o.Name, blob.ConnectionString, blob.AccountUrl, blob.Container, blob.Filename, blob.TimeoutSeconds);
+            foreach (var blob in o.Destinations?.BlobStorage ?? [])
+            {
+                Blob(o.Name, blob.ConnectionString, blob.AccountUrl, blob.Container, blob.Filename, blob.TimeoutSeconds);
+                Require(blob.TtlSeconds is null or > 0 and <= Storage.RetentionPolicy.MaximumSeconds, $"Output '{o.Name}': Blob ttlSeconds must be between 1 second and 365 days.");
+            }
         }
         return errors;
     }

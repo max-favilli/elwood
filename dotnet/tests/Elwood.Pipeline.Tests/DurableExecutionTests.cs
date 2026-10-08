@@ -275,7 +275,7 @@ public sealed class DurableExecutionTests
         var runner = new AsyncExecutor(states, docs, queue, sourceConnectors: [source], timeProvider: clock);
         var pipeline = Pipeline(); pipeline.Config.TtlSeconds = 10;
         var id = await runner.StartAsync(pipeline, Factory.Parse("{}"));
-        clock.Advance(TimeSpan.FromDays(100)); Assert.Equal(0, await runner.PruneAsync());
+        clock.Advance(TimeSpan.FromSeconds(100)); Assert.Equal(0, await runner.PruneAsync());
         await Drain(runner, queue);
         clock.Advance(TimeSpan.FromSeconds(5));
         var replay = await runner.ReplayAsync(id); await Drain(runner, queue);

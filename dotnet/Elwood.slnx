@@ -14,6 +14,7 @@
     <Project Path="src/Elwood.Runtime.Hosting/Elwood.Runtime.Hosting.csproj" />
     <Project Path="src/Elwood.Runtime.Api/Elwood.Runtime.Api.csproj" />
     <Project Path="src/Elwood.Runtime.Azure.Functions/Elwood.Runtime.Azure.Functions.csproj" />
+    <Project Path="src/Elwood.Runtime.Azure.Ingress/Elwood.Runtime.Azure.Ingress.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Elwood.Runtime.Hosting.Tests/Elwood.Runtime.Hosting.Tests.csproj" />

@@ -19,14 +19,34 @@ public static class RuntimeEndpoints
     public static void Register(RuntimeRouteCollection routes)
     {
         routes.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow })).WithMetadata(new PublicEndpoint());
-        routes.MapGet("/api/readiness", (IConfiguration configuration) => configuration.GetValue<bool>("Elwood:VerificationOnly")
-            ? Results.Json(new { status = "verification-only", message = "Cloud retention and release verification are incomplete; synthetic testing only." }, statusCode: 503)
-            : Results.Ok(new { status = "ready", hosting = "local" })).WithMetadata(new PublicEndpoint());
+        routes.MapGet("/api/readiness", async (HttpContext context, IConfiguration configuration) =>
+        {
+            if (configuration.GetValue<bool>("Elwood:VerificationOnly"))
+                return Results.Json(new { status = "verification-only", message = "Cloud release verification is incomplete; synthetic testing only." }, statusCode: 503);
+            if (context.RequestServices.GetService<Elwood.Pipeline.Azure.AzureRetentionReadiness>() is { } readiness)
+            {
+                try { await readiness.CheckAsync(context.RequestAborted); }
+                catch { return Results.Json(new { status = "unavailable", message = "Storage retention verification failed. Consult the authenticated retention endpoint and runtime logs." }, statusCode: 503); }
+            }
+            if (context.RequestServices.GetService<Elwood.Pipeline.Azure.BlobOutputRetention>() is { } outputRetention &&
+                !(await outputRetention.HealthAsync(context.RequestAborted)).Healthy)
+                return Results.Json(new { status = "unavailable", message = "Storage retention has failed or is overdue." }, statusCode: 503);
+            return Results.Ok(new { status = "ready" });
+        }).WithMetadata(new PublicEndpoint());
         routes.MapGet("/api/session", (HttpContext context) =>
         {
             var identity = ManagementSecurity.Identity(context);
             return Results.Ok(new { identity.Name, identity.Permissions, identity.Pipelines });
         }).WithMetadata(new ManagementPermission(null, false));
+
+        routes.MapGet("/api/retention", async (HttpContext context) =>
+        {
+            var retention = context.RequestServices.GetService<Elwood.Pipeline.Azure.BlobOutputRetention>();
+            var readiness = context.RequestServices.GetService<Elwood.Pipeline.Azure.AzureRetentionReadiness>();
+            if (readiness is not null) { try { await readiness.CheckAsync(context.RequestAborted); } catch { } }
+            return retention is null ? Results.Json(new { error = "Output retention is not configured." }, statusCode: 503)
+                : Results.Ok(new { storage = await retention.HealthAsync(context.RequestAborted), policy = readiness is null ? null : new { readiness.LastSuccessAt, readiness.Error } });
+        }).WithMetadata(new ManagementPermission("read", false));
 
         routes.MapGet("/api/pipelines", async (IDeploymentStore store, HttpContext context, string? name) =>
         {

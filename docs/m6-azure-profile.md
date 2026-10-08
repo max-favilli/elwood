@@ -1,5 +1,7 @@
 # M6: small Azure profile and verification estimate
 
+Current implementation and operations: [native Azure installation](../infra/azure-small/README.md), [limits and runbook](azure-operations.md), [M6 evidence](m6-release-evidence.md). The chronological design/lab notes below describe earlier stages and are superseded by those documents where status differs.
+
 Status: implementation/design work has started after the second-review package. The temporary storage-only lab is deployed and three live Blob service probes pass (8 October 2026). No Elwood cloud runtime is deployed yet. The existing Functions/Redis prototype does not satisfy M6's durable ownership, catalog or retention contract and is not a release-ready deployment target.
 
 ## Cost proposal

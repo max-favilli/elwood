@@ -81,13 +81,17 @@ public sealed class ExecutionRecoveryWorker(DurableRuntime runtime, RuntimeStepQ
 }
 
 /// <summary>Retention remains enabled when processing workers are paused or recovery fails.</summary>
-public sealed class ExecutionRetentionWorker(DurableRuntime runtime, ILogger<ExecutionRetentionWorker> logger) : BackgroundService
+public sealed class ExecutionRetentionWorker(DurableRuntime runtime, ILogger<ExecutionRetentionWorker> logger,
+    Elwood.Pipeline.Azure.BlobOutputRetention? outputs = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
         do
         {
+            try { if (outputs is not null) await outputs.SweepAsync(stoppingToken); }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
+            catch (Exception ex) { logger.LogError(ex, "Output retention sweep failed; obligations remain registered."); }
             try
             {
                 var deleted = await runtime.Runner().PruneAsync(stoppingToken);

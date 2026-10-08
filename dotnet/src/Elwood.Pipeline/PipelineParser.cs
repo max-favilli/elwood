@@ -131,7 +131,8 @@ public sealed class PipelineParser
         if (config.Version != 2) errors.Add("Only pipeline version 2 is supported.");
         if (config.Sources.Count == 0) errors.Add("At least one source is required.");
         if (config.Join is not null) errors.Add("Pipeline 'join' is not implemented; merge data explicitly in a map.");
-        if (config.TtlSeconds is <= 0) errors.Add("Pipeline 'ttlSeconds' must be positive.");
+        if (config.TtlSeconds is <= 0 or > Storage.RetentionPolicy.MaximumSeconds) errors.Add("Pipeline 'ttlSeconds' must be between 1 second and 365 days.");
+        if (config.MaxExecutionSeconds is <= 0 or > Storage.RetentionPolicy.MaximumExecutionSeconds) errors.Add("Pipeline 'maxExecutionSeconds' must be between 1 second and 7 days.");
         if (config.FailureResponse is not null && !config.IsSyncMode) errors.Add("failureResponse requires sync mode.");
         if (fileInputs && config.FailureResponse is not null) errors.Add("failureResponse requires an HTTP runtime, not the file-input runner.");
         if (config.FailureResponse is { } failure && (string.IsNullOrWhiteSpace(failure.Body) || string.IsNullOrWhiteSpace(failure.StatusCode)))

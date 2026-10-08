@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 var host = new HostBuilder()
+    .ConfigureAppConfiguration((_, configuration) => configuration.AddAzureRuntimeConfiguration())
     .ConfigureFunctionsWebApplication()
     .ConfigureServices((context, services) =>
     {

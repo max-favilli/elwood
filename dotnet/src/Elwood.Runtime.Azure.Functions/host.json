@@ -3,6 +3,7 @@
   "functionTimeout": "00:05:00",
   "extensions": {
     "http": { "routePrefix": "api" },
+    "serviceBus": { "maxConcurrentCalls": 4, "prefetchCount": 0, "maxAutoLockRenewalDuration": "00:05:00", "autoCompleteMessages": true },
     "queues": {
       "batchSize": 4,
       "newBatchThreshold": 2,

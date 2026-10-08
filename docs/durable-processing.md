@@ -1,6 +1,6 @@
 # Durable processing and recovery
 
-M4 implements the provider-neutral processing contract and a local filesystem reference runtime. The portal and `Elwood.Runtime.Api` expose durable HTTP acceptance, recorded attempts, configured retries, resume/replay and retention. Native cloud adapters and external RabbitMQ ingestion remain M6 and M5 respectively; the legacy Azure Functions/Redis prototype does not acquire these guarantees simply by referencing the updated core.
+The provider-neutral processing contract runs in the filesystem API and the M6 native Azure Functions host. Both expose durable HTTP acceptance, attempts, configured retries, resume/replay and retention. External RabbitMQ ingestion uses the shared durable acceptance path. The legacy Redis adapter is not a supported durable hosting profile. See [Azure installation](../infra/azure-small/README.md) and [operations/limits](azure-operations.md).
 
 ## Acceptance and worker recovery
 
@@ -76,9 +76,9 @@ Local real/mock tests use the shared engine synchronously, including authored re
 
 On startup and every minute, an independent retention worker scans for expiry. Pausing processing with `Elwood:Durable:WorkerEnabled=false` does not pause retention; recovery errors cannot suppress it. Under the same execution claim it writes a deletion tombstone, removes the execution's input, snapshots, results, traces and other documents, then removes its state. Cleanup resumes after interruption. A deletion failure leaves a retryable tombstone and is logged; other eligible executions in the scan still get cleaned. Management reads and recovery exclude tombstoned/expired records. A replay owns copies of its required input, revision and metadata, so deleting the original does not invalidate it.
 
-Existing records without `expiresAt` are not retroactively deleted. The legacy Redis adapter still has its historical independent TTL and is not an M4 durable adapter; migrating its storage, fencing and document cleanup is M6 work. Do not use it to claim 30-day recoverability for live queued integrations.
+Existing records without `expiresAt` are not retroactively deleted. The legacy Redis adapter has its historical independent TTL and is not a supported durable adapter. Migration requires draining the old runtime and explicitly deploying bundles into Azure; in-flight conversion is not supplied.
 
-The [first-release storage contract](storage-retention.md) extends the default to delivered output blobs, with pipeline defaults and destination overrides. Destination retention and cloud lifecycle provisioning are mandatory M6 work; the M4 execution TTL does not delete external outputs. Orphan reconciliation, legacy expiry migration and growth/backlog limits must also be proved before cloud release.
+The [storage contract](storage-retention.md) extends the default to delivered Blob outputs, with pipeline defaults and destination overrides. Independent ownership ledgers and Azure lifecycle safeguards enforce it even after execution history expires. Finite execution lifetime, admission bounds and reserved final-state capacity prevent unlimited growth; see [operations](azure-operations.md). Legacy expiry is never silently shortened.
 
 ## Verification and boundaries
 

@@ -93,9 +93,14 @@ internal sealed class ExecutionOperations
                 var checkpoint = new SourceFetchResult(fetched.Content, fetched.ContentType,
                     fetched.Headers?.ToDictionary(h => h.Key, h => string.Join(", ", HttpCallCapture.SafeHeader(h.Key, [h.Value]))),
                     fetched.StatusCode, fetched.Metadata);
-                step.FetchedRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/fetched", JsonSerializer.Serialize(checkpoint));
-                attempt.ExternalCallStarted = false;
-                await claim.SaveAsync(state);
+                try
+                {
+                    step.FetchedRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/fetched", JsonSerializer.Serialize(checkpoint));
+                    attempt.ExternalCallStarted = false;
+                    await claim.SaveAsync(state);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && !claim.OwnershipLost.IsCancellationRequested)
+                { throw CheckpointFailure(attempt, ex); }
             }
             payload = fetched.ContentType is "csv" or "txt" or "xml" or "text" ? _factory.CreateString(fetched.Content) : _factory.Parse(fetched.Content);
         }
@@ -173,11 +178,23 @@ internal sealed class ExecutionOperations
             var result = await Call(state, attempt, config.Name, i, (destination as HttpDestinationConfig)?.Method ?? "POST",
                 () => _test is null ? Real() : _test.DeliverAsync(config.Name, index, type, destination, deliveryContent, config.ContentType, Real), claim, cancellationToken);
             if (!result.Success) throw new ConnectorFailure(result.Error ?? "Delivery failed.", result.StatusCode);
-            if (result.Receipt is not null) step.Receipts[i] = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/receipt/{i}", result.Receipt);
-            step.CompletedDestinations.Add(i); step.DeliveredCount = step.CompletedDestinations.Count;
-            attempt.ExternalCallStarted = false;
-            await claim.SaveAsync(state);
+            try
+            {
+                if (result.Receipt is not null) step.Receipts[i] = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/receipt/{i}", result.Receipt);
+                step.CompletedDestinations.Add(i); step.DeliveredCount = step.CompletedDestinations.Count;
+                attempt.ExternalCallStarted = false;
+                await claim.SaveAsync(state);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && !claim.OwnershipLost.IsCancellationRequested)
+            { throw CheckpointFailure(attempt, ex); }
         }
+    }
+
+    private static ConnectorException CheckpointFailure(StepAttempt attempt, Exception error)
+    {
+        attempt.ExternalCallStarted = true;
+        return new ConnectorException("Connector returned successfully but its response or receipt could not be checkpointed (" + error.GetType().Name + "). Review the external result before recovery.",
+            "checkpoint_failed", outcomeUncertain: attempt.MayHaveWritten, innerException: error);
     }
 
     private async Task<T> Call<T>(ExecutionState state, StepAttempt attempt, string name, int? index, string method, Func<Task<T>> action, IExecutionClaim claim, CancellationToken cancellationToken)
@@ -259,6 +276,7 @@ internal sealed class ExecutionOperations
                 break;
             case SqlDestinationConfig sql: sql.ConnectionString = Resolve(sql.ConnectionString, data, bindings); break;
             case BlobStorageDestinationConfig blob:
+                blob.TtlSeconds = RetentionPolicy.Effective(blob.TtlSeconds ?? pipeline.Yaml.TtlSeconds);
                 blob.ConnectionString = Resolve(blob.ConnectionString, data, bindings);
                 if (blob.AccountUrl is not null) blob.AccountUrl = Resolve(blob.AccountUrl, data, bindings);
                 blob.Container = Resolve(blob.Container, data, bindings);

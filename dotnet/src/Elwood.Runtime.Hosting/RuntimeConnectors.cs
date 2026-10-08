@@ -6,7 +6,7 @@ using Microsoft.Data.SqlClient;
 namespace Elwood.Runtime.Api;
 
 /// <summary>Host identities are granted per pipeline and operation, like named secrets.</summary>
-public sealed class RuntimeConnectors(IConfiguration configuration)
+public sealed class RuntimeConnectors(IConfiguration configuration, BlobOutputRetention? retention = null)
 {
     private readonly HttpSourceConnector _httpSource = new();
     private readonly HttpDestinationConnector _httpDestination = new();
@@ -25,8 +25,21 @@ public sealed class RuntimeConnectors(IConfiguration configuration)
         if (string.IsNullOrEmpty(account)) return;
         if (!Uri.TryCreate(account, UriKind.Absolute, out var uri) || uri.Scheme != "https" || !string.IsNullOrEmpty(uri.UserInfo) ||
             !string.IsNullOrEmpty(uri.Query) || uri.AbsolutePath != "/" || !string.IsNullOrEmpty(uri.Fragment) ||
-            !Grants(id, test, "BlobAccounts").Any(grant => string.Equals(grant.TrimEnd('/'), account.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)))
+            !(Grants(id, test, "BlobAccounts").Any(grant => string.Equals(grant.TrimEnd('/'), account.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)) ||
+              Grants(id, test, "BlobPrefixes").Any(grant => grant.StartsWith(account.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase))))
             throw new ConnectorException("This pipeline is not granted host identity access to the Blob account.", "blob.access");
+    }, retention: retention, authorizePath: (_, account, container, path) =>
+    {
+        if (string.IsNullOrEmpty(account)) return;
+        var internalAccount = configuration["Elwood:Azure:BlobServiceUri"];
+        var prefixes = Grants(id, test, "BlobPrefixes");
+        if (prefixes.Length == 0 && !string.Equals(internalAccount?.TrimEnd('/'), account.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)) return;
+        var target = new Uri(new Uri(account.TrimEnd('/') + "/"), container + "/" + path).AbsoluteUri;
+        if (!prefixes.Any(prefix => target.StartsWith(prefix.TrimEnd('/') + "/", StringComparison.Ordinal)))
+            throw new ConnectorException("This pipeline is not granted host identity access to the Blob container/prefix.", "blob.access");
+        if (new[] { "StateContainer", "DocumentContainer", "CatalogContainer" }.Any(key => configuration["Elwood:Azure:" + key] == container) &&
+            string.Equals(internalAccount?.TrimEnd('/'), account.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
+            throw new ConnectorException("Pipeline connectors cannot access internal runtime containers.", "blob.access");
     });
     public ISourceConnector[] Sources(string id, bool test) => [_httpSource, Sql(id, test), Blob(id, test)];
     public IDestinationConnector[] Destinations(string id, bool test) => [_httpDestination, Sql(id, test), Blob(id, test)];

@@ -11,7 +11,8 @@ namespace Elwood.Pipeline.Azure;
 /// so a late/stale worker cannot change data published by a replacement owner.
 /// Containers are provisioned by infrastructure, never by the constructor.
 /// </summary>
-public sealed class AzureExecutionDocumentStore(BlobContainerClient container, string storageNamespace = "elwood", int maxDocumentBytes = 32 * 1024 * 1024)
+public sealed class AzureExecutionDocumentStore(BlobContainerClient container, string storageNamespace = "elwood", int maxDocumentBytes = 32 * 1024 * 1024,
+    BlobRetentionLedger? retention = null, TimeProvider? timeProvider = null)
     : IExecutionDocumentStore
 {
     private readonly string _prefix = SafePath.Id(storageNamespace) + "/";
@@ -24,11 +25,18 @@ public sealed class AzureExecutionDocumentStore(BlobContainerClient container, s
         if (bytes.Length > _maxBytes) throw new InvalidOperationException("Execution document exceeds the configured byte limit.");
         var reference = key + "/" + Guid.NewGuid().ToString("N");
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        await Blob(reference).UploadAsync(BinaryData.FromBytes(bytes), new BlobUploadOptions
+        var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+        var entry = new BlobRetentionEntry { BlobUri = Blob(reference).Uri.ToString(), Kind = "document", ExecutionId = key.Split('/')[1],
+            RegisteredAt = now, ExpiresAt = now.AddDays(372), Bytes = bytes.Length };
+        if (retention is not null) await retention.RegisterAsync(entry, timeout.Token);
+        var result = await Blob(reference).UploadAsync(BinaryData.FromBytes(bytes), new BlobUploadOptions
         {
+            Metadata = new Dictionary<string, string> { [BlobOutputRetention.OwnerMetadata] = entry.Id },
             Conditions = new BlobRequestConditions { IfNoneMatch = ETag.All },
             HttpHeaders = new BlobHttpHeaders { ContentType = "application/json; charset=utf-8" }
         }, timeout.Token);
+        if (retention is not null) await retention.UpdateAsync(entry.Id, stored =>
+        { stored.ETag = result.Value.ETag.ToString(); stored.VersionId = result.Value.VersionId; }, timeout.Token);
         return reference;
     }
 
@@ -69,6 +77,9 @@ public sealed class AzureExecutionDocumentStore(BlobContainerClient container, s
     {
         var prefix = _prefix + "exec/" + SafePath.Id(executionId) + "/";
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        // This includes writes registered by a lost worker but not yet visible in Blob listing.
+        // Their obligations survive this pass and are reconciled independently.
+        if (retention is not null) await retention.ExpireDocumentsAsync(executionId, timeout.Token);
         // Every reference has a unique, never-overwritten name. Deleting the current
         // object first leaves previous versions discoverable after an interruption.
         await foreach (var item in container.GetBlobsAsync(prefix: prefix, cancellationToken: timeout.Token))

@@ -95,6 +95,9 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy
     .WithOrigins(origins).AllowAnyMethod().AllowAnyHeader()
     .WithExposedHeaders("X-Elwood-Warnings", "X-Elwood-Revision", "ETag", "Location")));
 builder.Services.AddSingleton<RuntimeConnectors>();
+builder.Services.AddSingleton<Elwood.Pipeline.Azure.BlobRetentionLedger>(new Elwood.Pipeline.Azure.FileBlobRetentionLedger(Path.Combine(stateDir, "retention")));
+builder.Services.AddSingleton(sp => RuntimeOutputRetention.Create(sp.GetRequiredService<Elwood.Pipeline.Azure.BlobRetentionLedger>(),
+    builder.Configuration, sp.GetRequiredService<ISecretProvider>()));
 builder.Services.AddHostedService<RabbitMqTriggerWorker>();
 builder.Services.AddSingleton<IStepQueue>(sp => sp.GetRequiredService<RuntimeStepQueue>());
 builder.Services.AddSingleton<RuntimeHttpBoundary>();

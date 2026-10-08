@@ -1,6 +1,6 @@
 # Drafts, deployments and management access
 
-The Runtime API now separates authoring from deployment. This document describes the M2 local/filesystem runtime. Provider-native deployment catalogs and infrastructure remain M6 work; the existing Azure Blob/Redis startup registry is a legacy prototype, not a deployment target for this portal workflow.
+The Runtime API separates authoring from deployment. The local filesystem runtime and M6 native Azure host share this API/security contract. Azure uses a bounded Blob CAS catalog for drafts, immutable revisions and active routes. See [native installation](../infra/azure-small/README.md) and [operations](azure-operations.md); the legacy Redis startup registry is not a deployment target.
 
 ## Local startup
 
@@ -85,13 +85,13 @@ Keep the state, legacy pipeline and secret directories writable only by the runt
 | `POST /api/executions` with `{pipelineId,payload,testMode,mocks?,content?,expectedRevisionId?}` | Synchronous draft test with explicit real/mock connectors; see [local testing](local-testing.md) |
 | `POST /api/pipelines/{id}/scripts/{name}/test` | Test the saved script; optional `If-Match` prevents stale tests |
 
-Script tests return `X-Elwood-Revision` alongside the existing `X-Elwood-Warnings`. Trigger responses identify their published bundle with `X-Elwood-Revision`. Live async definitions return 202 only after durable acceptance. Recovery, attempt history, idempotency and retention are described in [durable processing](durable-processing.md). The legacy Azure Functions host remains outside this filesystem runtime contract.
+Script tests return `X-Elwood-Revision` alongside `X-Elwood-Warnings`. Trigger responses identify their published bundle with `X-Elwood-Revision`. Live async definitions return 202 only after durable acceptance. Recovery, attempts, idempotency and retention are described in [durable processing](durable-processing.md). The current native Azure host shares these handlers.
 
 ## Verification
 
 `DeploymentTests` covers draft/live isolation, explicit migration, collisions, stale and concurrent writes, immutable history, async revision pinning, filesystem containment and secret denial. The isolated `scripts/runtime-api.test.mjs` additionally checks real HTTP authentication, permissions and list filtering, snapshot tests, warning transport, draft/deploy semantics, traversal rejection, CORS and distinct live/test secret grants. Portal tests exercise bearer transport, conditional saves, explicit deploy/migration requests and snapshot identity.
 
-Build the Runtime API before running its Node contract test. Azure adapter tests require Docker and run in the separate CI integration job. The Redis execution header now retains pipeline/revision/snapshot identity and the test flag; native cloud deployment wiring remains outside this local catalog.
+Build an isolated Runtime API DLL before running Node contracts; set `ELWOOD_TEST_RUNTIME_DLL` to avoid a dev server's stale Debug build. Azure tests include Docker contracts and separately opt-in live service/hosted checks; see [evidence and commands](m6-release-evidence.md).
 
 
 ### Reverse proxies and upgrades

@@ -11,7 +11,7 @@ Check a box only when its stated behavior is implemented and verified. An unchec
 - [x] M3 — Explicit real/mock local testing and inspection.
 - [x] M4 — Durable local execution, retries, recovery and internal retention.
 - [x] M5 — Representative connectors and controlled integration verification.
-- [ ] M6 — Native cloud installation and enforced storage lifecycle.
+- [x] M6 — Native Azure installation and enforced storage lifecycle, within the documented guarded-profile limits. [Closeout evidence](m6-release-evidence.md).
 - [ ] Adoption — Eagle SAP and Deldo real-world acceptance tests after M6.
 
 M1–M5 completion describes their implemented scope, not production/cloud readiness. The first and second independent-review follow-ups are part of that baseline. DSL behavior is outside the M6 implementation scope.
@@ -74,8 +74,8 @@ Implement and verify Azure first. AWS/GCP support must not be advertised until e
 - [x] Prove Blob lease exclusion/renewal/takeover and version/ETag-safe deletion against real Azure.
 - [x] Fix version-deletion permissions and clean live test data. Evidence: `3b3b85b`, [lab verification](m6-azure-profile.md#live-lab-verification--8-october-2026); 3 live probes passed, 100 bytes soft-deleted.
 - [x] Record the first reported Azure charge: EUR 0.0000201 on 8 October 2026 (billing is delayed; this is not a final campaign total).
-- [ ] Continue accounting for retained versions, logs and operations through the campaign, staying within the allowance.
-- [ ] Remove the temporary group after the M6 verification campaign and verify deletion.
+- [x] Account for retained versions, operations and compute through the campaign: 230.23 MiB listed Blob records, 31,177 storage transactions and 358.3 GB-seconds in the recorded snapshot; delayed billing is distinguished from estimated cost. [Evidence](m6-release-evidence.md#test-totals-and-measured-usage).
+- [x] Remove temporary `elwood-m6-rg` after verification; Azure `group exists` returned `false` on 8 October 2026.
 
 ### 6.1 — Worker ownership and fencing — Complete
 
@@ -107,76 +107,81 @@ Depends on 6.1; coordinates with 6.2 and 6.5.
 - [x] Store execution documents using ownership-safe immutable identities; prevent stale writers from changing referenced data.
 - [x] Implement execution-scoped deletion including versions/snapshots and restartable progress.
 - [x] Recover/clean failed acceptance through a durable initialization intent and a grace period, protected by the execution lease.
-- [ ] Cover uploads arriving after lease loss/deletion and temporary/uncommitted provider data with the final lifecycle/admission policy (6.7).
+- [x] Cover uploads arriving after lease loss/deletion and temporary/uncommitted provider data with the final lifecycle/admission policy (6.7).
 - [x] Keep drafts and referenced immutable definitions separate from expiring execution data; bounded cloud catalog with retained content-addressed revisions.
-- [ ] Verify restart, prefix isolation, missing/corrupt documents, stale writes and cleanup.
+- [x] Verify restart, prefix isolation, missing/corrupt documents, stale writes and cleanup.
 
-### 6.4 — Queue transport and recovery scheduling — Active
+### 6.4 — Queue transport and recovery scheduling — Complete
 
 Depends on 6.1–6.3.
 
 - [x] Implement bounded, versioned Azure Storage Queue messages and a dispatcher that discards malformed hints without logging payloads; verify actual visibility/redelivery and stale receipt rejection.
 - [x] Wire queue triggers, bounded host retries and a poison-hint consumer into the native host; generated binding metadata verified.
-- [ ] Verify those bindings, poison cleanup and recovery scheduling in the deployed service.
+- [x] Verify those bindings, poison cleanup and recovery scheduling in the deployed service.
 - [x] Treat queues as wake-up hints; persisted state remains authoritative, including pipeline identity used to select secret grants.
-- [x] Implement bounded recovery scheduling with a one-minute Functions timer, one Table page per sweep, claim-based exclusion and authored retry timestamps; hosted verification remains open.
+- [x] Implement bounded recovery scheduling with a one-minute Functions timer, one Table page per sweep, claim-based exclusion and authored retry timestamps; hosted restart/lost-hint/retry verification passes.
 - [x] Verify lost notifications/recovery across state-store instances and Azure queue visibility redelivery; hosted duplicate acceptance and completion pass.
-- [ ] Exercise native worker restart, delayed retries and poison recovery end to end.
-- [ ] Define/verify the workplace Service Bus profile separately; preserve external RabbitMQ as third-party ingress.
+- [x] Exercise native worker restart, delayed retries and poison recovery end to end.
+- [x] Define/verify the workplace Service Bus profile separately; preserve external RabbitMQ as third-party ingress.
 
-### 6.5 — Shared catalog and management parity — Active
+### 6.5 — Shared catalog and management parity — Complete
 
 Depends on 6.2–6.3.
 
 - [x] Extract a deployment-store contract from the filesystem implementation and use it in the API and RabbitMQ ingress.
 - [x] Implement shared drafts, concurrency tokens, immutable bundles and atomic active-route publication using Blob ETag compare-and-swap; enforce small-profile catalog limits.
-- [x] Share HTTP handlers, authentication, management scopes, secret grants and history authorization between the local API and Functions. Five API contracts and nine direct Functions/configuration tests passed; live host verification remains open.
-- [ ] Connect the portal to the hosted management API; save/validate/test/deploy behave consistently with local use.
+- [x] Share HTTP handlers, authentication, management scopes, secret grants and history authorization between the local API and Functions. Five API contracts and nine direct Functions/configuration tests passed; hosted API and portal verification passes.
+- [x] Connect the portal to the hosted management API; save/validate/test/deploy behave consistently with local use.
 - [x] Verify concurrent deployment, collision handling, rollback and executions pinned to earlier versions against the live Azure catalog.
 
 ### 6.6 — Native Azure hosting
 
 Depends on 6.1–6.5; review estimated cost against the remaining allowance before deploying compute.
 
-- [x] Replace the legacy Functions/Redis prototype with .NET isolated native hosting and the durable adapters; build and entry-point tests pass. Azure hosting remains explicitly verification-only until release gates pass.
+- [x] Replace the legacy Functions/Redis prototype with .NET isolated native hosting and the durable adapters; build and entry-point tests pass. The final generic runtime deployment returned readiness 200 with verification-only disabled.
 - [x] Compile, preview and deploy a temporary synthetic Functions Bicep profile with account-scoped managed identity and no Redis.
-- [ ] Finish the production Bicep profile with verified retention, health, quotas and deployment/configuration instructions.
+- [x] Finish the production Bicep profile with verified retention, health, quotas and deployment/configuration instructions.
 - [x] Deploy HTTP triggers, management endpoints, queue consumers and independent recovery/retention Functions; Azure indexed all five functions and hosted execution/replay passed.
 - [x] Verify the independent retention timer physically removed all preview state/documents and live versions/snapshots; data-plane inventory returned zero.
-- [ ] Complete retention health/drift reporting and production lifecycle enforcement.
-- [ ] Keep sync budgets below gateway deadlines and verify real disconnect/cancellation behavior.
-- [ ] Deploy Event Grid validation/delivery and verify duplicate events and authorization.
-- [ ] Document/provide the always-running ingress option needed for external RabbitMQ; price it separately from scale-to-zero Deldo hosting.
+- [x] Complete retention health/drift reporting and production lifecycle enforcement.
+- [x] Keep sync budgets below gateway deadlines and verify real disconnect/cancellation behavior.
+- [x] Deploy Event Grid validation/delivery and verify duplicate events and authorization.
+- [x] Document/provide the always-running ingress option needed for external RabbitMQ; price it separately from scale-to-zero Deldo hosting.
 - [x] Verify deployment, startup, bearer management access and the explicit verification-only readiness gate against Azure.
-- [ ] Verify restart and hosted portal parity; production readiness requires 6.7.
+- [x] Verify restart and hosted portal parity; production readiness requires 6.7.
 
 ### 6.7 — Mandatory internal and delivered-output retention
 
 Depends on 6.1–6.3 and 6.6. Full contract: [storage-retention.md](storage-retention.md).
 
-- [ ] Validate positive finite configuration: 30-day defaults, pipeline policy and destination override, pinned to the effective revision/write.
-- [ ] Persist output ownership and cleanup obligation **before** delivery, independent of execution history and pipeline lifetime.
-- [ ] Capture version/ETag identity and expiry in receipts; safely reconcile uncertain/partial writes.
-- [ ] Implement independent bounded expiry sweeps with restartable deletion and per-object fault isolation.
-- [ ] Cover current/noncurrent versions, snapshots, soft delete, staging/orphans and auxiliary index/control records.
-- [ ] Install/verify native lifecycle safeguards without deleting active recovery data or unrelated/source-owned objects.
-- [ ] Detect permission/policy drift, immutability failures and overdue cleanup; expose failed health and actionable diagnostics.
-- [ ] Enforce finite active execution/retry lifetime, accepted bytes and backlog/admission limits.
-- [ ] Verify default/override expiry with advanced clocks and actual provider deletion; outputs outliving history, replay, replacement, source isolation and interrupted cleanup.
+- [x] Validate positive finite configuration: 30-day defaults, pipeline policy and destination override, pinned to the effective revision/write. Connector inheritance/revision tests and live output expiry pass.
+- [x] Persist output ownership and cleanup obligation **before** delivery, independent of execution history and pipeline lifetime. Independent file/Blob ledger; live lost-response and hosted history-before-output tests pass.
+- [x] Capture version/ETag identity and expiry in receipts; safely reconcile uncertain/partial writes. Live Azure versions, snapshots, replacement and source-isolation test passes.
+- [x] Implement independent bounded expiry sweeps with restartable deletion and per-object fault isolation.
+- [x] Cover current/noncurrent versions, snapshots, soft delete, staging/orphans and auxiliary index/control records.
+- [x] Install/verify native lifecycle safeguards without deleting active recovery data or unrelated/source-owned objects.
+- [x] Detect permission/policy drift, immutability failures and overdue cleanup; expose failed health and actionable diagnostics.
+- [x] Enforce finite active execution/retry lifetime, accepted bytes and backlog/admission limits.
+- [x] Verify default/override expiry with advanced clocks and actual provider deletion; outputs outliving history, replay, replacement, source isolation and interrupted cleanup.
 
 ### 6.8 — Operations, release verification and handoff
 
 Depends on the preceding implementation packages.
 
-- [ ] Add cloud adapter contracts and repeatable opt-in live verification to CI/test instructions; clearly separate emulator coverage from Azure evidence.
-- [ ] Run all relevant backend/API/portal suites and review remaining dependency advisories before external hosting.
-- [ ] Reproduce the three controlled integration families through the hosted installation, including restart/recovery and retention.
-- [ ] Measure transactions, retained bytes, compute and monitoring costs; compare the small profile with the pet-project budget.
-- [ ] Document installation, identity/secrets, quotas/health, backup policy, upgrades, migration, rollback, recovery and teardown.
-- [ ] Independently review the completed M6 changes and resolve release-blocking findings.
-- [ ] Check M6 complete only after hosted behavior, security, recovery and retention evidence is recorded.
+- [x] Add cloud adapter contracts and repeatable opt-in live verification to CI/test instructions; clearly separate emulator coverage from Azure evidence.
+- [x] Run all relevant backend/API/portal suites and review remaining dependency advisories before external hosting.
+- [x] Reproduce the three controlled integration families through the hosted installation, including restart/recovery and retention.
+- [x] Measure transactions, retained bytes, compute and monitoring costs; compare the small profile with the pet-project budget.
+- [x] Document installation, identity/secrets, quotas/health, backup policy, upgrades, migration, rollback, recovery and teardown. See [operations](azure-operations.md); in-flight legacy migration is explicitly unsupported.
+- [x] Independently review the completed M6 changes and resolve release-blocking findings.
+- [x] Record hosted behavior, security, recovery, retention, internal independent review and teardown evidence; close the bounded native Azure milestone. External review and real adoption remain below.
 
 ## Adoption after M6
+
+- [ ] Size and verify a larger-file/capacity profile for Deldo's actual supplier files and monthly volume; the guarded small profile does not meet the full 25 MiB/1,000-files envelope. See [capacity and costs](azure-operations.md#cost-and-adoption-sizing).
+- [ ] Obtain the owner's other AI session review in addition to the completed internal independent review.
+
+- [ ] Close the newly clarified [file-content duplicate suppression](content-deduplication.md) requirement before Deldo adoption; event-ID deduplication does not satisfy it. Scope/default: process normally, optional skip of successfully processed identical file bytes; confirmed 30-day configurable hash history and explicit replay override.
 
 - [ ] Prepare a versioned, tested handoff for the Eagle SAP integration session.
 - [ ] Prepare a versioned, tested handoff for the Deldo integration session; resolve its hosting/event-delivery decisions using the implemented profile.
@@ -197,3 +202,9 @@ Depends on the preceding implementation packages.
 | 8 October 2026 | Recovery hardening | Abandoned synchronous tests now enter recovery indexes and settle at their deadline without repeating connector calls; v1 filesystem indexes upgrade to v2. Pipeline suite: 208 passed. One additional live Azure deadline test passed. |
 | 8 October 2026 | Hosted internal cleanup | Independent five-minute retention timer removed the hosted smoke test's state and documents, including live versions/snapshots. Azure inventory: zero remaining under the preview namespace in both containers. The delayed initialization records also reached zero. Soft delete remains seven days; output retention is still open. |
 | 8 October 2026 | Lab closeout for this package | Final preview package deployed and checked (200 liveness, 503 readiness, 405 wrong method); app stopped and ARM state verified. Sampled retained content ~64.3 MB, mostly packages; reported cost still EUR 0.0000201 with billing delay. Lab storage retained for remaining M6 verification. |
+| 8 October 2026 | 6.7 output and artifact retention | Added independent ownership ledger, bounded admission, document/checkpoint cleanup registrations, finite execution lifetime and Azure policy/permission checks. Pipeline suite 214, connector suite 21 and hosting suite 9 passed. Live ledger/restart and output/version/snapshot tests pass. Actual Azure policy/deletion probe passes. |
+| 8 October 2026 | Hosted output retention | Package `bace57e6308dacdd31f2d0bc9aa4c907b6df47873a1740eb3e138313c403456b` deployed. `m6-hosted-retention.test.mjs` passed in 472 seconds: a real test and async invocation wrote owned blobs, history expired first, then independent timer removed outputs and live versions; retention health passed. Preview remains verification-only while remaining M6 checks are completed. |
+
+| 8 October 2026 | Final native campaign | All three hosted integration families, portal browser parity, Service Bus restart/lost-hint recovery, authored retry delay, real client abort (499/AwaitingReview), independent output retention, policy checks and quota-after-write recovery passed. Internal independent review findings resolved, including generation fencing. [Evidence](m6-release-evidence.md). |
+
+| 8 October 2026 | M6 closeout | Final package `3805e7dca4534ee94ad6f750dcd1ddc8ff4ad693898efacba0d0984c8f514c40` deployed successfully; readiness 200, final hosted queue/replay and portal browser tests pass. Temporary resource group deletion verified (`exists=false`). Local API/portal restarted, both HTTP 200. |

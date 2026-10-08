@@ -29,10 +29,13 @@ public sealed class PipelineConfig
     /// <summary>
     /// Data retention in seconds. Controls how long execution state and documents
     /// are kept in storage. Passed to IStateStore and IDocumentStore at execution time.
-    /// Default: 2592000 (30 days) after terminal completion. Active executions do not expire.
+    /// Default: 2592000 (30 days) after terminal completion, capped at the execution lifetime plus retention.
     /// </summary>
     [YamlMember(Alias = "ttlSeconds")]
     public int? TtlSeconds { get; set; }
+
+    /// <summary>Maximum lifetime from acceptance, including retries and manual resumes. Default one day, maximum seven days.</summary>
+    public int MaxExecutionSeconds { get; set; } = 24 * 60 * 60;
 
     [YamlMember(Alias = "failureResponse")]
     public FailureResponseConfig? FailureResponse { get; set; }
@@ -417,6 +420,8 @@ public sealed class HttpDestinationConfig
 
 public sealed class BlobStorageDestinationConfig
 {
+    /// <summary>Delivered object retention; inherits pipeline ttlSeconds, default 30 days.</summary>
+    public int? TtlSeconds { get; set; }
     public string? AccountUrl { get; set; }
     public bool Overwrite { get; set; }
     public string? IfMatch { get; set; }

@@ -17,9 +17,48 @@ using Elwood.Pipeline.Testing;
 
 namespace Elwood.Connectors.Tests;
 
-public class ConnectorTests
+public class ConnectorTests : IDisposable
 {
+    private readonly string _retentionRoot = Path.Combine(Path.GetTempPath(), "elwood-connector-retention-" + Guid.NewGuid().ToString("N"));
+    private BlobOutputRetention Retention() => new(new FileBlobRetentionLedger(_retentionRoot), uri => new BlobClient(uri));
+    public void Dispose() { if (Directory.Exists(_retentionRoot)) Directory.Delete(_retentionRoot, true); }
     private static ParsedPipeline Parse(string yaml) => new PipelineParser().ParseContent(new PipelineContent { Yaml = yaml }, "m5");
+
+    [Theory]
+    [InlineData(null, null, 2592000)]
+    [InlineData(600, null, 600)]
+    [InlineData(600, 30, 30)]
+    public async Task BlobRetentionInheritsPinnedPipelinePolicyWithDestinationOverride(int? pipelineTtl, int? destinationTtl, int expected)
+    {
+        var pipeline = Parse("name: retention\nmode: async\nsources: [{name: input, trigger: http}]\noutputs: [{name: result, destinations: {blobStorage: [{accountUrl: 'https://example.blob.core.windows.net', container: outputs, filename: result.json}]}}]");
+        pipeline.Config.TtlSeconds = pipelineTtl;
+        pipeline.Config.Outputs[0].Destinations!.BlobStorage![0].TtlSeconds = destinationTtl;
+        var destination = new RetentionDestination(); var queue = new InMemoryStepQueue();
+        var runner = new AsyncExecutor(new InMemoryStateStore(), new InMemoryDocumentStore(), queue, destinationConnectors: [destination]);
+        await runner.StartAsync(pipeline, JsonNodeValueFactory.Instance.Parse("{}"));
+        pipeline.Config.TtlSeconds = 1; // A later draft cannot change an accepted execution.
+        await Drain(runner, queue);
+        Assert.Equal(expected, destination.Seconds);
+    }
+
+    [Fact]
+    public async Task BlobDeliveryWithoutCleanupRegistrationFailsBeforeSending()
+    {
+        var sends = 0;
+        using var http = new HttpClient(new Handler(_ => { sends++; throw new Exception("Must not send"); }));
+        var options = new BlobClientOptions { Transport = new HttpClientTransport(http) };
+        var connector = new BlobConnector(clientFactory: (_, _, _, _) => new BlobClient(new Uri("https://example.blob.core.windows.net/outputs/result.json"), options));
+        var error = await Assert.ThrowsAsync<ConnectorException>(() => connector.DeliverAsync("blobStorage", new BlobStorageDestinationConfig(), "{}", "json"));
+        Assert.Equal("blob.retention", error.Code); Assert.False(error.OutcomeUncertain); Assert.Equal(0, sends);
+    }
+
+    private sealed class RetentionDestination : IDestinationConnector
+    {
+        public int? Seconds;
+        public bool CanHandle(string type) => type == "blobStorage";
+        public Task<DeliveryResult> DeliverAsync(string type, object config, string content, string contentType, Dictionary<string, string>? context = null, CancellationToken cancellationToken = default)
+        { Seconds = ((BlobStorageDestinationConfig)config).TtlSeconds; return Task.FromResult(DeliveryResult.Ok()); }
+    }
 
     [Theory]
     [InlineData("sql: { connectionString: test, storedProcedure: dbo.test, parameters: {id: null} }")]
@@ -169,7 +208,7 @@ public class ConnectorTests
             response.Headers.Add("ETag", "\"snapshot-1\""); response.Content.Headers.Add("Last-Modified", "Tue, 06 Oct 2026 12:00:00 GMT"); return response;
         }));
         var options = new BlobClientOptions { Transport = new HttpClientTransport(client) }; options.Retry.MaxRetries = 0;
-        var connector = new BlobConnector(clientFactory: (_, _, _, _) => new BlobClient(new Uri("https://account.blob.core.windows.net/snapshots/a.json"), options));
+        var connector = new BlobConnector(clientFactory: (_, _, _, _) => new BlobClient(new Uri("https://account.blob.core.windows.net/snapshots/a.json"), options), retention: Retention());
         var call = new ConnectorCall(); using var trace = HttpCallCapture.Begin(call);
         var result = await connector.DeliverAsync("blobStorage", new BlobStorageDestinationConfig { Container = "snapshots", Filename = "a.json" }, "{\"ok\":true}", "json");
         Assert.True(result.Success); Assert.Contains("snapshot-1", result.Receipt); Assert.Equal("upload", call.Operation);
@@ -181,7 +220,7 @@ public class ConnectorTests
         var sends = 0;
         using var client = new HttpClient(new Handler(_ => { sends++; throw new HttpRequestException("Connection lost"); }));
         var options = new BlobClientOptions { Transport = new HttpClientTransport(client) }; options.Retry.MaxRetries = 0;
-        var connector = new BlobConnector(clientFactory: (_, _, _, _) => new BlobClient(new Uri("https://account.blob.core.windows.net/snapshots/a.json"), options));
+        var connector = new BlobConnector(clientFactory: (_, _, _, _) => new BlobClient(new Uri("https://account.blob.core.windows.net/snapshots/a.json"), options), retention: Retention());
         var error = await Assert.ThrowsAsync<ConnectorException>(() => connector.DeliverAsync("blobStorage", new BlobStorageDestinationConfig
             { Container = "snapshots", Filename = "a.json" }, "{}", "json"));
         Assert.True(error.Retryable); Assert.True(error.OutcomeUncertain); Assert.Equal(1, sends);
