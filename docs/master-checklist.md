@@ -178,10 +178,15 @@ Depends on the preceding implementation packages.
 
 ## Adoption after M6
 
-- [ ] Size and verify a larger-file/capacity profile for Deldo's actual supplier files and monthly volume; the guarded small profile does not meet the full 25 MiB/1,000-files envelope. See [capacity and costs](azure-operations.md#cost-and-adoption-sizing).
+- [ ] Approve permanent hosting cost for the [verified larger-file profile](capacity-profile.md). Owner prioritises 25 MiB / 1,000 files per month over the earlier budget target; measured model projects €45–55/month excluding SQL/application hosting.
+- [x] Measure the actual Deldo normalization script on 1 MiB and 25 MiB generated fixtures; establish 3 GiB managed-heap requirement for the large fixture.
+- [x] Implement a 4 GiB/128 MiB document profile with per-host memory admission and bounded portal inspection.
+- [x] Verify bounded accounting for 1,000 retained large-file executions and 49,000 cleanup obligations, preserving emergency capacity and generation fencing.
+- [x] Complete temporary verification within the existing Azure allowance: three simultaneous large-file workers, monthly metadata maintenance, physical cleanup and measured hosting estimate. Temporary group deletion verified.
 - [ ] Obtain the owner's other AI session review in addition to the completed internal independent review.
 
-- [ ] Close the newly clarified [file-content duplicate suppression](content-deduplication.md) requirement before Deldo adoption; event-ID deduplication does not satisfy it. Scope/default: process normally, optional skip of successfully processed identical file bytes; confirmed 30-day configurable hash history and explicit replay override.
+- [x] Implement [file-content duplicate suppression](content-deduplication.md): strict YAML, raw-byte SHA-256, atomic filesystem/Azure ownership, configurable 30-day history, Skipped status, explicit replay override and isolated tests. Local runtime/API/portal regressions and Azure SDK CAS simulation pass.
+- [x] Verify duplicate suppression against two independently uploaded equal Blob files in the hosted capacity campaign, plus explicit forced replay.
 
 - [ ] Prepare a versioned, tested handoff for the Eagle SAP integration session.
 - [ ] Prepare a versioned, tested handoff for the Deldo integration session; resolve its hosting/event-delivery decisions using the implemented profile.
@@ -208,3 +213,4 @@ Depends on the preceding implementation packages.
 | 8 October 2026 | Final native campaign | All three hosted integration families, portal browser parity, Service Bus restart/lost-hint recovery, authored retry delay, real client abort (499/AwaitingReview), independent output retention, policy checks and quota-after-write recovery passed. Internal independent review findings resolved, including generation fencing. [Evidence](m6-release-evidence.md). |
 
 | 8 October 2026 | M6 closeout | Final package `3805e7dca4534ee94ad6f750dcd1ddc8ff4ad693898efacba0d0984c8f514c40` deployed successfully; readiness 200, final hosted queue/replay and portal browser tests pass. Temporary resource group deletion verified (`exists=false`). Local API/portal restarted, both HTTP 200. |
+| 8 October 2026 | Content deduplication / capacity | Strict optional SHA-256 suppression, 30-day history and forced replay implemented. Pipeline 227, Azure 25, Hosting 12, five API contracts, portal 120 + 10 component checks pass. Internal review findings resolved. Three final 25 MiB hosted runs completed in 49–54 seconds; duplicate skipped and replay delivered. 49,000-obligation monthly metadata model measured 14.7 seconds per scheduled sweep. Cleanup reached zero history/registrations/live output versions, leaving sources untouched. Temporary group removed (`exists=false`). [Evidence and €45–55/month projection](capacity-profile.md); permanent cost approval and actual project acceptance remain open. |

@@ -12,7 +12,7 @@ public sealed class InMemoryStateStore : IRecoverableStateStore
     public Task<IAsyncDisposable?> TryLockAsync(string id) => _locks.TryLockAsync(id);
     public Task<List<ExecutionState>> ListAllAsync() => Task.FromResult(_executions.Values.Select(Copy).ToList());
     public Task<List<ExecutionState>> ListRecoverableAsync() => Task.FromResult(_executions.Values.Where(s => (s.Durable || s.ExecutionDeadlineAt is not null) && s.Status is ExecutionStatus.Pending or ExecutionStatus.Running or ExecutionStatus.Retrying).Select(Copy).ToList());
-    public Task<List<ExecutionState>> ListRetainedAsync() => Task.FromResult(_executions.Values.Where(s => s.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview).Select(Copy).ToList());
+    public Task<List<ExecutionState>> ListRetainedAsync() => Task.FromResult(_executions.Values.Where(s => s.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview or ExecutionStatus.Skipped).Select(Copy).ToList());
     public Task DeleteExecutionAsync(string id) { _executions.TryRemove(id, out _); return Task.CompletedTask; }
 
     public Task SaveExecutionAsync(ExecutionState state)
@@ -51,9 +51,15 @@ public sealed class InMemoryStateStore : IRecoverableStateStore
     }
 }
 
-public sealed class InMemoryDocumentStore : IExecutionDocumentStore
+public sealed class InMemoryDocumentStore : IExecutionDocumentStore, IDocumentPreviewStore
 {
     private readonly ConcurrentDictionary<string, string> _documents = new();
+    public Task<DocumentPreview> PreviewAsync(string key, int maximumBytes)
+    {
+        if (!_documents.TryGetValue(key, out var text)) return Task.FromResult(new DocumentPreview(false, null, 0, false));
+        var bytes = System.Text.Encoding.UTF8.GetByteCount(text);
+        return Task.FromResult(new DocumentPreview(true, bytes <= maximumBytes ? text : null, bytes, bytes > maximumBytes));
+    }
     public Task DeleteExecutionAsync(string id)
     {
         foreach (var key in _documents.Keys.Where(k => k.StartsWith($"exec/{id}/", StringComparison.Ordinal))) _documents.TryRemove(key, out _);

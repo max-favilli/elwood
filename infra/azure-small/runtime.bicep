@@ -23,10 +23,13 @@ param portalOrigins array
 param managementTokenSha256 string
 @allowed(['storage', 'serviceBus'])
 param queueProvider string = 'storage'
+@allowed(['guarded', 'files-25m'])
+param capacityProfile string = 'guarded'
 param serviceBusNamespace string = 'unused.servicebus.windows.net'
 @secure()
 param additionalSettings object = {}
 var tags = { project: 'elwood', profile: 'azure-small' }
+var largeFiles = capacityProfile == 'files-25m'
 
 resource storage 'Microsoft.Storage/storageAccounts@2025-06-01' existing = { name: accountName }
 resource blobs 'Microsoft.Storage/storageAccounts/blobServices@2025-06-01' existing = { parent: storage, name: 'default' }
@@ -85,6 +88,12 @@ var baseSettings = concat([
         { name: 'ElwoodServiceBus__credential', value: 'managedidentity' }
         { name: 'ElwoodServiceBus__clientId', value: identity.properties.clientId }
         { name: 'Elwood__Azure__QueueProvider', value: queueProvider }
+        { name: 'Elwood__Azure__CapacityProfile', value: capacityProfile }
+        { name: 'DOTNET_GCHeapHardLimitPercent', value: largeFiles ? '0x55' : '0x4B' } // Large transforms need margin beyond the standalone 3 GiB probe.
+        { name: 'DOTNET_GCConserveMemory', value: largeFiles ? '9' : '0' }
+        { name: 'AzureFunctionsJobHost__extensions__queues__batchSize', value: largeFiles ? '1' : '4' }
+        { name: 'AzureFunctionsJobHost__extensions__queues__newBatchThreshold', value: largeFiles ? '0' : '2' }
+        { name: 'AzureFunctionsJobHost__extensions__serviceBus__maxConcurrentCalls', value: largeFiles ? '1' : '4' }
         { name: 'AzureWebJobs.ServiceBusExecutionStep.Disabled', value: string(queueProvider != 'serviceBus') }
         { name: 'AzureWebJobs.ServiceBusDeadLetters.Disabled', value: string(queueProvider != 'serviceBus') }
         { name: 'AzureWebJobs.ExecutionStep.Disabled', value: string(queueProvider != 'storage') }
@@ -116,7 +125,7 @@ var baseSettings = concat([
         { name: 'Elwood__Sync__ExecutionBudgetSeconds', value: '60' }
         { name: 'Elwood__VerificationOnly', value: string(verificationOnly) }
         { name: 'Elwood__RabbitMqIngressEnabled', value: string(enableRabbitMqIngress) }
-      ], originSettings)
+      ], largeFiles ? [{ name: 'DOTNET_GCHeapHardLimit', value: '0xD9999999' }] : [], originSettings) // Explicit 3.4 GiB ceiling, independent of host-reported physical memory.
 var extraSettings = additionalSettings.?values ?? []
 var allSettings = concat(filter(baseSettings, s => !contains(map(extraSettings, extra => extra.name), s.name)), extraSettings)
 
@@ -152,8 +161,8 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
       }
       scaleAndConcurrency: {
         maximumInstanceCount: 40 // Azure minimum; no always-ready instances.
-        instanceMemoryMB: 512
-        triggers: { http: { perInstanceConcurrency: 2 } }
+        instanceMemoryMB: largeFiles ? 4096 : 512
+        triggers: { http: { perInstanceConcurrency: largeFiles ? 1 : 2 } }
       }
     }
   }

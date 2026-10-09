@@ -38,7 +38,7 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
             File.Delete(IndexPath(other, state.ExecutionId));
     }
 
-    private static string? IndexFor(ExecutionState state) => state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview
+    private static string? IndexFor(ExecutionState state) => state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview or ExecutionStatus.Skipped
         ? "terminal" : state.Durable || state.ExecutionDeadlineAt is not null ? "active" : null;
     private string IndexPath(string index, string id) => SafePath.Within(_baseDir, $"indexes/{index}/{SafePath.Id(id)}");
     private void Mark(string index, string id)
@@ -235,7 +235,7 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
     }
 }
 
-public sealed class FileSystemDocumentStore : IExecutionDocumentStore, IArtifactMaintenance
+public sealed class FileSystemDocumentStore : IExecutionDocumentStore, IArtifactMaintenance, IDocumentPreviewStore
 {
     private readonly string _baseDir;
 
@@ -272,6 +272,20 @@ public sealed class FileSystemDocumentStore : IExecutionDocumentStore, IArtifact
     }
 
     public Task CleanupArtifactsAsync() { AtomicExecutionFile.Cleanup(_baseDir); return Task.CompletedTask; }
+
+    public async Task<DocumentPreview> PreviewAsync(string key, int maximumBytes)
+    {
+        SafePath.Relative(key.Replace(":", "_"));
+        var path = SafePath.Within(_baseDir, key.Replace(":", "_").Replace("/", "_"));
+        try
+        {
+            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length > maximumBytes) return new(true, null, stream.Length, true);
+            using var reader = new StreamReader(stream);
+            return new(true, await reader.ReadToEndAsync(), stream.Length, false);
+        }
+        catch (FileNotFoundException) { return new(false, null, 0, false); }
+    }
 
     public Task DeleteAsync(string key)
     {

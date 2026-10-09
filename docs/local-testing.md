@@ -18,6 +18,8 @@ Start with the runnable [order pipeline](examples/local-testing/pipeline.elwood.
 
 ## Public HTTP sample pipelines
 
+History previews are limited to 64 KiB per document, 256 KiB total and 64 documents. Larger results remain in execution storage and are labelled as omitted in Steps and data. The test response reports oversized outputs in `omittedOutputs` with their byte counts. These preview limits do not truncate transformation inputs, downstream deliveries or stored output documents. Both real and mock tests bypass live content-fingerprint history; use a deployed pipeline to verify suppression between separate incoming events.
+
 The [M3 public HTTP samples](examples/public-http/README.md) cover order echo, simulated cart creation followed by delivery, HTTP 503 and timeout failures. Create them through **New Pipeline → Start from**; their synthetic input and matching mock fixtures load automatically in **Test draft**. Explicit mode selection still applies. The cart example also documents optional Webhook.site delivery inspection.
 
 The [M5 connector samples](examples/connectors/README.md) add authenticated orders, product SQL/SAP and Deldo Blob/SQL/snapshot flows. SQL fixture bodies are row arrays; text Blob bodies are strings. SQL output bodies supply receipt rows; Blob output bodies supply receipt objects. The portal shows connector operation, request metadata and returned data alongside existing HTTP detail. See [connector contracts](connectors.md).

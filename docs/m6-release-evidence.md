@@ -2,6 +2,8 @@
 
 Status: native Azure M6 package complete within the documented guarded-profile limits; ready for the owner's external review. Deldo capacity and content deduplication remain adoption prerequisites. Baselines: backend `655c359`, portal `b6af335`. Cloud work is restricted to temporary `elwood-m6-rg`, West Europe, with a €10 campaign allowance. No workplace production system was used.
 
+Follow-up: [content suppression](content-deduplication.md) and the [large-file capacity profile](capacity-profile.md) are now implemented and separately verified on Azure. The evidence below remains the original guarded-profile campaign; the follow-up document records its additional tests, revised cost model and remaining permanent-hosting approval.
+
 ## Observed on 8 October 2026
 
 - Shared HTTP/management handlers run on .NET 10 isolated Flex Functions with managed identity and Blob/Table state, without Redis/SQL runtime dependencies.

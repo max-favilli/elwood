@@ -50,7 +50,7 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
     private string Partition(string kind) => _scope + "-" + kind;
     private static string Ticks(DateTime date) => date.Ticks.ToString("D19", CultureInfo.InvariantCulture);
     private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
-    private static bool Terminal(ExecutionState state) => state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview;
+    private static bool Terminal(ExecutionState state) => state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview or ExecutionStatus.Skipped;
     private static string HistoryKey(ExecutionState state) => Ticks(new DateTime(DateTime.MaxValue.Ticks - state.StartedAt.Ticks)) + "-" + state.ExecutionId;
     private static string PipelineIndex(ExecutionState state) => "pipeline-" + Hash(state.PipelineName);
 
@@ -347,8 +347,7 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
                 finally
                 {
                     // Keep failed lookups behind unvisited entries as well.
-                    if ((await _retention.ReadAsync()).Entries.ContainsKey(entry.Id))
-                        await _retention.UpdateAsync(entry.Id, current => current.LastAttemptAt = _time.GetUtcNow());
+                    await _retention.MarkCheckedAsync(entry.Id);
                 }
             }
         }

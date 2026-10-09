@@ -31,6 +31,9 @@ public sealed class RuntimeHttpBoundary(ILogger<RuntimeHttpBoundary> logger)
                 if (permission.Name is not null && !identity.Can(permission.Name, pipeline))
                     throw new PermissionDeniedException("This identity does not have permission for this operation.");
             }
+            var gate = context.RequestServices.GetService<ExecutionConcurrencyGate>();
+            // Hold through result serialization, not just executor return: response trees are still live until written.
+            using var slot = gate is null || context.Request.Path == "/api/health" ? null : await gate.EnterAsync(context.RequestAborted);
             await next(context);
         }
         catch (Exception ex) when (ex is ArgumentException or JsonException or DeploymentConflictException or RecoveryConflictException or KeyNotFoundException or PermissionDeniedException)

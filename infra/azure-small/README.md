@@ -1,5 +1,7 @@
 # Native Azure installation
 
+`capacityProfile: files-25m` selects the large-file profile (4 GiB workers and partitioned retention), verified with three simultaneous 25 MiB generated Deldo fixtures. The default remains `guarded`. Read the [measured capacity and cost basis](../../docs/capacity-profile.md); switching a populated installation requires an explicit offline migration. Permanent hosting cost approval and real supplier/database acceptance remain pending.
+
 The profile runs .NET 10 isolated Azure Functions on Flex Consumption, using Blob checkpoints/documents/catalog, Table scheduling indexes and Storage Queue notifications. Set `queueProvider: serviceBus` for a Basic Service Bus internal queue. External RabbitMQ requires a separately billed always-running ingress host. Redis and SQL are not runtime dependencies; the lab's SQL is only a connector fixture.
 
 Read [operations and limits](../../docs/azure-operations.md), [verification evidence](../../docs/m6-release-evidence.md) and [the master checklist](../../docs/master-checklist.md) before adoption. Azure is the first supported native provider; AWS/GCP adapters are not supplied. Controlled fixtures do not certify the full pet-project workload.
@@ -43,7 +45,7 @@ App Service rejects hyphens in individual setting names during some updates. Pip
 
 For RabbitMQ, approve B1 cost before enabling `enableRabbitMqIngress`, publish/ZIP `dotnet/src/Elwood.Runtime.Azure.Ingress` and deploy to the generated ingress app. It shares the catalog, identity, state and internal queue with Functions. Give it broker network access and scoped secrets. `/health` is process liveness; `/readiness` checks storage retention, not broker connectivity. Monitor broker connection failures separately.
 
-For BlobCreated events, configure Event Grid against the deployed HTTP trigger with `eventGrid: true`, scoped subject filters and secret delivery authentication. `test-event-grid.bicep` illustrates the authenticated validation/delivery contract. Event identity suppresses redelivery, not different events carrying equal file bytes; [content deduplication](../../docs/content-deduplication.md) remains an adoption prerequisite.
+For BlobCreated events, configure Event Grid against the deployed HTTP trigger with `eventGrid: true`, scoped subject filters and secret delivery authentication. `test-event-grid.bicep` illustrates the authenticated validation/delivery contract. Event identity suppresses redelivery; opt-in [content deduplication](../../docs/content-deduplication.md) additionally suppresses different events carrying equal file bytes.
 
 ## Disposable verification lab
 

@@ -67,6 +67,10 @@ public static class AzureRuntimeServices
         var tableName = Required("Elwood:Azure:IndexTable");
         var workQueue = Required("ElwoodWorkQueue");
         var scope = SafePath.Id(configuration["Elwood:Azure:Namespace"] ?? "elwood");
+        var capacityProfile = configuration["Elwood:Azure:CapacityProfile"] ?? "guarded";
+        if (capacityProfile is not ("guarded" or "files-25m")) throw new InvalidOperationException("Unknown Azure capacity profile.");
+        var largeFiles = capacityProfile == "files-25m";
+        if (largeFiles) services.AddSingleton(new ExecutionConcurrencyGate(1));
         services.AddSingleton(sp =>
         {
             var options = new BlobClientOptions(); options.Retry.MaxRetries = 2; options.Retry.NetworkTimeout = TimeSpan.FromSeconds(10);
@@ -78,7 +82,8 @@ public static class AzureRuntimeServices
             return new TableClient(tableUri, tableName, sp.GetRequiredService<TokenCredential>(), options);
         });
         services.AddSingleton<IExecutionDocumentStore>(sp => new AzureExecutionDocumentStore(
-            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(documentContainer), scope, retention: sp.GetRequiredService<BlobRetentionLedger>()));
+            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(documentContainer), scope,
+            maxDocumentBytes: (largeFiles ? 128 : 32) * 1024 * 1024, retention: sp.GetRequiredService<BlobRetentionLedger>()));
         services.AddSingleton<IDocumentStore>(sp => sp.GetRequiredService<IExecutionDocumentStore>());
         services.AddSingleton(sp => new AzureExecutionStateStore(
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(stateContainer), sp.GetRequiredService<TableClient>(),
@@ -100,9 +105,19 @@ public static class AzureRuntimeServices
         services.AddSingleton<ISecretProvider>(new EnvironmentSecretProvider());
         services.AddSingleton(sp => new AzureRetentionReadiness(sp.GetRequiredService<TokenCredential>(), storageResourceId,
             sp.GetRequiredService<BlobServiceClient>(), stateContainer, documentContainer, outputContainer, catalogContainer, scope));
-        services.AddSingleton<BlobRetentionLedger>(sp => new AzureBlobRetentionLedger(
-            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(catalogContainer).GetBlobClient(scope + "/output-retention.json"))
-            { VerifyAdmissionAsync = sp.GetService<AzureRetentionReadiness>() is { } readiness ? readiness.CheckAsync : null });
+        services.AddSingleton<BlobRetentionLedger>(sp =>
+        {
+            var container = sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(catalogContainer);
+            var legacy = container.GetBlobClient(scope + "/output-retention.json");
+            var layout = new RetentionLayout(container.GetBlobClient(scope + "/retention-layout.txt"), legacy, largeFiles ? "partitions64-v1" : "single-v1");
+            BlobRetentionLedger ledger = largeFiles
+                ? new PartitionedBlobRetentionLedger(i => new AzureBlobRetentionLedger(container.GetBlobClient($"{scope}/retention/{i:D2}.json"),
+                    maxBytes: 16L * 1024 * 1024 * 1024, maxBytesPerHour: 1024L * 1024 * 1024),
+                    new AzureBlobRetentionLedger(container.GetBlobClient(scope + "/retention/health.json")), layout.VerifyAsync)
+                : new AzureBlobRetentionLedger(legacy, verifyLayout: layout.VerifyAsync);
+            ledger.VerifyAdmissionAsync = sp.GetRequiredService<AzureRetentionReadiness>().CheckAsync;
+            return ledger;
+        });
         services.AddSingleton(sp => RuntimeOutputRetention.Create(sp.GetRequiredService<BlobRetentionLedger>(), configuration,
             sp.GetRequiredService<ISecretProvider>(), sp.GetRequiredService<TokenCredential>(), uri =>
             {
@@ -114,6 +129,8 @@ public static class AzureRuntimeServices
             }));
         services.AddSingleton(new ManagementSecurity(configuration, Path.GetTempPath()));
         services.AddSingleton<RuntimeConnectors>();
+        services.AddSingleton<ContentFingerprintStore>(sp => new AzureContentFingerprintStore(
+            sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(catalogContainer).GetBlobClient(scope + "/fingerprints.json")));
         services.AddSingleton<DurableRuntime>();
         services.AddSingleton(sp => new QueuedExecutionDispatcher(sp.GetRequiredService<IStateStore>(),
             sp.GetRequiredService<DurableRuntime>().Runner, sp.GetRequiredService<ILogger<QueuedExecutionDispatcher>>()));

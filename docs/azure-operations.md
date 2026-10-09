@@ -54,4 +54,6 @@ Always-running Linux B1 ingress was €0.015839/hour (~€11.56/730 hours), alon
 
 **This guarded profile does not support the entire proposed Deldo envelope yet.** A 25 MiB CSV expanding to 50–75 MiB JSON exceeds the document limit. Thirty-day retention of 1,000 executions exceeds the 1 GiB reservation budget before payload copies. Actual supplier samples, peak/expanded sizes, throughput, ledger contention, footprint and Sweden Central pricing require a capacity/large-file package before adoption. Raising limits alone is insufficient without memory, cleanup, throughput and cost validation. Controlled fixtures establish behavior, not that workload or a €3–5 monthly guarantee.
 
-[File-content suppression](content-deduplication.md) is another adoption prerequisite: default process, optional skip, 30-day configurable hash history and explicit replay override.
+[File-content suppression](content-deduplication.md) is implemented: default process, optional skip, 30-day configurable hash history and explicit replay override. Local/API, Azure SDK concurrency and hosted independent-Blob/replay verification pass.
+
+The [files-25m capacity profile](capacity-profile.md) adds 4 GiB workers, bounded 128 MiB documents and 64 retention partitions. Three concurrent 25 MiB generated Deldo runs, duplicate skipping/replay, physical cleanup and a hosted 1,000-execution metadata model passed. This is a separate capacity profile; the default guarded limits above remain unchanged. Hosting-cost approval and actual supplier/database acceptance remain open.

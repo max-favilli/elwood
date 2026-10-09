@@ -62,6 +62,8 @@ public sealed class HttpSourceConnector : ISourceConnector
             response.EnsureSuccessStatusCode(); // throws with the actual error
         }
 
+        var bytes = await response.Content.ReadAsByteArrayAsync(cts.Token);
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
         var content = await response.Content.ReadAsStringAsync(cts.Token);
         var contentType = response.Content.Headers.ContentType?.MediaType ?? "application/json";
 
@@ -77,7 +79,7 @@ public sealed class HttpSourceConnector : ISourceConnector
             _ => "json"
         };
 
-        return new SourceFetchResult(content, format, responseHeaders, statusCode);
+        return new SourceFetchResult(content, format, responseHeaders, statusCode, contentSha256: hash);
     }
 
     /// <summary>

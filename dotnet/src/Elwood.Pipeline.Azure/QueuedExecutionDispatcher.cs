@@ -24,7 +24,7 @@ public sealed class QueuedExecutionDispatcher(IStateStore states, Func<string?, 
         cancellationToken.ThrowIfCancellationRequested();
         var state = await states.GetExecutionAsync(message.ExecutionId);
         if (state is null || !state.Durable || state.Deleting ||
-            state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) return;
+            state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview or ExecutionStatus.Skipped) return;
         // Resolve credentials/connectors from accepted state, never the message's pipeline ID.
         message.PipelineId = state.PipelineId ?? state.PipelineName;
         await runner(state.PipelineId).ExecuteStepAsync(message, cancellationToken);

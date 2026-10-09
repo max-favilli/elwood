@@ -19,6 +19,24 @@ namespace Elwood.Runtime.Hosting.Tests;
 
 public sealed class FunctionsHttpTests
 {
+    [Fact]
+    public async Task MemoryAdmissionSpansHttpResponseSerializationAndExcludesWorkerWork()
+    {
+        var gate = new ExecutionConcurrencyGate(1);
+        await using var provider = new ServiceCollection().AddLogging().AddSingleton(gate).AddSingleton<RuntimeHttpBoundary>().BuildServiceProvider();
+        var context = new DefaultHttpContext { RequestServices = provider };
+        context.Request.Path = "/api/executions/example/inspection";
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishWriting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var response = provider.GetRequiredService<RuntimeHttpBoundary>().InvokeAsync(context, async _ =>
+        { entered.SetResult(); await finishWriting.Task; });
+        await entered.Task;
+        using var canceled = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => { using var slot = await gate.EnterAsync(canceled.Token); });
+        finishWriting.SetResult(); await response;
+        using var afterResponse = await gate.EnterAsync(CancellationToken.None);
+    }
+
     private const string Token = "synthetic-management-token";
     private static Dictionary<string, string?> Settings() => new()
     {

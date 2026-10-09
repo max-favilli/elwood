@@ -194,7 +194,7 @@ public static class RuntimeEndpoints
             var inspection = CanReadExecution(context, state!)
                 ? await ExecutionInspection.LoadAsync(state!, context.RequestServices.GetRequiredService<IDocumentStore>()) : null;
             return Results.Ok(new { result.ExecutionId, success = result.IsSuccess, errors = result.Errors,
-                outputs = Outputs(result), result.ResponseStatusCode, revisionId = parsed.RevisionId, isTest = true, testMode = testSession.Mode, inspection });
+                outputs = Outputs(result), result.OmittedOutputs, result.ResponseStatusCode, revisionId = parsed.RevisionId, isTest = true, testMode = testSession.Mode, inspection });
         }).WithMetadata(new ManagementPermission("test", false));
         routes.MapPost("/api/executions/{id}/resume", async (string id, ResumeRequest body, IStateStore states, DurableRuntime runtime, HttpContext context) =>
         {
@@ -215,7 +215,7 @@ public static class RuntimeEndpoints
                 var errors = RuntimeErrors(revision);
                 if (errors.Count > 0) return Results.BadRequest(new { errors });
             }
-            var replay = await runtime.Runner(state.PipelineId).ReplayAsync(id, revision, body.AcknowledgeUncertain);
+            var replay = await runtime.Runner(state.PipelineId).ReplayAsync(id, revision, body.AcknowledgeUncertain, body.ForceProcessing);
             return Results.Accepted($"/api/executions/{replay}", new { executionId = replay, replayOf = id });
         }).WithMetadata(new ManagementPermission("recover", false));
         routes.MapPost("/api/v1/trigger/{**path}", async (string path, HttpContext context, IDeploymentStore store) =>
@@ -279,6 +279,7 @@ public static class RuntimeEndpoints
             using var requestLifetime = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, context.RequestServices.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping);
             var result = await Executor(context, id, false).ExecuteAsync(parsed, payload, triggerSourceName: sourceName, cancellationToken: requestLifetime.Token);
             context.Response.Headers["X-Elwood-Revision"] = bundle.RevisionId;
+            if (result.IsSkipped) return Results.Ok(new { result.ExecutionId, skipped = true, result.DuplicateOf });
             if (!result.IsSuccess)
             {
                 if (result.FailureResponse is not null) return Results.Text(ExecutionJson(result.FailureResponse), "application/json", statusCode: result.ResponseStatusCode ?? 500);
@@ -293,6 +294,7 @@ public static class RuntimeEndpoints
         {
             var recent = (await store.ListExecutionsAsync(limit: 100)).Where(e => CanReadExecution(context, e)).ToList();
             return Results.Ok(new { running = recent.Count(e => e.Status == Elwood.Pipeline.State.ExecutionStatus.Running),
+                skipped = recent.Count(e => e.Status == Elwood.Pipeline.State.ExecutionStatus.Skipped),
                 completed = recent.Count(e => e.Status == Elwood.Pipeline.State.ExecutionStatus.Completed),
                 failed = recent.Count(e => e.Status == Elwood.Pipeline.State.ExecutionStatus.Failed), total = recent.Count });
         }).WithMetadata(new ManagementPermission("read", false));
@@ -316,6 +318,9 @@ public static class RuntimeEndpoints
     static ISecretProvider ScopedSecrets(HttpContext context, string id, bool test) => context.RequestServices.GetRequiredService<ManagementSecurity>()
         .Secrets(context.RequestServices.GetRequiredService<ISecretProvider>(), id, test);
     static SyncExecutor Executor(HttpContext context, string id, bool isTest, LocalTestSession? testSession = null) => new(
+        fingerprints: context.RequestServices.GetRequiredService<ContentFingerprintStore>(),
+        responseOutputOnly: true,
+        // RuntimeHttpBoundary owns the memory slot through HTTP response serialization.
         testSession: testSession,
         executionBudget: TimeSpan.FromSeconds(context.RequestServices.GetRequiredService<IConfiguration>().GetValue("Elwood:Sync:ExecutionBudgetSeconds", 60d)),
         secretProvider: testSession?.Mode == "mock" ? null : ScopedSecrets(context, id, isTest), stateStore: context.RequestServices.GetRequiredService<IStateStore>(),
@@ -337,4 +342,4 @@ record RevisionRequest(string ExpectedRevisionId);
 record DraftRequest(PipelineContent? Content);
 record ExecutionRequest(string PipelineId, JsonElement Payload, PipelineContent? Content, string? ExpectedRevisionId, string? TestMode, MockFixtures? Mocks);
 record ResumeRequest(bool AcknowledgeUncertain = false);
-record ReplayRequest(string? RevisionId = null, bool AcknowledgeUncertain = false);
+record ReplayRequest(string? RevisionId = null, bool AcknowledgeUncertain = false, bool ForceProcessing = false);

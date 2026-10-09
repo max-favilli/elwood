@@ -40,6 +40,12 @@ public sealed class ExecutionState
     public string? TriggerRef { get; set; }
     public string? TriggerSourceName { get; set; }
     public string? ReplayOf { get; set; }
+    public bool ForceProcessing { get; set; }
+    public bool SupersededByForcedReplay { get; set; }
+    public string? ContentFingerprint { get; set; }
+    public string? FingerprintKey { get; set; }
+    public string? DuplicateSource { get; set; }
+    public string? DuplicateOf { get; set; }
     public string? InputHash { get; set; }
     public int RetentionSeconds { get; set; } = 30 * 24 * 60 * 60;
     public DateTime? ExpiresAt { get; set; }
@@ -121,5 +127,6 @@ public enum ExecutionStatus
     Completed,
     Failed,
     Retrying,
-    AwaitingReview
+    AwaitingReview,
+    Skipped
 }

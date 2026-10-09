@@ -6,7 +6,9 @@ The central concept is the **IDM (Intermediate Data Model)** — a shared JSON d
 
 ## Current implementation limits
 
-Native Azure hosting is available through [the Azure installer](../infra/azure-small/README.md), with Blob/Table state and either Storage Queue or Service Bus **internal** scheduling. This does not add Service Bus source/destination YAML types. See [operations and capacity limits](azure-operations.md). Content-hash duplicate suppression is [specified separately](content-deduplication.md) and is not yet a YAML feature.
+Native Azure hosting is available through [the Azure installer](../infra/azure-small/README.md), with Blob/Table state and either Storage Queue or Service Bus **internal** scheduling. This does not add Service Bus source/destination YAML types. See [operations and capacity limits](azure-operations.md) and the [measured large-file profile](capacity-profile.md).
+
+Optional root `deduplication: { mode: skip, source: file, ttlSeconds: 2592000 }` suppresses identical raw file bytes after a successful integration. The default mode is `process`. Choose one Blob/HTTP GET file pull source; other pulls must depend on it. History defaults to 30 days independently of execution history. Duplicate executions have status `Skipped`; unfinished owners cause a recoverable conflict. Real/mock draft tests do not read or publish live fingerprints. Explicit replay can override suppression. See [file-content suppression](content-deduplication.md) for the complete contract and recovery boundaries.
 
 Pipeline `ttlSeconds` defaults to `2592000` (30 days), valid range `1`–`31536000`. It controls terminal execution-history retention and the default retention of delivered Blob objects. A `blobStorage` destination may override `ttlSeconds`; its clock starts at the write, independently of history expiry. Pipeline `maxExecutionSeconds` defaults to `86400`, maximum `604800`, and includes retries/manual resumes. An expired execution needs a new replay. Source-owned objects are never deleted by this policy. See [storage retention](storage-retention.md).
 

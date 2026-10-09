@@ -53,7 +53,7 @@ public sealed class BlobRetentionSnapshot
 /// Bounded small-installation ledger. Admission and registration are one atomic operation.
 /// Full ledger corruption fails closed; it must never be treated as an empty ledger.
 /// </summary>
-public abstract class BlobRetentionLedger(TimeProvider? timeProvider = null, int maxObjects = 2048, long maxBytes = 1024L * 1024 * 1024, int maxWritesPerHour = 1000)
+public abstract class BlobRetentionLedger(TimeProvider? timeProvider = null, int maxObjects = 2048, long maxBytes = 1024L * 1024 * 1024, int maxWritesPerHour = 1000, long maxBytesPerHour = 64L * 1024 * 1024)
 {
     public Func<CancellationToken, Task>? VerifyAdmissionAsync { get; set; }
     protected static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -62,7 +62,7 @@ public abstract class BlobRetentionLedger(TimeProvider? timeProvider = null, int
     public abstract Task<BlobRetentionSnapshot> ReadAsync(CancellationToken token = default);
     protected abstract Task ChangeAsync(Action<BlobRetentionSnapshot> change, CancellationToken token);
 
-    public async Task RegisterAsync(BlobRetentionEntry entry, CancellationToken token = default, bool allowExisting = false)
+    public virtual async Task RegisterAsync(BlobRetentionEntry entry, CancellationToken token = default, bool allowExisting = false)
     {
         if (!allowExisting && VerifyAdmissionAsync is not null) await VerifyAdmissionAsync(token);
         await ChangeAsync(state =>
@@ -86,21 +86,21 @@ public abstract class BlobRetentionLedger(TimeProvider? timeProvider = null, int
         if (state.WindowStartedAt <= Now.AddHours(-1)) { state.WindowStartedAt = Now; state.WindowWrites = 0; state.WindowBytes = 0; }
         if (state.WindowWrites >= maxWritesPerHour) throw new InvalidOperationException("Blob hourly write limit reached.");
         var writtenBytes = entry.Kind == "execution" ? 0 : entry.Bytes; // State reservation is capacity, not an upload.
-        if (state.WindowBytes > 64L * 1024 * 1024 - writtenBytes) throw new InvalidOperationException("Blob hourly byte limit reached.");
+        if (state.WindowBytes > maxBytesPerHour - writtenBytes) throw new InvalidOperationException("Blob hourly byte limit reached.");
         state.WindowWrites++;
         state.WindowBytes += writtenBytes;
         state.Entries.Add(entry.Id, entry);
         }, token);
     }
 
-    public Task UpdateAsync(string id, Action<BlobRetentionEntry> update, CancellationToken token = default) => ChangeAsync(state =>
+    public virtual Task UpdateAsync(string id, Action<BlobRetentionEntry> update, CancellationToken token = default) => ChangeAsync(state =>
     {
         if (!state.Entries.TryGetValue(id, out var entry)) throw new InvalidOperationException("Output cleanup registration is missing.");
         update(entry);
     }, token);
 
-    public Task RemovedAsync(string id, CancellationToken token = default) => ChangeAsync(state => state.Entries.Remove(id), token);
-    public Task RemoveReservationAsync(string executionId, string? generation, CancellationToken token = default) => ChangeAsync(state =>
+    public virtual Task RemovedAsync(string id, CancellationToken token = default) => ChangeAsync(state => state.Entries.Remove(id), token);
+    public virtual Task RemoveReservationAsync(string executionId, string? generation, CancellationToken token = default) => ChangeAsync(state =>
     {
         var id = "execution-" + executionId;
         if (generation is not null && state.Entries.TryGetValue(id, out var entry) && entry.Generation == generation)
@@ -109,7 +109,7 @@ public abstract class BlobRetentionLedger(TimeProvider? timeProvider = null, int
 
     // Admission already charged two 4 MiB slots. Reusing a slot is safe only while
     // the leased checkpoint has not committed it; the state adapter enforces that.
-    public Task ReserveEmergencyCheckpointAsync(string executionId, bool deleting, CancellationToken token = default) => ChangeAsync(state =>
+    public virtual Task ReserveEmergencyCheckpointAsync(string executionId, bool deleting, CancellationToken token = default) => ChangeAsync(state =>
     {
         if (!state.Entries.TryGetValue("execution-" + executionId, out var entry) || entry.Kind != "execution" ||
             entry.Bytes < 12 * 1024 * 1024 || entry.ObjectSlots < 3)
@@ -117,9 +117,11 @@ public abstract class BlobRetentionLedger(TimeProvider? timeProvider = null, int
         if (deleting) entry.TombstoneSlotUsed = true;
         else entry.TerminalSlotUsed = true;
     }, token);
-    public Task SweptAsync(CancellationToken token = default) => ChangeAsync(state => state.LastSweepAt = Now, token);
+    public virtual Task SweptAsync(CancellationToken token = default) => ChangeAsync(state => state.LastSweepAt = Now, token);
+    public virtual Task MarkCheckedAsync(string id, CancellationToken token = default) => ChangeAsync(state =>
+    { if (state.Entries.TryGetValue(id, out var entry)) entry.LastAttemptAt = Now; }, token);
 
-    public Task ExpireDocumentsAsync(string executionId, CancellationToken token = default) => ChangeAsync(state =>
+    public virtual Task ExpireDocumentsAsync(string executionId, CancellationToken token = default) => ChangeAsync(state =>
     {
         foreach (var entry in state.Entries.Values.Where(e => e.Kind is "document" or "checkpoint" && e.ExecutionId == executionId))
             entry.ExpiresAt = Now;
@@ -146,11 +148,13 @@ public abstract class BlobRetentionLedger(TimeProvider? timeProvider = null, int
 
 /// <summary>ETag compare-and-swap keeps admission and ownership atomic across scaled workers.</summary>
 public sealed class AzureBlobRetentionLedger(BlobClient blob, TimeProvider? timeProvider = null,
-    int maxObjects = 2048, long maxBytes = 1024L * 1024 * 1024, int maxWritesPerHour = 1000)
-    : BlobRetentionLedger(timeProvider, maxObjects, maxBytes, maxWritesPerHour)
+    int maxObjects = 2048, long maxBytes = 1024L * 1024 * 1024, int maxWritesPerHour = 1000, long maxBytesPerHour = 64L * 1024 * 1024,
+    Func<CancellationToken, Task>? verifyLayout = null)
+    : BlobRetentionLedger(timeProvider, maxObjects, maxBytes, maxWritesPerHour, maxBytesPerHour)
 {
     private async Task<(BlobRetentionSnapshot State, ETag? ETag)> Read(CancellationToken token)
     {
+        if (verifyLayout is not null) await verifyLayout(token);
         try
         {
             var response = await blob.DownloadStreamingAsync(cancellationToken: token);
@@ -172,10 +176,12 @@ public sealed class AzureBlobRetentionLedger(BlobClient blob, TimeProvider? time
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token); budget.CancelAfter(TimeSpan.FromSeconds(30));
         for (var attempt = 0; attempt < 12; attempt++)
         {
-            var (state, etag) = await Read(budget.Token); change(state);
+            var (state, etag) = await Read(budget.Token);
+            var before = Encode(state); change(state); var after = Encode(state);
+            if (before.AsSpan().SequenceEqual(after)) return;
             try
             {
-                await blob.UploadAsync(BinaryData.FromBytes(Encode(state)), new BlobUploadOptions
+                await blob.UploadAsync(BinaryData.FromBytes(after), new BlobUploadOptions
                 {
                     Conditions = etag is null ? new() { IfNoneMatch = ETag.All } : new() { IfMatch = etag.Value },
                     HttpHeaders = new() { ContentType = "application/json" }

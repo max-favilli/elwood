@@ -343,6 +343,10 @@ public sealed class SourceInput
 /// </summary>
 public sealed class PipelineResult
 {
+    public string? DuplicateOf { get; private init; }
+    public IReadOnlyDictionary<string, long> OmittedOutputs { get; init; } = new Dictionary<string, long>();
+    public bool IsSkipped => DuplicateOf is not null;
+    public static PipelineResult Skipped(string executionId, string duplicateOf) => new(true, null, null, executionId) { DuplicateOf = duplicateOf, ResponseStatusCode = 200 };
     public bool IsSuccess { get; }
     public string? ExecutionId { get; }
     public IReadOnlyDictionary<string, IElwoodValue> Outputs { get; }
@@ -363,8 +367,8 @@ public sealed class PipelineResult
         Errors = errors ?? [];
     }
 
-    public static PipelineResult Success(Dictionary<string, IElwoodValue> outputs, string? executionId = null, int? responseStatusCode = null)
-        => new(true, outputs, null, executionId) { ResponseStatusCode = responseStatusCode };
+    public static PipelineResult Success(Dictionary<string, IElwoodValue> outputs, string? executionId = null, int? responseStatusCode = null, Dictionary<string, long>? omittedOutputs = null)
+        => new(true, outputs, null, executionId) { ResponseStatusCode = responseStatusCode, OmittedOutputs = omittedOutputs ?? [] };
     public static PipelineResult Failed(List<string> errors, string? executionId = null, int? responseStatusCode = null, IElwoodValue? failureResponse = null)
         => new(false, null, errors, executionId) { ResponseStatusCode = responseStatusCode, FailureResponse = failureResponse };
 }

@@ -26,3 +26,9 @@ public interface IDocumentStore
     Task DeleteAsync(string key);
     Task<bool> ExistsAsync(string key);
 }
+
+public sealed record DocumentPreview(bool Available, string? Content, long Bytes, bool Omitted);
+public interface IDocumentPreviewStore
+{
+    Task<DocumentPreview> PreviewAsync(string key, int maximumBytes);
+}

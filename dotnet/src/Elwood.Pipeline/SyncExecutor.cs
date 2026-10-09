@@ -16,19 +16,21 @@ public sealed class SyncExecutor
     private readonly AsyncExecutor _runner;
     private readonly bool _durable;
     private readonly TimeSpan _executionBudget;
+    private readonly bool _responseOutputOnly;
     public SyncExecutor(ISecretProvider? secretProvider = null, IStateStore? stateStore = null,
         IDocumentStore? documentStore = null, IEnumerable<ISourceConnector>? sourceConnectors = null,
         IEnumerable<IDestinationConnector>? destinationConnectors = null, ILogger<SyncExecutor>? logger = null,
-        ElwoodEngine? engine = null, LocalTestSession? testSession = null, TimeSpan? executionBudget = null)
+        ElwoodEngine? engine = null, LocalTestSession? testSession = null, TimeSpan? executionBudget = null, ContentFingerprintStore? fingerprints = null, ExecutionConcurrencyGate? concurrency = null, bool responseOutputOnly = false)
     {
         _executionBudget = executionBudget ?? TimeSpan.FromSeconds(60);
+        _responseOutputOnly = responseOutputOnly;
         if (_executionBudget <= TimeSpan.Zero || _executionBudget > TimeSpan.FromMinutes(5))
             throw new ArgumentOutOfRangeException(nameof(executionBudget), "Sync execution budget must be positive and at most five minutes.");
         _durable = stateStore is IRecoverableStateStore && stateStore is not InMemoryStateStore && documentStore is not null;
         var states = stateStore ?? new InMemoryStateStore();
         _runner = new AsyncExecutor(states is IRecoverableStateStore ? states : new SynchronousStore(states),
             documentStore ?? new InMemoryDocumentStore(), new InMemoryStepQueue(), secretProvider,
-            sourceConnectors, destinationConnectors, engine, testSession);
+            sourceConnectors, destinationConnectors, engine, testSession, fingerprints: fingerprints, concurrency: concurrency);
     }
 
     public async Task<PipelineResult> ExecuteAsync(ParsedPipeline pipeline, IElwoodValue triggerPayload,
@@ -41,7 +43,7 @@ public sealed class SyncExecutor
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, budget.Token);
         var id = await _runner.StartAsync(pipeline, triggerPayload, triggerSourceName, isTest: isTest,
             triggerMetadata: triggerMetadata, durable: _durable, executionDeadlineAt: deadline, cancellationToken: lifetime.Token);
-        return await _runner.RunToCompletion(id, lifetime.Token, budget.Token);
+        return await _runner.RunToCompletion(id, lifetime.Token, budget.Token, _responseOutputOnly);
     }
 
     // Compatibility for sync-only embedding adapters. Never advertised as durable acceptance.

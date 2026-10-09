@@ -11,6 +11,9 @@ param managementTokenSha256 string
 param portalOrigins array = []
 @allowed(['storage', 'serviceBus'])
 param queueProvider string = 'storage'
+@allowed(['guarded', 'files-25m'])
+@description('files-25m reserves 4 GiB per active worker and uses partitioned retention accounting. Requires a fresh installation or explicit offline migration.')
+param capacityProfile string = 'guarded'
 @description('Creates a separately billed always-running B1 ingress host for external RabbitMQ.')
 param enableRabbitMqIngress bool = false
 @secure()
@@ -43,6 +46,7 @@ module runtime 'runtime.bicep' = {
     managementTokenSha256: managementTokenSha256
     portalOrigins: portalOrigins
     queueProvider: queueProvider
+    capacityProfile: capacityProfile
     serviceBusNamespace: queueProvider == 'serviceBus' ? '${busName}.servicebus.windows.net' : 'unused.servicebus.windows.net'
     enableRabbitMqIngress: enableRabbitMqIngress
     additionalSettings: additionalSettings

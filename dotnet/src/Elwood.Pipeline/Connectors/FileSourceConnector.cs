@@ -17,7 +17,10 @@ public sealed class FileSourceConnector : ISourceConnector
         if (!File.Exists(path))
             throw new FileNotFoundException($"Source file not found: {path}");
 
-        var content = await File.ReadAllTextAsync(path, cancellationToken);
+        var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+        using var reader = new StreamReader(new MemoryStream(bytes), detectEncodingFromByteOrderMarks: true);
+        var content = await reader.ReadToEndAsync(cancellationToken);
         var ext = Path.GetExtension(path).ToLowerInvariant();
         var format = ext switch
         {
@@ -27,6 +30,6 @@ public sealed class FileSourceConnector : ISourceConnector
             _ => "json"
         };
 
-        return new SourceFetchResult(content, format);
+        return new SourceFetchResult(content, format, contentSha256: hash);
     }
 }

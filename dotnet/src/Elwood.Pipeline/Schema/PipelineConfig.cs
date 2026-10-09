@@ -8,6 +8,7 @@ namespace Elwood.Pipeline.Schema;
 /// </summary>
 public sealed class PipelineConfig
 {
+    public ContentDeduplicationConfig? Deduplication { get; set; }
     [YamlMember(Alias = "version")]
     public int Version { get; set; } = 2;
 
@@ -335,6 +336,14 @@ public sealed class OutputConfig
     /// </summary>
     [YamlMember(Alias = "responseStatusCode")]
     public string? ResponseStatusCode { get; set; }
+}
+
+/// <summary>One primary file gates the integration before dependent connector calls.</summary>
+public sealed class ContentDeduplicationConfig
+{
+    public string Mode { get; set; } = "process";
+    public string? Source { get; set; }
+    public int TtlSeconds { get; set; } = 30 * 86400;
 }
 
 public sealed class RetryPolicy

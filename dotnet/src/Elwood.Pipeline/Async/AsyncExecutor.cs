@@ -27,23 +27,35 @@ public sealed class AsyncExecutor
     private readonly ExecutionOperations _operations;
     private readonly LocalTestSession? _test;
     private readonly TimeProvider _time;
+    private readonly ContentFingerprintStore? _fingerprints;
+    private readonly ExecutionConcurrencyGate? _concurrency;
     private DateTime Now => _time.GetUtcNow().UtcDateTime;
 
     public AsyncExecutor(IStateStore stateStore, IDocumentStore documentStore, IStepQueue stepQueue,
         ISecretProvider? secretProvider = null, IEnumerable<ISourceConnector>? sourceConnectors = null,
         IEnumerable<IDestinationConnector>? destinationConnectors = null, ElwoodEngine? engine = null,
-        LocalTestSession? testSession = null, TimeProvider? timeProvider = null)
+        LocalTestSession? testSession = null, TimeProvider? timeProvider = null, ContentFingerprintStore? fingerprints = null, ExecutionConcurrencyGate? concurrency = null)
     {
         _states = stateStore as IRecoverableStateStore ?? throw new ArgumentException("Queued execution requires a recoverable state store with cross-worker exclusion.");
         _documents = documentStore; _queue = stepQueue; _test = testSession; _time = timeProvider ?? TimeProvider.System;
-        _operations = new(documentStore, secretProvider, sourceConnectors, destinationConnectors, engine, testSession);
+        _fingerprints = fingerprints;
+        _concurrency = concurrency;
+        _operations = new(documentStore, secretProvider, sourceConnectors, destinationConnectors, engine, testSession) { InspectContent = InspectContent };
     }
 
-    public async Task<string> StartAsync(ParsedPipeline pipeline, IElwoodValue triggerPayload, string? triggerSourceName = null,
+    public Task<string> StartAsync(ParsedPipeline pipeline, IElwoodValue triggerPayload, string? triggerSourceName = null,
         string? idempotencyKey = null, string? replayOf = null, bool isTest = false, IElwoodValue? triggerMetadata = null, bool durable = true, DateTime? executionDeadlineAt = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) => StartCoreAsync(pipeline, triggerPayload, triggerSourceName,
+            idempotencyKey, replayOf, isTest, triggerMetadata, durable, executionDeadlineAt, cancellationToken);
+
+    private async Task<string> StartCoreAsync(ParsedPipeline pipeline, IElwoodValue triggerPayload, string? triggerSourceName = null,
+        string? idempotencyKey = null, string? replayOf = null, bool isTest = false, IElwoodValue? triggerMetadata = null, bool durable = true, DateTime? executionDeadlineAt = null,
+        CancellationToken cancellationToken = default, bool forceProcessing = false)
     {
         pipeline = PipelineSnapshot.Detach(pipeline);
+        if (forceProcessing && replayOf is null) throw new ArgumentException("Forced processing is available only through explicit replay.");
+        if (pipeline.Config.Deduplication is { Mode: "skip" } && !isTest && _test is null && _fingerprints is null)
+            throw new InvalidOperationException("Content deduplication requires a durable fingerprint store.");
         if (idempotencyKey is { Length: > 200 }) throw new ArgumentException("Idempotency-Key must be at most 200 characters.");
         var id = string.IsNullOrWhiteSpace(idempotencyKey) ? Guid.NewGuid().ToString() :
             "event-" + Hash((pipeline.PipelineId ?? pipeline.Config.Name) + "\n" + triggerSourceName + "\n" + idempotencyKey);
@@ -64,7 +76,7 @@ public sealed class AsyncExecutor
             ExecutionId = id, PipelineId = pipeline.PipelineId, RevisionId = pipeline.RevisionId,
             PipelineName = pipeline.Config.Name ?? "unknown", Status = ExecutionStatus.Running, StartedAt = Now,
             Durable = durable && !isTest && _test is null, IsTest = isTest || _test is not null, TestMode = _test?.Mode,
-            TriggerSourceName = triggerSourceName, ReplayOf = replayOf, InputHash = Hash(input),
+            TriggerSourceName = triggerSourceName, ReplayOf = replayOf, ForceProcessing = forceProcessing, InputHash = Hash(input),
             ExecutionDeadlineAt = executionDeadlineAt,
             LifetimeExpiresAt = Now.AddSeconds(Math.Clamp(pipeline.Config.MaxExecutionSeconds, 1, RetentionPolicy.MaximumExecutionSeconds)),
             RetentionSeconds = pipeline.Config.TtlSeconds ?? 30 * 24 * 60 * 60,
@@ -93,6 +105,7 @@ public sealed class AsyncExecutor
 
     public async Task ExecuteStepAsync(StepMessage message, CancellationToken cancellationToken = default)
     {
+        using var slot = _concurrency is null ? null : await _concurrency.EnterAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         await using var claim = await _states.TryClaimAsync(message.ExecutionId, cancellationToken);
         if (claim is null) return;
@@ -111,7 +124,7 @@ public sealed class AsyncExecutor
     private async Task ExecuteClaimedStepAsync(StepMessage message, IExecutionClaim claim, CancellationToken cancellationToken)
     {
         var state = await _states.GetExecutionAsync(message.ExecutionId);
-        if (state is null || state.Deleting || state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) return;
+        if (state is null || state.Deleting || state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview or ExecutionStatus.Skipped) return;
         if (await StopExpiredLifetime(state, claim)) return;
         using var executionBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         executionBudget.CancelAfter(Lifetime(state) - Now);
@@ -153,6 +166,24 @@ public sealed class AsyncExecutor
             await Save(state, claim);
             cancellationToken.ThrowIfCancellationRequested();
             await Advance(state, pipeline, claim);
+        }
+        catch (DuplicateContentException duplicate) when (!claim.OwnershipLost.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            attempt.Status = duplicate.Completed ? "Skipped" : "Conflict"; attempt.CompletedAt = Now;
+            step.Diagnostics.Add(new() { Reference = "deduplication", Severity = duplicate.Completed ? "info" : "error", Message = duplicate.Message });
+            attempt.Diagnostics = [.. step.Diagnostics]; step.CompletedAt = Now;
+            if (duplicate.Completed)
+            {
+                foreach (var remaining in state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values).Where(s => s.Status != ExecutionStatus.Completed))
+                { remaining.Status = ExecutionStatus.Skipped; remaining.CompletedAt = Now; remaining.NextAttemptAt = null; }
+                Terminal(state, ExecutionStatus.Skipped); state.ResponseStatusCode = 200;
+            }
+            else
+            {
+                step.Status = ExecutionStatus.AwaitingReview; step.Errors = [duplicate.Message]; state.Errors = [duplicate.Message];
+                Terminal(state, ExecutionStatus.AwaitingReview); state.ResponseStatusCode = 409;
+            }
+            await Save(state, claim);
         }
         catch (ExecutionOwnershipLostException) { throw; }
         catch (Exception ex) when (claim.OwnershipLost.IsCancellationRequested)
@@ -216,6 +247,28 @@ public sealed class AsyncExecutor
         }
     }
 
+    private sealed class DuplicateContentException(string owner, bool completed) : Exception(
+        completed ? $"Identical content was already processed by execution '{owner}'." : $"Identical content is owned by execution '{owner}', which has not completed. Resume this execution after resolving the original, or explicitly replay the original.")
+    { public string Owner => owner; public bool Completed => completed; }
+
+    private async Task InspectContent(ExecutionState state, PipelineContentDto pipeline, SourceFetchResult fetched, IExecutionClaim claim, CancellationToken token)
+    {
+        var config = pipeline.Yaml.Deduplication!;
+        // Both real and mock tests have execution-local history: they never suppress or reserve live deliveries.
+        if (state.IsTest) return;
+        var hash = fetched.ContentSha256;
+        if (hash is null || hash.Length != 64 || !hash.All(Uri.IsHexDigit))
+            throw new InvalidOperationException("The source connector did not supply a SHA-256 fingerprint of the original bytes.");
+        state.ContentFingerprint = hash.ToLowerInvariant(); state.DuplicateSource = config.Source;
+        state.FingerprintKey = ContentFingerprintStore.Key(state.PipelineId ?? state.PipelineName, config.Source!, state.ContentFingerprint);
+        // Persist the claim intent first: even a crash during acquisition leaves a discoverable cleanup/recovery owner.
+        await claim.SaveAsync(state);
+        var decision = await _fingerprints!.AcquireAsync(state.FingerprintKey, state.ExecutionId,
+            Lifetime(state).AddSeconds(config.TtlSeconds), state.ForceProcessing, state.ReplayOf, token);
+        if (!decision.Owned) { state.DuplicateOf = decision.Owner; throw new DuplicateContentException(decision.Owner, decision.Completed); }
+        state.DuplicateOf = null;
+    }
+
     private async Task Advance(ExecutionState state, PipelineContentDto pipeline, IExecutionClaim claim)
     {
         await claim.ValidateAsync();
@@ -229,6 +282,8 @@ public sealed class AsyncExecutor
         if (state.Sources.Values.All(s => s.Status == ExecutionStatus.Completed) && state.Outputs.Values.All(s => s.Status == ExecutionStatus.Completed))
         {
             state.ResponseStatusCode = pipeline.Yaml.ResponseOutput is { } response ? state.Outputs[response.Name].ResponseStatusCode : null;
+            if (state.FingerprintKey is not null && !state.IsTest)
+                await _fingerprints!.CompleteAsync(state.FingerprintKey, state.ExecutionId, pipeline.Yaml.Deduplication!.TtlSeconds);
             Terminal(state, ExecutionStatus.Completed);
         }
         await Save(state, claim);
@@ -238,16 +293,17 @@ public sealed class AsyncExecutor
     /// <summary>Recover dropped queue hints, checkpoint-to-publish gaps and interrupted attempts.</summary>
     public async Task RecoverAsync(CancellationToken cancellationToken = default)
     {
+        using var slot = _concurrency is null ? null : await _concurrency.EnterAsync(cancellationToken);
         foreach (var snapshot in await _states.ListRecoverableAsync())
         {
             cancellationToken.ThrowIfCancellationRequested();
             if ((!snapshot.Durable && snapshot.ExecutionDeadlineAt is null) ||
-                snapshot.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview || snapshot.Deleting) continue;
+                snapshot.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview or ExecutionStatus.Skipped || snapshot.Deleting) continue;
             await using var claim = await _states.TryClaimAsync(snapshot.ExecutionId, cancellationToken);
             if (claim is null) continue;
             await claim.ValidateAsync(cancellationToken);
             var state = await _states.GetExecutionAsync(snapshot.ExecutionId);
-            if (state is null || state.Deleting || state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) continue;
+            if (state is null || state.Deleting || state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview or ExecutionStatus.Skipped) continue;
             if (await StopExpiredLifetime(state, claim)) continue;
             if (state.ExecutionDeadlineAt is not null)
             {
@@ -299,6 +355,7 @@ public sealed class AsyncExecutor
     {
         await using var claim = await _states.TryClaimAsync(id) ?? throw new RecoveryConflictException("An attempt is still running.");
         var state = await _states.GetExecutionAsync(id) ?? throw new KeyNotFoundException("Execution not found.");
+        if (state.SupersededByForcedReplay) throw new RecoveryConflictException("This execution was fenced by an explicit forced replay and cannot resume.");
         if (state.RecoveryCapacityExhausted) throw new RecoveryConflictException("This execution used reserved recovery capacity. Reclaim storage and explicitly replay it instead of resuming.");
         if (!state.Durable || state.IsTest || state.Deleting || state.ExpiresAt <= Now) throw new RecoveryConflictException("This execution cannot be resumed.");
         if (Lifetime(state) <= Now) throw new RecoveryConflictException("Execution lifetime expired. Replay to start a new execution.");
@@ -319,7 +376,7 @@ public sealed class AsyncExecutor
         await Notify(Ready(state, Stages(pipeline)));
     }
 
-    public async Task<string> ReplayAsync(string id, ParsedPipeline? revision = null, bool acknowledgeUncertain = false)
+    public async Task<string> ReplayAsync(string id, ParsedPipeline? revision = null, bool acknowledgeUncertain = false, bool forceProcessing = false)
     {
         await using var claim = await _states.TryClaimAsync(id) ?? throw new RecoveryConflictException("An attempt is still running.");
         var state = await _states.GetExecutionAsync(id) ?? throw new KeyNotFoundException("Execution not found.");
@@ -334,8 +391,14 @@ public sealed class AsyncExecutor
         if (state.TriggerSourceName is not null && !pipeline.Config.Sources.Any(s => s.Name == state.TriggerSourceName && s.Trigger is "http" or "http-request" or "queue"))
             throw new ArgumentException("The replay revision must retain the original trigger source.");
         await claim.ValidateAsync();
-        return await StartAsync(pipeline, await _operations.Read(state.TriggerRef, "trigger payload"), state.TriggerSourceName, replayOf: id,
-            triggerMetadata: original.TriggerMetadata is null ? null : JsonNodeValueFactory.Instance.Parse(original.TriggerMetadata), cancellationToken: claim.OwnershipLost);
+        if (forceProcessing)
+        {
+            // Serialize with resume/worker ownership before permitting a pending fingerprint takeover.
+            state.SupersededByForcedReplay = true;
+            await Save(state, claim);
+        }
+        return await StartCoreAsync(pipeline, await _operations.Read(state.TriggerRef, "trigger payload"), state.TriggerSourceName, replayOf: id,
+            triggerMetadata: original.TriggerMetadata is null ? null : JsonNodeValueFactory.Instance.Parse(original.TriggerMetadata), cancellationToken: claim.OwnershipLost, forceProcessing: forceProcessing);
     }
 
     public async Task<int> PruneAsync(CancellationToken cancellationToken = default)
@@ -355,6 +418,8 @@ public sealed class AsyncExecutor
                 if (state is null || state.Status is ExecutionStatus.Running or ExecutionStatus.Retrying or ExecutionStatus.Pending || !(state.ExpiresAt <= Now)) continue;
                 if (!state.Deleting) { state.Deleting = true; await claim.SaveAsync(state); } // One restartable tombstone, including cleanup retries.
                 await claim.ValidateAsync(cancellationToken);
+                if (state.FingerprintKey is not null && _fingerprints is not null)
+                    await _fingerprints.ReleasePendingAsync(state.FingerprintKey, state.ExecutionId, cancellationToken);
                 await documents.DeleteExecutionAsync(state.ExecutionId);
                 await claim.DeleteAsync(); deleted++;
             }
@@ -365,13 +430,20 @@ public sealed class AsyncExecutor
                 failures.Add(new InvalidOperationException($"Retention cleanup failed for execution '{snapshot.ExecutionId}'.", ex));
             }
         }
-        if (_states is IArtifactMaintenance stateMaintenance) await stateMaintenance.CleanupArtifactsAsync();
-        if (_documents is IArtifactMaintenance documentMaintenance) await documentMaintenance.CleanupArtifactsAsync();
+        async Task Maintain(Func<Task> action)
+        {
+            try { await action(); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception ex) { failures.Add(ex); }
+        }
+        if (_fingerprints is not null) await Maintain(() => _fingerprints.PruneAsync(cancellationToken));
+        if (_states is IArtifactMaintenance stateMaintenance) await Maintain(stateMaintenance.CleanupArtifactsAsync);
+        if (_documents is IArtifactMaintenance documentMaintenance) await Maintain(documentMaintenance.CleanupArtifactsAsync);
         if (failures.Count > 0) throw new AggregateException($"Retention removed {deleted} execution(s); {failures.Count} cleanup(s) failed and will be retried.", failures);
         return deleted;
     }
 
-    internal async Task<PipelineResult> RunToCompletion(string id, CancellationToken cancellationToken = default, CancellationToken budgetCancellation = default)
+    internal async Task<PipelineResult> RunToCompletion(string id, CancellationToken cancellationToken = default, CancellationToken budgetCancellation = default, bool responseOutputOnly = false)
     {
         // Hold ownership across retry waits as well as connector calls. Recovery cannot
         // steal a pending sync step or escape the request's cancellation token.
@@ -394,17 +466,33 @@ public sealed class AsyncExecutor
         List<List<string>>? stages = null;
         try
         {
+            using var slot = _concurrency is null ? null : await _concurrency.EnterAsync(cancellationToken);
             while (true)
             {
                 await claim.ValidateAsync();
                 var state = await _states.GetExecutionAsync(id) ?? throw new InvalidOperationException("Execution disappeared.");
-                if (state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview)
+                if (state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview or ExecutionStatus.Skipped)
                 {
+                    if (state.Status == ExecutionStatus.Skipped) return PipelineResult.Skipped(id, state.DuplicateOf!);
                     if (state.Status != ExecutionStatus.Completed) return PipelineResult.Failed(state.Errors, id, state.ResponseStatusCode,
                         state.FailureResponseRef is null ? null : await _operations.Read(state.FailureResponseRef, "failure response"));
                     var outputs = new Dictionary<string, IElwoodValue>();
-                    foreach (var (name, step) in state.Outputs) outputs[name] = await _operations.Read(step.DocumentRef, "output");
-                    return PipelineResult.Success(outputs, id, state.ResponseStatusCode);
+                    var omitted = new Dictionary<string, long>(); var remainingPreview = 256 * 1024;
+                    var responseName = responseOutputOnly && !state.IsTest ? (await Load(state)).Yaml.ResponseOutput?.Name : null;
+                    foreach (var (name, step) in state.Outputs)
+                    {
+                        if (responseName is not null && name != responseName) continue;
+                        if (state.IsTest && _documents is IDocumentPreviewStore previews)
+                        {
+                            var preview = await previews.PreviewAsync(step.DocumentRef!, Math.Min(64 * 1024, remainingPreview));
+                            if (preview.Omitted) { omitted[name] = preview.Bytes; continue; }
+                            if (!preview.Available || preview.Content is null) throw new InvalidOperationException("Stored output is missing.");
+                            remainingPreview -= (int)preview.Bytes;
+                            outputs[name] = JsonNodeValueFactory.Instance.Parse(preview.Content);
+                        }
+                        else outputs[name] = await _operations.Read(step.DocumentRef, "output");
+                    }
+                    return PipelineResult.Success(outputs, id, state.ResponseStatusCode, omitted);
                 }
                 cancellationToken.ThrowIfCancellationRequested();
                 if (state.ExecutionDeadlineAt <= Now)
@@ -452,7 +540,7 @@ public sealed class AsyncExecutor
 
     private async Task StopSync(ExecutionState state, IExecutionClaim claim, bool expired, string? reason = null)
     {
-        if (state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) return;
+        if (state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview or ExecutionStatus.Skipped) return;
         var message = reason ?? (expired ? "Synchronous execution budget exceeded; no further automatic attempts will run."
             : "Synchronous execution canceled by the caller or host; no further automatic attempts will run.");
         var uncertain = false;
@@ -491,7 +579,7 @@ public sealed class AsyncExecutor
                 state.TestContextRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/test", _test.Serialize(_testInput));
                 _savedTestCallCount = _test.Calls.Count;
             }
-            catch (Exception ex) when (state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview &&
+            catch (Exception ex) when (state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview or ExecutionStatus.Skipped &&
                 ex is not ExecutionOwnershipLostException && !claim.OwnershipLost.IsCancellationRequested)
             { state.Errors.Add("Latest test inspection capture could not be stored (" + ex.GetType().Name + "); prior capture retained."); }
         }

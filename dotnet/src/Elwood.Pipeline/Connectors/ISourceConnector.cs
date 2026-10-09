@@ -18,14 +18,16 @@ public interface ISourceConnector
 public sealed class SourceFetchResult
 {
     public System.Text.Json.Nodes.JsonObject? Metadata { get; }
+    public string? ContentSha256 { get; }
     public string Content { get; }
     public string ContentType { get; }
     public int? StatusCode { get; }
     public Dictionary<string, string>? Headers { get; }
 
     public SourceFetchResult(string content, string contentType = "json",
-        Dictionary<string, string>? headers = null, int? statusCode = null, System.Text.Json.Nodes.JsonObject? metadata = null)
+        Dictionary<string, string>? headers = null, int? statusCode = null, System.Text.Json.Nodes.JsonObject? metadata = null, string? contentSha256 = null)
     {
+        ContentSha256 = contentSha256;
         Metadata = metadata;
         Content = content;
         ContentType = contentType;

@@ -128,6 +128,26 @@ public sealed class PipelineParser
     public static List<string> ValidateExecutionConfig(PipelineConfig config, bool fileInputs = false)
     {
         var errors = new List<string>();
+        if (config.Deduplication is { } dedup)
+        {
+            if (dedup.Mode is not ("process" or "skip")) errors.Add("deduplication.mode must be process or skip.");
+            if (dedup.TtlSeconds is < 1 or > Storage.RetentionPolicy.MaximumSeconds) errors.Add("deduplication.ttlSeconds must be between 1 second and 365 days.");
+            if (dedup.Mode == "skip")
+            {
+                if (fileInputs) errors.Add("Content deduplication requires the durable runtime; the offline file-input CLI has no shared fingerprint history.");
+                var primary = config.Sources.FirstOrDefault(s => s.Name == dedup.Source);
+                if (primary is null || primary.Trigger != "pull" || primary.From is null ||
+                    !(primary.From.BlobStorage is not null || primary.From.FileShare is not null || primary.From.Http is { Method: "GET" }))
+                    errors.Add("deduplication.source must name a pull source using blobStorage, local fileShare or HTTP GET.");
+                else
+                {
+                    bool DependsOn(SourceConfig source, HashSet<string> seen) => source.GetDependencies().Any(name =>
+                        name == primary.Name || seen.Add(name) && config.Sources.FirstOrDefault(s => s.Name == name) is { } dependency && DependsOn(dependency, seen));
+                    foreach (var source in config.Sources.Where(s => s.Trigger == "pull" && s != primary))
+                        if (!DependsOn(source, [])) errors.Add($"Source '{source.Name}' must depend on deduplication source '{primary.Name}' before making connector calls.");
+                }
+            }
+        }
         if (config.Version != 2) errors.Add("Only pipeline version 2 is supported.");
         if (config.Sources.Count == 0) errors.Add("At least one source is required.");
         if (config.Join is not null) errors.Add("Pipeline 'join' is not implemented; merge data explicitly in a map.");

@@ -14,11 +14,16 @@ test('durable HTTP acceptance, process restart, retry, resume, replay and recove
   const admin = 'durable-admin';
   let child, base, logs = '';
   let sourceCalls = 0, deliveryCalls = 0, crashCalls = 0;
+  let duplicateDeliveries = 0;
   const delivered = [], keys = [];
   const upstream = createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk;
     res.setHeader('Content-Type', 'application/json');
-    if (req.url === '/source') {
+    if (req.url.startsWith('/identical-file/')) {
+      res.setHeader('ETag', '"' + req.url.split('/').at(-1) + '"'); res.end('{"sku":42}');
+    } else if (req.url === '/dedup-delivery') {
+      duplicateDeliveries++; res.end('{"accepted":true}');
+    } else if (req.url === '/source') {
       sourceCalls++; keys.push(req.headers['idempotency-key']);
       if (sourceCalls === 1) { res.statusCode = 503; res.end('{"error":"temporary"}'); }
       else res.end('{"remoteId":"remote-42"}');
@@ -72,7 +77,7 @@ test('durable HTTP acceptance, process restart, retry, resume, replay and recove
     try {
       return await until(async () => {
         const response = await request('/api/executions/' + id); last = await response.json();
-        if ([2, 3, 5].includes(last.status) && last.status !== status)
+        if ([2, 3, 5, 6].includes(last.status) && last.status !== status)
           assert.fail(`Unexpected terminal execution: ${JSON.stringify(last)}`);
         return last.status === status ? last : null;
       }, `Execution ${id} did not reach status ${status}`);
@@ -206,6 +211,48 @@ outputs:
     await publish('sync-failure', failure);
     const response = await trigger('sync-failure');
     assert.equal(response.status, 502); assert.equal((await response.json()).failedStep, 'remote');
+
+    const filePipeline = { yaml: `name: identical-files
+mode: sync
+deduplication: { mode: skip, source: file }
+sources:
+  - { name: input, trigger: http, endpoint: /identical-files, map: '{ event: $ }' }
+  - name: file
+    trigger: pull
+    depends: input
+    from:
+      http: { url: '${remote}/identical-file/{$idm.event.path}' }
+    map: '{ file: $ }'
+outputs:
+  - name: result
+    response: true
+    map: '$idm.file'
+    destinations:
+      http:
+        - { url: '${remote}/dedup-delivery' }
+`, scripts: {} };
+    await publish('identical-files', filePipeline);
+    const firstFile = await trigger('identical-files', null, { path: 'one.json' });
+    assert.equal(firstFile.status, 200); assert.deepEqual(await firstFile.json(), { sku: 42 });
+    await stop(); await start(true); // fingerprint history survives the API process
+    const repeatedFile = await trigger('identical-files', null, { path: 'renamed.json' });
+    assert.equal(repeatedFile.status, 200);
+    const skipped = await repeatedFile.json(); assert.equal(skipped.skipped, true);
+    assert.equal((await stateWhen(skipped.executionId, 6)).duplicateOf, skipped.duplicateOf);
+    assert.equal(duplicateDeliveries, 1);
+    const ordinaryReplay = await request(`/api/executions/${skipped.duplicateOf}/replay`, 'POST', {});
+    assert.equal(ordinaryReplay.status, 202); await stateWhen((await ordinaryReplay.json()).executionId, 6);
+    assert.equal(duplicateDeliveries, 1);
+    const forceReplay = await request(`/api/executions/${skipped.executionId}/replay`, 'POST', { forceProcessing: true });
+    assert.equal(forceReplay.status, 202);
+    const forced = await stateWhen((await forceReplay.json()).executionId, 2);
+    assert.equal(forced.forceProcessing, true); assert.equal(forced.replayOf, skipped.executionId);
+    assert.equal(duplicateDeliveries, 2);
+    const realTest = await request('/api/executions', 'POST', { pipelineId: 'identical-files', payload: { path: 'test.json' }, testMode: 'real' });
+    assert.equal(realTest.status, 200); assert.equal((await realTest.json()).success, true);
+    const afterTest = await (await trigger('identical-files', null, { path: 'another.json' })).json();
+    assert.equal(afterTest.skipped, true); assert.equal(afterTest.duplicateOf, forced.executionId);
+    assert.equal(duplicateDeliveries, 3);
   } finally {
     await stop(); upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve));
     assert.ok(basename(root).startsWith('elwood-durable-api-'));

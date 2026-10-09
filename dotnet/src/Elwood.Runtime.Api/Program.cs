@@ -32,6 +32,7 @@ builder.Services.AddSingleton<JsonNodeValueFactory>(_ => JsonNodeValueFactory.In
 builder.Services.AddSingleton<IDeploymentStore>(sp => new FileSystemDeploymentStore(sp.GetRequiredService<IPipelineStore>(), Path.Combine(stateDir, "deployments"), sp.GetRequiredService<ILogger<FileSystemDeploymentStore>>()));
 builder.Services.AddSingleton(new ManagementSecurity(builder.Configuration, stateDir));
 builder.Services.AddSingleton<RuntimeStepQueue>();
+builder.Services.AddSingleton<ContentFingerprintStore>(new FileContentFingerprintStore(Path.Combine(stateDir, "fingerprints")));
 builder.Services.AddSingleton<DurableRuntime>();
 builder.Services.AddHostedService<ExecutionRecoveryWorker>();
 builder.Services.AddHostedService<ExecutionRetentionWorker>();

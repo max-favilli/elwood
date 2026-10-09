@@ -21,6 +21,7 @@ internal sealed class ExecutionOperations
     private readonly List<ISourceConnector> _sources;
     private readonly List<IDestinationConnector> _destinations;
     private readonly LocalTestSession? _test;
+    public Func<ExecutionState, PipelineContentDto, SourceFetchResult, IExecutionClaim, CancellationToken, Task>? InspectContent { get; set; }
 
     public ExecutionOperations(IDocumentStore documents, ISecretProvider? secrets,
         IEnumerable<ISourceConnector>? sources, IEnumerable<IDestinationConnector>? destinations, ElwoodEngine? engine, LocalTestSession? test)
@@ -92,7 +93,7 @@ internal sealed class ExecutionOperations
                 // Commit a successful external response before mapping. A failed map/resume must not repeat the write.
                 var checkpoint = new SourceFetchResult(fetched.Content, fetched.ContentType,
                     fetched.Headers?.ToDictionary(h => h.Key, h => string.Join(", ", HttpCallCapture.SafeHeader(h.Key, [h.Value]))),
-                    fetched.StatusCode, fetched.Metadata);
+                    fetched.StatusCode, fetched.Metadata, fetched.ContentSha256);
                 try
                 {
                     step.FetchedRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/fetched", JsonSerializer.Serialize(checkpoint));
@@ -102,6 +103,8 @@ internal sealed class ExecutionOperations
                 catch (Exception ex) when (ex is not OperationCanceledException && !claim.OwnershipLost.IsCancellationRequested)
                 { throw CheckpointFailure(attempt, ex); }
             }
+            if (pipeline.Yaml.Deduplication is { Mode: "skip" } dedup && dedup.Source == config.Name && InspectContent is not null)
+                await InspectContent(state, pipeline, fetched, claim, cancellationToken);
             payload = fetched.ContentType is "csv" or "txt" or "xml" or "text" ? _factory.CreateString(fetched.Content) : _factory.Parse(fetched.Content);
         }
         else throw new InvalidOperationException($"Source '{config.Name}' has no trigger data or pull configuration.");

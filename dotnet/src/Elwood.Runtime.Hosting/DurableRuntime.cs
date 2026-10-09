@@ -29,9 +29,9 @@ public sealed class RuntimeStepQueue : IStepQueue
 }
 
 public sealed class DurableRuntime(IStateStore states, IDocumentStore documents, IStepQueue queue,
-    ManagementSecurity security, ISecretProvider secrets, RuntimeConnectors connectors)
+    ManagementSecurity security, ISecretProvider secrets, RuntimeConnectors connectors, ContentFingerprintStore? fingerprints = null, ExecutionConcurrencyGate? concurrency = null)
 {
-    public AsyncExecutor Runner(string? pipelineId = null) => new(states, documents, queue,
+    public AsyncExecutor Runner(string? pipelineId = null) => new(states, documents, queue, fingerprints: fingerprints, concurrency: concurrency,
         secretProvider: pipelineId is null ? new ScopedSecretProvider(secrets, []) : security.Secrets(secrets, pipelineId, false),
         sourceConnectors: connectors.Sources(pipelineId ?? "", false), destinationConnectors: connectors.Destinations(pipelineId ?? "", false));
 }

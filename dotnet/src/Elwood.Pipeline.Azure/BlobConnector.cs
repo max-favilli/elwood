@@ -56,13 +56,15 @@ public sealed class BlobConnector(TokenCredential? credential = null,
                 if (memory.Length + length > blob.MaxBytes) throw new ConnectorException("Blob exceeds maxBytes.", "blob.size");
                 memory.Write(buffer, 0, length);
             }
-            var content = new UTF8Encoding(false, true).GetString(memory.ToArray()).TrimStart('\uFEFF');
+            var bytes = memory.ToArray();
+            var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+            var content = new UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF');
             var details = response.Value.Details;
             var metadata = new JsonObject { ["etag"] = details.ETag.ToString(), ["contentLength"] = memory.Length,
                 ["lastModified"] = details.LastModified.ToString("O"), ["contentType"] = details.ContentType,
                 ["url"] = HttpCallCapture.SafeUrl(client.Uri.ToString()), ["versionId"] = details.VersionId };
             if (call is not null) { call.ResponseBody = content; call.ResponseMetadata = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(metadata.ToJsonString()); }
-            return new(content, blob.ContentType, metadata: new JsonObject { ["blob"] = metadata });
+            return new(content, blob.ContentType, metadata: new JsonObject { ["blob"] = metadata }, contentSha256: hash);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception ex) { throw Failure(ex, false, call); }

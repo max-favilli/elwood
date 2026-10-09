@@ -13,10 +13,23 @@ namespace Elwood.Pipeline.Azure;
 /// </summary>
 public sealed class AzureExecutionDocumentStore(BlobContainerClient container, string storageNamespace = "elwood", int maxDocumentBytes = 32 * 1024 * 1024,
     BlobRetentionLedger? retention = null, TimeProvider? timeProvider = null)
-    : IExecutionDocumentStore
+    : IExecutionDocumentStore, IDocumentPreviewStore
 {
     private readonly string _prefix = SafePath.Id(storageNamespace) + "/";
     private readonly int _maxBytes = maxDocumentBytes > 0 ? maxDocumentBytes : throw new ArgumentOutOfRangeException(nameof(maxDocumentBytes));
+
+    public async Task<DocumentPreview> PreviewAsync(string key, int maximumBytes)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            var properties = await Blob(key).GetPropertiesAsync(cancellationToken: timeout.Token);
+            var size = properties.Value.ContentLength;
+            // Execution references are immutable. A metadata-only read avoids materializing a large result for inspection.
+            return size > maximumBytes ? new(true, null, size, true) : new(true, await GetAsync(key), size, false);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404) { return new(false, null, 0, false); }
+    }
 
     public async Task<string> StoreAsync(string key, string content)
     {
