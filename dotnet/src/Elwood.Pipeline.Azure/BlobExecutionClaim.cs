@@ -70,13 +70,26 @@ public sealed class BlobExecutionClaim : IExecutionClaim
             try
             {
                 ThrowIfLost();
-                using var request = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                request.CancelAfter(_requestBudget);
-                var started = Stopwatch.GetTimestamp();
-                await _lease.RenewAsync(cancellationToken: request.Token);
-                ThrowIfLost(); // A late response must never revive canceled ownership.
-                ArmDeadline(started);
-                ThrowIfLost();
+                while (true)
+                {
+                    using var request = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                    request.CancelAfter(_requestBudget);
+                    var started = Stopwatch.GetTimestamp();
+                    try
+                    {
+                        await _lease.RenewAsync(cancellationToken: request.Token);
+                        ThrowIfLost(); // A late response must never revive canceled ownership.
+                        ArmDeadline(started);
+                        ThrowIfLost();
+                        break;
+                    }
+                    catch (Exception ex) when (AzureTransportFault.IsTransient(ex) && !lifetime.IsCancellationRequested)
+                    {
+                        // A throttle/timeout does not revoke the existing server lease.
+                        // Keep the original local deadline armed until a renewal succeeds.
+                        await Task.Delay(TimeSpan.FromMilliseconds(250), lifetime.Token);
+                    }
+                }
             }
             finally { _renewGate.Release(); }
         }

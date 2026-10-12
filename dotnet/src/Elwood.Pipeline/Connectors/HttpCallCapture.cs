@@ -76,10 +76,11 @@ public static class HttpCallCapture
     }
 
     public static async Task<HttpResponseMessage> SendAsync(HttpClient client, HttpRequestMessage request,
-        CancellationToken cancellationToken = default, int? timeoutMs = null)
+        CancellationToken cancellationToken = default, int? timeoutMs = null, bool streamResponse = false)
     {
         var call = Current.Value;
-        if (call is null) return await client.SendAsync(request, cancellationToken);
+        var completion = streamResponse ? HttpCompletionOption.ResponseHeadersRead : HttpCompletionOption.ResponseContentRead;
+        if (call is null) return await client.SendAsync(request, completion, cancellationToken);
 
         call.Method = request.Method.Method;
         call.Connector = "http";
@@ -100,13 +101,13 @@ public static class HttpCallCapture
             call.RequestHeaders = Headers(request.Headers, request.Content?.Headers);
             foreach (var header in client.DefaultRequestHeaders)
                 if (!call.RequestHeaders.ContainsKey(header.Key)) call.RequestHeaders[header.Key] = SafeHeader(header.Key, header.Value);
-            var response = await client.SendAsync(request, cancellationToken);
+            var response = await client.SendAsync(request, completion, cancellationToken);
             call.StatusCode = (int)response.StatusCode;
             call.ReasonPhrase = response.ReasonPhrase;
             call.HttpVersion = response.Version.ToString();
             call.ResponseHeaders = Headers(response.Headers, response.Content.Headers);
             // Capture before connectors apply status acceptance, including rejected responses.
-            if (call.BodyLimit > 0) call.ResponseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (call.BodyLimit > 0 && !streamResponse) call.ResponseBody = await response.Content.ReadAsStringAsync(cancellationToken);
             else { call.ResponseBodyBytes = response.Content.Headers.ContentLength; call.ResponseBodyTruncated = call.ResponseBodyBytes != 0; }
             return response;
         }
@@ -120,6 +121,15 @@ public static class HttpCallCapture
             throw;
         }
         finally { call.DurationMs = timer.Elapsed.TotalMilliseconds; }
+    }
+
+    public static void ResponseBodyRead(string body, long bytes)
+    {
+        var call = Current.Value;
+        if (call is null) return;
+        if (call.BodyLimit > 0) call.ResponseBody = body;
+        call.ResponseBodyBytes = bytes;
+        if (call.StartedAt is { } start) call.DurationMs = (DateTimeOffset.UtcNow - start).TotalMilliseconds;
     }
 
     private static Dictionary<string, string[]> Headers(HttpHeaders headers, HttpHeaders? contentHeaders)

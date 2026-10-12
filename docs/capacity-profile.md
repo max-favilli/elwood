@@ -65,7 +65,7 @@ Retail API checked 8 October 2026, West Europe, using **`api-version=2023-01-01-
 | Retention Blob transactions | About 332 reads and 101 writes/pass; model of adapter calls | €5.23 |
 | Control versions, admissions and additional operations | Rewritten ledger partitions; conservative version + soft-delete allowance | €3–5 |
 
-This yields approximately **€45/month**, with **€45–55/month** as the planning range and a proposed **€60 first-month allowance** for permanent adoption. Extra deletion work, cold starts and real destination latency can move the total; there is no automatic euro spending cap. A month dominated by smaller files uses less payload storage and transformation compute, though scheduled maintenance still has a baseline cost.
+The table sums to approximately **€44–46/month**. The **€55 planning ceiling** adds roughly €9 (20%) contingency to its upper end for extra deletion work, cold starts and destination latency; it is not a measured charge or hard cap. The proposed **€60 first-month allowance** remains subject to consumer approval. The newer installer’s Application Insights/Log Analytics and retention alert, plus optional Redis/SQL/application hosting, are additional and must be priced by the consumer before provisioning. A month dominated by smaller files uses less payload storage and transformation compute, though scheduled maintenance still has a baseline cost.
 
 Excluded: source-owned supplier storage, the existing app, SQL/database capacity, portal hosting, external RabbitMQ ingress, cross-region egress, tax and paid logging. The two-Blob capacity fixture measures payload delivery; it does not establish SQL procedure latency or SAP behavior for the final projects. Account discounts or unused free grants may reduce the bill.
 

@@ -20,8 +20,9 @@ namespace Elwood.Pipeline.Azure;
 /// state in one conditional Blob upload. Readers verify hints against that identity.
 /// Stale hints can be removed; a committed checkpoint cannot lose its only hint.
 /// </summary>
-public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifactMaintenance
+public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifactMaintenance, IStorageFailureClassifier
 {
+    public bool IsTransient(Exception exception) => AzureTransportFault.IsTransient(exception);
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private readonly BlobContainerClient _blobs;
     private readonly TableClient _table;
@@ -56,29 +57,51 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
 
     public async Task<IAsyncDisposable?> TryLockAsync(string executionId) => await TryClaimAsync(executionId);
 
-    public async Task<IExecutionClaim?> TryClaimAsync(string executionId, CancellationToken cancellationToken = default)
+    public Task<IExecutionClaim?> TryClaimAsync(string executionId, CancellationToken cancellationToken = default)
+        => ClaimAsync(executionId, false, cancellationToken);
+
+    public Task<IExecutionClaim?> TryCreateClaimAsync(string executionId, CancellationToken cancellationToken = default)
+        => ClaimAsync(executionId, true, cancellationToken);
+
+    private async Task<IExecutionClaim?> ClaimAsync(string executionId, bool create, CancellationToken cancellationToken)
     {
         var blob = Blob(executionId);
-        // The ledger itself makes a reservation discoverable after a crash. Reject
-        // capacity before adding Table work, so rejected traffic cannot grow indexes.
+        // Repeated event acceptance still needs the existing claim to verify the
+        // original payload hash; creation must not turn redelivery into a conflict.
+        if (create && (await blob.ExistsAsync(cancellationToken)).Value)
+            return await ClaimAsync(executionId, false, cancellationToken);
         var reservation = new BlobRetentionEntry
             {
                 Id = "execution-" + executionId, Kind = "execution", ExecutionId = executionId, BlobUri = blob.Uri.ToString(),
                 RegisteredAt = _time.GetUtcNow(), ExpiresAt = _time.GetUtcNow().AddDays(372), Bytes = 12 * 1024 * 1024, ObjectSlots = 3
             };
-        if (_retention is not null) await _retention.RegisterAsync(reservation, cancellationToken, allowExisting: true);
         var intent = new TableEntity(Partition("init"), Ticks(Now.AddMinutes(10)) + "-" + Guid.NewGuid().ToString("N"))
             { ["execution"] = executionId, ["reservationGeneration"] = reservation.Generation };
-        await _table.AddEntityAsync(intent, cancellationToken);
+        if (create)
+        {
+            if (_retention is not null) await _retention.CheckRegistrationAsync(reservation, cancellationToken);
+            // Journal before the first blob write so an interrupted acceptance is discoverable.
+            await _table.AddEntityAsync(intent, cancellationToken);
+            try
+            {
+                await blob.UploadAsync(BinaryData.FromString("null"), new BlobUploadOptions
+                { Conditions = new BlobRequestConditions { IfNoneMatch = ETag.All } }, cancellationToken);
+            }
+            catch (RequestFailedException ex) when (ex.Status == 412 || ex.Status == 409 && ex.ErrorCode == "BlobAlreadyExists")
+            { await DeleteRow(intent, cancellationToken); return await ClaimAsync(executionId, false, cancellationToken); }
+        }
+        BlobExecutionClaim? lease;
+        try { lease = await BlobExecutionClaim.TryAcquireAsync(blob, executionId, cancellationToken: cancellationToken); }
+        catch (RequestFailedException ex) when (!create && ex.Status == 404) { return null; }
+        if (lease is null) { if (create) await DeleteRow(intent, cancellationToken); return null; }
         try
         {
-            await blob.UploadAsync(BinaryData.FromString("null"), new BlobUploadOptions
-            { Conditions = new BlobRequestConditions { IfNoneMatch = ETag.All } }, cancellationToken);
+            // Contenders and unknown resume/replay ids never rotate a reservation.
+            if (!create) await _table.AddEntityAsync(intent, cancellationToken);
+            if (_retention is not null) await _retention.RegisterAsync(reservation, cancellationToken, allowExisting: true);
+            return new Claim(this, lease, intent);
         }
-        catch (RequestFailedException ex) when (ex.Status == 412 || ex.Status == 409 && ex.ErrorCode == "BlobAlreadyExists") { }
-        var lease = await BlobExecutionClaim.TryAcquireAsync(blob, executionId, cancellationToken: cancellationToken);
-        if (lease is null) { await DeleteRow(intent, cancellationToken); return null; }
-        return new Claim(this, lease, intent);
+        catch { await lease.DisposeAsync(); throw; } // The init journal reconciles uncertain acceptance.
     }
 
     // Cloud mutations deliberately have no implicit "current owner" lookup.

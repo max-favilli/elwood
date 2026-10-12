@@ -165,6 +165,7 @@ public sealed class PullSourceConfig
 
 public sealed class HttpSourceConfig
 {
+    public int MaxBytes { get; set; } = 10 * 1024 * 1024;
     public OAuth2Config? Oauth2 { get; set; }
     public string BodyFormat { get; set; } = "json";
     [YamlMember(Alias = "url")]

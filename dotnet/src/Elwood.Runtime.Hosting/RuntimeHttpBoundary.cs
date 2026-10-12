@@ -33,7 +33,17 @@ public sealed class RuntimeHttpBoundary(ILogger<RuntimeHttpBoundary> logger)
             }
             var gate = context.RequestServices.GetService<ExecutionConcurrencyGate>();
             // Hold through result serialization, not just executor return: response trees are still live until written.
-            using var slot = gate is null || context.Request.Path == "/api/health" ? null : await gate.EnterAsync(context.RequestAborted);
+            var managementRead = endpoint?.Metadata.GetMetadata<ManagementPermission>() is not null &&
+                HttpMethods.IsGet(context.Request.Method);
+            var needsSlot = gate is not null && !managementRead && context.Request.Path != "/api/health" && context.Request.Path != "/api/readiness";
+            using var slot = needsSlot ? gate!.TryEnter() : null;
+            if (needsSlot && slot is null)
+            {
+                context.Response.StatusCode = 503;
+                context.Response.Headers.RetryAfter = "5";
+                await context.Response.WriteAsJsonAsync(new { error = "Execution capacity is busy. Retry later." });
+                return;
+            }
             await next(context);
         }
         catch (Exception ex) when (ex is ArgumentException or JsonException or DeploymentConflictException or RecoveryConflictException or KeyNotFoundException or PermissionDeniedException)

@@ -33,10 +33,20 @@ public sealed class ExecutionFunctions(QueuedExecutionDispatcher dispatcher, Dur
     {
         try
         {
-            var deleted = await runtime.Runner().PruneAsync(token);
-            logger.LogInformation("Retention removed {ExecutionCount} expired executions.", deleted);
+            try
+            {
+                var deleted = await runtime.Runner().PruneAsync(token);
+                logger.LogInformation("Retention removed {ExecutionCount} expired executions.", deleted);
+            }
+            finally { await outputs.SweepAsync(token); }
+            if ((await outputs.HealthAsync(token)).Healthy) logger.LogInformation("ELWOOD_RETENTION_HEALTHY");
+            else logger.LogError("ELWOOD_RETENTION_UNHEALTHY: inspect authenticated retention status.");
         }
-        finally { await outputs.SweepAsync(token); }
+        catch (Exception ex)
+        {
+            logger.LogError("ELWOOD_RETENTION_UNHEALTHY: {FailureType}", ex.GetType().Name);
+            throw;
+        }
     }
 
     [Function("ExecutionPoisonHint")]

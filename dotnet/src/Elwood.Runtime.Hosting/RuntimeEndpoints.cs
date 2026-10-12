@@ -87,6 +87,16 @@ public static class RuntimeEndpoints
         }).WithMetadata(new ManagementPermission("deploy", true));
         routes.MapGet("/api/pipelines/{id}/revisions", async (string id, IDeploymentStore store) =>
             Results.Ok((await store.RevisionsAsync(id)).Select(b => new { b.RevisionId, b.Author, timestamp = b.CreatedAt }))).WithMetadata(new ManagementPermission("read", true));
+        routes.MapGet("/api/pipelines/{id}/export", async (string id, IDeploymentStore store) =>
+            store is IDeploymentMaintenance maintenance ? Results.Ok(await maintenance.ExportAsync(id))
+                : Results.Json(new { error = "Catalog export is not supported by this store." }, statusCode: 501))
+            .WithMetadata(new ManagementPermission("read", true));
+        routes.MapPost("/api/pipelines/{id}/revisions/prune", async (string id, string[] revisions, HttpRequest request, IDeploymentStore store) =>
+        {
+            if (store is not IDeploymentMaintenance maintenance) return Results.Json(new { error = "Catalog pruning is not supported by this store." }, statusCode: 501);
+            await maintenance.PruneRevisionsAsync(id, Expected(request), revisions);
+            return Results.NoContent();
+        }).WithMetadata(new ManagementPermission("deploy", true));
         routes.MapGet("/api/pipelines/{id}/revisions/{revision}", async (string id, string revision, IDeploymentStore store) =>
         {
             var bundle = (await store.RevisionsAsync(id)).FirstOrDefault(b => b.RevisionId == revision);

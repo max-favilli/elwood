@@ -76,7 +76,7 @@ jobs:
         run: node --test scripts/rabbitmq-runtime.test.mjs
 
   infrastructure:
-    name: Azure adapters (Docker)
+    name: Azure and Redis adapters (Docker)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -85,6 +85,8 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Redis and Azurite integration tests
         run: dotnet test dotnet/tests/Elwood.Pipeline.Azure.Tests --filter "Category=Integration" --verbosity normal
+      - name: Distributed work-item coordination (real Redis)
+        run: dotnet test dotnet/tests/Elwood.Pipeline.Redis.Tests --filter "Category=Integration" --verbosity normal
 
   typescript:
     name: TypeScript
@@ -100,10 +102,3 @@ jobs:
       - name: Test
         working-directory: ts
         run: npm test
-
-  conformance:
-    name: Conformance Check
-    needs: [dotnet, typescript]
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "Both implementations passed all conformance tests"

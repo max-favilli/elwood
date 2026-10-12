@@ -47,7 +47,7 @@ internal static class HttpAuthentication
                     if (completed.Key is not null) cache.Tokens.Remove(completed.Key);
                     else throw new ConnectorException("OAuth2 token acquisition capacity reached. Retry later.", "oauth.capacity", true);
                 }
-                pending = new(() => Acquire(client, uri, oauth, token), LazyThreadSafetyMode.ExecutionAndPublication);
+                pending = new(() => Acquire(client, uri, oauth, CancellationToken.None), LazyThreadSafetyMode.ExecutionAndPublication);
                 cache.Tokens[key] = pending;
             }
         }

@@ -4,6 +4,8 @@
 
 `Elwood.Core` now packages the public `Lexer.FirstToken()` API used by pipeline script/expression classification. Publish Core 0.7.26 before packages that depend on this member; NuGet 0.7.25 does not expose it. This is a .NET API/package correction with no DSL syntax or evaluation changes; the TypeScript package remains 0.7.25.
 
+Version policy from this release: DSL language changes keep Core, Json and TypeScript aligned where affected. A .NET-only public API/package correction may advance Core independently; Elwood.Json and `@elwood-lang/core` remain 0.7.25 because their public behavior did not change. The 0.7.25 lockstep statement below is historical. `release.yml` already packs/pushes Pipeline and Pipeline.Azure; release ordering must publish Core 0.7.26 first. The experimental Redis adapter is not packable or a consumer release.
+
 ## 2026-10-05 — `indexBy` for lookups by key; the repeated-scan warning covers `first` and `where`, and only real repeats (v0.7.25)
 
 0.7.24 warned about a quadratic `any`. The map that prompted it had a second quadratic that the warning did not see:

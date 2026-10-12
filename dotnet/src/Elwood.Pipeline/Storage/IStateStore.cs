@@ -32,3 +32,6 @@ public interface IDocumentPreviewStore
 {
     Task<DocumentPreview> PreviewAsync(string key, int maximumBytes);
 }
+
+/// <summary>Writes return immutable physical references; logical aliases cannot be read back.</summary>
+public interface IImmutableDocumentStore : IDocumentStore;

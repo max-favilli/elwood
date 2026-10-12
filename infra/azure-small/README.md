@@ -9,21 +9,27 @@ Read [operations and limits](../../docs/azure-operations.md), [verification evid
 ## Templates
 
 - `main.bicep`: new installation in a dedicated approved resource group.
-- `storage.bicep`: private, Entra-only Standard LRS Blob/Queue/Table and lifecycle policy.
+- `storage.bicep`: Entra-only Standard LRS Blob/Queue/Table with authenticated public endpoints and lifecycle policy.
 - `runtime.bicep`: Flex host, identity access, CORS and secure settings; can also use already provisioned storage.
 - `service-bus.bicep`: optional Basic namespace/queue and scoped roles.
 - `ingress.bicep`: optional Linux B1 always-on RabbitMQ ingress. Publish its application separately.
 - `retention-policy.bicep`: owned-data backstop and bounded versions/snapshots.
 
-Use a dedicated account. Data roles cover that account; pipeline secret, SQL-server and Blob-prefix grants impose additional application restrictions. Blob Data Owner supplies version-deletion rights, not subscription ownership. Reader permits actual lifecycle verification. Shared keys, anonymous Blob access and SCM/FTP basic publishing are disabled.
+Use a dedicated account. Data roles cover that account; pipeline secret, SQL-server and Blob-prefix grants impose additional application restrictions. A custom role grants Blob Data Contributor actions plus `deleteBlobVersion/action`, without Blob Data Owner's ACL ownership actions. Service Bus uses queue-scoped Sender and Receiver roles. Reader permits actual lifecycle verification. Shared keys, anonymous Blob access and SCM/FTP basic publishing are disabled. Upgrades must explicitly remove old Blob/Service Bus Data Owner assignments: ARM incremental deployment does not remove historical assignments.
 
-Templates provision infrastructure, not binaries. They create no SQL database, Redis, broker, portal server, paid log workspace or deployment service-principal password. Supply approved credentials/grants before deploying pipelines.
+Storage and Basic Service Bus deliberately retain public TLS endpoints, authenticated with managed identity. Storage `networkAcls` explicitly allow the public network; this is **not private networking**. Disabling public access without VNet integration, private endpoints and DNS would break the host. Service Bus private endpoints require Premium, outside this low-cost profile. Consumers requiring private networking must cost and validate that separate configuration before deployment. [Service Bus networking](https://learn.microsoft.com/en-us/azure/service-bus-messaging/secure-service-bus).
+
+Templates provision infrastructure, not binaries. No SQL database, Redis, portal server or deployment service-principal password is created. Service Bus and RabbitMQ ingress are optional. Application Insights, a Log Analytics workspace (30-day retention, 0.1 GB/day ingestion cap), and a five-minute retention alert are now included. Monitoring/alert charges are additional to the historical capacity estimate and require consumer cost approval. The ingestion cap is not a spending cap and can overshoot; ingestion stopping also removes diagnostic evidence. Supply existing `retentionAlertActionGroups` to deliver notifications; an empty list creates an Azure alert with no notification recipients.
+
+The default `maximumInstanceCount` is 3, with no always-ready allocation. Azure applies this ceiling per independently scaling function group, not as a total app or euro cap. Approve a different ceiling for larger bursts. [Flex scale limits](https://learn.microsoft.com/en-us/azure/azure-functions/flex-consumption-plan#maximum-instance-count-the-ceiling).
 
 ## Installation
 
 Use .NET 10 SDK and Azure CLI/Bicep. Obtain approval for the subscription, resource group, region and costs. West Europe was verified. If CLI authentication expires, the owner signs in; automation must not initiate an interactive login.
 
 Create an ignored private parameter file containing a random management bearer token's SHA-256 hash, exact `portalOrigins`, and optional `additionalSettings`. Keep the bearer token outside Git. Additional settings use the secure shape `{"values":[{"name":"Elwood__SecretGrants__pipeline-id__Run__0","value":"supplier.password"}]}`. Trusted operator settings can override template defaults. Secret values use names such as `ELWOOD_SECRET_SUPPLIER_PASSWORD`. Test and Run grants are separate.
+
+Prefer `secretReferences: [{"name":"ELWOOD_SECRET_SUPPLIER_PASSWORD","secretUri":"https://<vault>.vault.azure.net/secrets/supplier-password"}]` over literal secrets. Both hosts set `keyVaultReferenceIdentity` to the runtime identity and materialize an App Service Key Vault reference. Grant that identity **Key Vault Secrets User** on the consumer's selected vault/secrets and allow network access; vault provisioning and grants remain the consumer's responsibility. Never put a Key Vault reference inside `ELWOOD_RUNTIME_CONFIG_JSON`: references must occupy individual app settings. [Reference syntax and rotation](https://learn.microsoft.com/en-us/azure/app-service/app-service-key-vault-references).
 
 ```powershell
 $subscription = '<approved-subscription>'
@@ -36,6 +42,14 @@ az deployment group what-if --resource-group $group --subscription $subscription
 az deployment group create --name elwood-install --resource-group $group --subscription $subscription --template-file infra/azure-small/main.bicep --parameters '@.private/install.parameters.json'
 dotnet publish dotnet/src/Elwood.Runtime.Azure.Functions -c Release -o .private/functions
 ```
+
+Before uploading binaries/starting any workers, initialize a **fresh, empty namespace** explicitly:
+
+```powershell
+./scripts/initialize-azure-retention.ps1 -SubscriptionId $subscription -StorageAccount '<deployment-output-storageAccount>' -CapacityProfile files-25m
+```
+
+Use the same `CapacityProfile` as the deployment (`guarded` is the default). The signed-in operator needs Blob data access on this account. The script refuses existing current/deleted/version data, writes ledgers with create-only preconditions, and writes the layout marker last. A partial bootstrap must be investigated before selecting a fresh namespace or resuming manually; do not overwrite it. A missing ledger on an existing installation requires restoring control data, never rerunning bootstrap. The runtime will neither infer an empty ledger nor auto-initialize. Readiness stays 503 until the first successful retention sweep (normally within five minutes).
 
 Check each result. ZIP the contents of the publish folder, including `.azurefunctions`, `functions.metadata` and `host.json`; deploy with `az functionapp deployment source config-zip`, using Entra/CLI authentication. Flex overwrites one current `released-package.zip`; old versions have seven-day lifecycle retention. Keep a bounded local set of prior release packages. [Microsoft deployment documentation](https://learn.microsoft.com/en-us/azure/azure-functions/functions-infrastructure-as-code).
 

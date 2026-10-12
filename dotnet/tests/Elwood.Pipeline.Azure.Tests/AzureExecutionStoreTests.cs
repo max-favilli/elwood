@@ -19,6 +19,7 @@ public sealed class AzureExecutionStoreTests
     {
         await using var lab = new Lab();
         var ledger = new AzureBlobRetentionLedger(lab.StateContainer.GetBlobClient(lab.Scope + "/ledger.json"), lab.Clock, maxObjects: 32);
+        await ledger.InitializeAsync();
         var documents = new AzureExecutionDocumentStore(lab.DocumentContainer, lab.Scope, retention: ledger, timeProvider: lab.Clock);
         var states = new AzureExecutionStateStore(lab.StateContainer, lab.Table, documents, lab.Scope, timeProvider: lab.Clock, retention: ledger);
         var writes = 0;
@@ -56,7 +57,7 @@ public sealed class AzureExecutionStoreTests
         Assert.True(saved.Outputs["result"].OutcomeUncertain);
         Assert.True(saved.RecoveryCapacityExhausted);
         for (var i = 0; i < 12; i++)
-            await Assert.ThrowsAsync<InvalidOperationException>(() => states.TryClaimAsync("rejected-" + i));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => states.TryCreateClaimAsync("rejected-" + i));
         var intents = new List<TableEntity>();
         await foreach (var row in lab.Table.QueryAsync<TableEntity>(TableClient.CreateQueryFilter($"PartitionKey eq {lab.Scope + "-init"}"))) intents.Add(row);
         Assert.Empty(intents);
@@ -72,8 +73,9 @@ public sealed class AzureExecutionStoreTests
     {
         await using var lab = new Lab();
         var ledger = new AzureBlobRetentionLedger(lab.StateContainer.GetBlobClient(lab.Scope + "/ledger.json"), lab.Clock);
+        await ledger.InitializeAsync();
         var states = new AzureExecutionStateStore(lab.StateContainer, lab.Table, lab.Documents, lab.Scope, pageSize: 1, timeProvider: lab.Clock, retention: ledger);
-        await using (var claim = await states.TryClaimAsync("a-live"))
+        await using (var claim = await states.TryCreateClaimAsync("a-live"))
             await claim!.SaveAsync(new ExecutionState { ExecutionId = "a-live", Status = ExecutionStatus.Running });
         await ledger.RegisterAsync(new BlobRetentionEntry { Id = "execution-z-orphan", Kind = "execution", ExecutionId = "z-orphan",
             BlobUri = lab.StateContainer.GetBlobClient(lab.Scope + "/states/z-orphan.json").Uri.ToString(),
@@ -95,7 +97,7 @@ public sealed class AzureExecutionStoreTests
     public async Task HistoryCleanupJournalSurvivesMissingFirstOrDeletedLastCheckpoint()
     {
         await using var lab = new Lab(); var states = lab.States();
-        await using (var claim = await states.TryClaimAsync("healthy"))
+        await using (var claim = await states.TryCreateClaimAsync("healthy"))
             await claim!.SaveAsync(new ExecutionState { ExecutionId = "healthy", Durable = true, Status = ExecutionStatus.Running, PipelineName = "test" });
         var pipelineKind = "pipeline-" + new string('a', 64);
         foreach (var kind in new[] { "history", pipelineKind, "history-gc" })
@@ -113,6 +115,7 @@ public sealed class AzureExecutionStoreTests
         await using var lab = new Lab();
         var ledgerBlob = lab.StateContainer.GetBlobClient(lab.Scope + "/ledger.json");
         var ledger = new AzureBlobRetentionLedger(ledgerBlob, lab.Clock);
+        await ledger.InitializeAsync();
         var documents = new AzureExecutionDocumentStore(lab.DocumentContainer, lab.Scope, retention: ledger, timeProvider: lab.Clock);
         var states = new AzureExecutionStateStore(lab.StateContainer, lab.Table, documents, lab.Scope, timeProvider: lab.Clock, retention: ledger);
         var queue = new InMemoryStepQueue(); var runner = new AsyncExecutor(states, documents, queue, timeProvider: lab.Clock);
@@ -214,7 +217,7 @@ public sealed class AzureExecutionStoreTests
         var id = Assert.Single((await a.ListAllAsync())).ExecutionId;
         Assert.Equal(id, await Accept(b));
         await Assert.ThrowsAsync<InvalidOperationException>(() => a.SaveExecutionAsync(new ExecutionState { ExecutionId = id }));
-        await using var claim = await a.TryClaimAsync(id);
+        await using var claim = await a.TryCreateClaimAsync(id);
         Assert.NotNull(claim); Assert.Null(await b.TryClaimAsync(id));
         Assert.All(ids.Where(i => i is not null), value => Assert.Equal(id, value));
     }
@@ -223,7 +226,7 @@ public sealed class AzureExecutionStoreTests
     public async Task CorruptRecordsAndUncommittedHintsDoNotStarveBoundedRecoveryPages()
     {
         await using var lab = new Lab(); var states = lab.States(pageSize: 1);
-        await using (var claim = await states.TryClaimAsync("healthy"))
+        await using (var claim = await states.TryCreateClaimAsync("healthy"))
             await claim!.SaveAsync(new ExecutionState { ExecutionId = "healthy", Durable = true, Status = ExecutionStatus.Running, PipelineName = "healthy" });
         await lab.StateContainer.GetBlobClient(lab.Scope + "/states/corrupt.json").UploadAsync(BinaryData.FromString("{truncated"));
         foreach (var (id, key) in new[] { ("corrupt", "000-corrupt"), ("missing", "001-uncommitted") })
@@ -240,7 +243,7 @@ public sealed class AzureExecutionStoreTests
     public async Task FailedAcceptanceIntentCleansOrphanDocumentsAfterGracePeriod()
     {
         await using var lab = new Lab(); var states = lab.States(); string reference;
-        await using (var claim = await states.TryClaimAsync("unaccepted"))
+        await using (var claim = await states.TryCreateClaimAsync("unaccepted"))
         {
             Assert.NotNull(claim);
             reference = await lab.Documents.StoreAsync("exec/unaccepted/trigger", "{\"orphan\":true}");
@@ -275,7 +278,7 @@ public sealed class AzureExecutionStoreTests
     {
         await using var lab = new Lab(); var states = lab.States();
         var hint = new TableEntity(lab.Scope + "-due", "000-before-checkpoint") { ["execution"] = "accepting" };
-        await using (var claim = await states.TryClaimAsync("accepting"))
+        await using (var claim = await states.TryCreateClaimAsync("accepting"))
         {
             Assert.NotNull(claim);
             await lab.Table.AddEntityAsync(hint);

@@ -258,8 +258,8 @@ sources:
 | `contentType` | string | no | Payload format. Default: `json` |
 | `map` | string | no | `.elwood` script or inline expression |
 | `depends` | string or string[] | no | Source(s) that must complete before this one runs |
-| `path` | string | no | Fan-out: slice the IDM, process this source once per slice |
-| `concurrency` | int | no | Max parallel slices when `path` is set. Default: `1` |
+| `path` | string | no | Offline CLI source fan-out only; Runtime API and native hosts reject source `path` until distributed fan-out is implemented |
+| `concurrency` | int | no | Offline CLI maximum parallel slices with `path`; default `1`. Does not enable runtime fan-out |
 | `from` | object | for pull | Pull source configuration |
 | `rabbitmq` | object | for live queue | External RabbitMQ subscription; async mode. See [connectors](connectors.md#external-rabbitmq-ingress). |
 | `eventGrid` | object | no | Opt in to Event Grid schema validation, batch splitting and deduplication on async HTTP. See [connectors](connectors.md#event-grid-webhook-ingress). |
@@ -306,6 +306,8 @@ orders
 Sources in the same stage (same dependency level) run concurrently. The IDM is only mutated between stages — never during concurrent execution.
 
 ### Source Fan-Out (path)
+
+**Offline CLI only.** The Runtime API and native hosts reject source `path` fan-out, including local draft tests. The following describes the CLI's `$slice` behavior; it is not a deployable runtime example. M7 must implement distributed work-item coordination before the runtime accepts it.
 
 When a source has `path`, the IDM is sliced and the source is processed **once per slice**:
 

@@ -14,6 +14,7 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
     TimeProvider? timeProvider = null) : IArtifactMaintenance
 {
     public const string OwnerMetadata = "elwood_cleanup_id";
+    private string? _sweepFailure;
     private DateTimeOffset Now => (timeProvider ?? TimeProvider.System).GetUtcNow();
 
     public async Task<BlobRetentionEntry> RegisterAsync(BlobClient client, long bytes, int? ttlSeconds, int writeTimeoutSeconds, CancellationToken token)
@@ -46,7 +47,7 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
 
     public async Task<int> SweepAsync(CancellationToken token = default)
     {
-        var state = await ledger.ReadAsync(token); var removed = 0;
+        var state = await ledger.ReadAsync(token); var removed = 0; string? sweepFailure = null;
         // Failed items move behind untouched items on the next bounded sweep.
         foreach (var entry in state.Entries.Values.Where(e => e.Kind != "execution" && e.ExpiresAt <= Now)
             .OrderBy(e => e.LastAttemptAt).ThenBy(e => e.ExpiresAt).Take(100))
@@ -99,10 +100,13 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
             catch (Exception ex)
             {
                 var error = ex is RequestFailedException azure ? $"Azure HTTP {azure.Status} ({azure.ErrorCode})" : ex.GetType().Name;
-                await ledger.UpdateAsync(entry.Id, e => { e.LastAttemptAt = Now; e.Error = error; }, token);
+                try { await ledger.UpdateAsync(entry.Id, e => { e.LastAttemptAt = Now; e.Error = error; }, token); }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                catch (Exception recordingError) { sweepFailure = "Retention error recording failed: " + recordingError.GetType().Name; }
             }
         }
-        await ledger.SweptAsync(token);
+        _sweepFailure = sweepFailure;
+        if (sweepFailure is null) await ledger.SweptAsync(token);
         return removed;
     }
 
@@ -113,12 +117,19 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
 
     public async Task<BlobRetentionHealth> HealthAsync(CancellationToken token = default)
     {
-        var state = await ledger.ReadAsync(token);
+        BlobRetentionSnapshot state;
+        try { state = await ledger.ReadAsync(token); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            return new(false, null, 0, 0, 0, null, [new("ledger", "Retention ledger unavailable: " + ex.GetType().Name, Now)]);
+        }
         var overdue = state.Entries.Values.Where(e => e.ExpiresAt < Now.AddMinutes(-15)).ToArray();
-        return new(overdue.Length == 0 && !state.Entries.Values.Any(e => e.Error is not null), state.LastSweepAt,
+        return new(_sweepFailure is null && state.LastSweepAt is not null && overdue.Length == 0 && !state.Entries.Values.Any(e => e.Error is not null), state.LastSweepAt,
             state.Entries.Values.Sum(e => e.ObjectSlots), state.Entries.Values.Sum(e => e.Bytes), overdue.Length,
             overdue.Select(e => (DateTimeOffset?)e.ExpiresAt).Min(),
-            state.Entries.Values.Where(e => e.Error is not null).Select(e => new BlobRetentionFailure(e.Id, e.Error!, e.LastAttemptAt)).Take(20).ToArray());
+            state.Entries.Values.Where(e => e.Error is not null).Select(e => new BlobRetentionFailure(e.Id, e.Error!, e.LastAttemptAt))
+                .Concat(_sweepFailure is null ? [] : new[] { new BlobRetentionFailure("sweep", _sweepFailure, Now) }).Take(20).ToArray());
     }
 }
 

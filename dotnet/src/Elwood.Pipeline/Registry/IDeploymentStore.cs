@@ -15,6 +15,22 @@ public interface IDeploymentStore
     Task<PipelineBundle?> GetActiveAsync(string id);
     Task<List<PipelineBundle>> RevisionsAsync(string id);
     Task<(string PipelineId, string SourceName, PipelineBundle Bundle)?> MatchAsync(string path);
+    async Task<List<ActivePipeline>> ListActiveAsync()
+    {
+        var result = new List<ActivePipeline>();
+        foreach (var definition in await ListAsync())
+            if (await GetActiveAsync(definition.Id) is { } bundle) result.Add(new(definition.Id, bundle));
+        return result;
+    }
+}
+
+public sealed record ActivePipeline(string Id, PipelineBundle Bundle);
+public sealed record DeploymentExport(int Format, string Id, bool Deleted, PipelineContent Draft,
+    string? ActiveRevisionId, List<PipelineBundle> Revisions);
+public interface IDeploymentMaintenance
+{
+    Task<DeploymentExport> ExportAsync(string id);
+    Task PruneRevisionsAsync(string id, string expectedDraftRevision, IReadOnlyCollection<string> revisions);
 }
 
 public sealed class PipelineBundle

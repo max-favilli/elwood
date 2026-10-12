@@ -130,7 +130,8 @@ internal sealed class ExecutionOperations
         step.DocumentRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/source", Json(payload));
         attempt.DocumentRef = step.DocumentRef;
         // Compatibility alias only; scheduling and assembly read the immutable attempt reference.
-        await _documents.StoreAsync($"exec/{state.ExecutionId}/source/{config.Name}", Json(payload));
+        if (_documents is not IImmutableDocumentStore)
+            await _documents.StoreAsync($"exec/{state.ExecutionId}/source/{config.Name}", Json(payload));
     }
 
     public async Task Output(ExecutionState state, PipelineContentDto pipeline, OutputConfig config, IElwoodValue idm, StepAttempt attempt, IExecutionClaim claim, CancellationToken cancellationToken)
@@ -154,7 +155,8 @@ internal sealed class ExecutionOperations
             await claim.ValidateAsync(cancellationToken);
             step.ItemCount = data.Kind == ElwoodValueKind.Array ? data.GetArrayLength() : 1;
             step.DocumentRef = await _documents.StoreAsync($"exec/{state.ExecutionId}/attempt/{attempt.AttemptId}/output", content);
-            await _documents.StoreAsync($"exec/{state.ExecutionId}/output/{config.Name}", content);
+            if (_documents is not IImmutableDocumentStore)
+                await _documents.StoreAsync($"exec/{state.ExecutionId}/output/{config.Name}", content);
             await claim.SaveAsync(state);
         }
         attempt.DocumentRef = step.DocumentRef;

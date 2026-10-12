@@ -104,6 +104,7 @@ public sealed class FunctionsHttpTests
             var services = new ServiceCollection().AddLogging().AddSingleton<IConfiguration>(config)
                 .AddSingleton<TokenCredential>(new DenyNetworkCredential()).AddSingleton<IHostApplicationLifetime>(new Lifetime());
             services.AddAzureDurableRuntime(config);
+            services.AddSingleton(new ExecutionConcurrencyGate(1));
             services.AddSingleton<IDeploymentStore>(new FileSystemDeploymentStore(new FileSystemPipelineStore(Path.Combine(root, "legacy")), Path.Combine(root, "catalog")));
             services.AddSingleton<IStateStore>(new InMemoryStateStore()); services.AddSingleton<IDocumentStore>(new InMemoryDocumentStore());
             services.AddSingleton<IStepQueue>(new InMemoryStepQueue());
@@ -131,6 +132,16 @@ public sealed class FunctionsHttpTests
             Assert.Equal(401, (await Send("GET", "/api/session", "wrong")).Response.StatusCode);
             Assert.Equal(401, (await Send("GET", "/api/session", https: false)).Response.StatusCode);
             Assert.Equal(200, (await Send("GET", "/api/session")).Response.StatusCode);
+            // Reads and probes remain available while a large execution owns the memory slot.
+            var memoryGate = provider.GetRequiredService<ExecutionConcurrencyGate>();
+            using (await memoryGate.EnterAsync(default))
+            {
+                Assert.Equal(200, (await Send("GET", "/api/session")).Response.StatusCode);
+                Assert.Equal(200, (await Send("GET", "/api/health", null)).Response.StatusCode);
+                Assert.Equal(503, (await Send("GET", "/api/readiness", null)).Response.StatusCode);
+                var busy = await Send("POST", "/api/v1/trigger/orders", body: new { value = 42 });
+                Assert.Equal(503, busy.Response.StatusCode); Assert.Equal("5", busy.Response.Headers.RetryAfter);
+            }
             Assert.Equal(403, (await Send("GET", "/api/pipelines/not-granted")).Response.StatusCode);
             Assert.Equal(404, (await Send("GET", "/api/unknown")).Response.StatusCode);
             var wrongMethod = await Send("POST", "/api/session");

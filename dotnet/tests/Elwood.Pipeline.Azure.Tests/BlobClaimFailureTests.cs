@@ -40,14 +40,30 @@ public sealed class BlobClaimFailureTests
         Assert.False(claim.OwnershipLost.IsCancellationRequested);
     }
 
+    [Fact]
+    public async Task OneFailedRenewalDoesNotCancelTwentySecondConnectorCall()
+    {
+        using var handler = new LeaseService(false, failures: 1); using var http = new HttpClient(handler);
+        var blob = new BlobClient(new Uri("https://unit.test/container/state"), new BlobClientOptions
+        { Transport = new HttpClientTransport(http), Retry = { MaxRetries = 0 } });
+        await using var claim = await BlobExecutionClaim.TryAcquireAsync(blob, "temporary-throttle", TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(2));
+        Assert.NotNull(claim);
+        await Task.Delay(TimeSpan.FromSeconds(20), claim.OwnershipLost); // Simulated in-flight connector, longer than the initial lease.
+        Assert.False(claim.OwnershipLost.IsCancellationRequested);
+        Assert.True(handler.Renews >= 3);
+        await claim.SaveAsync(new ExecutionState { ExecutionId = "temporary-throttle" });
+        Assert.Equal(1, handler.Writes);
+    }
+
     // In-memory HTTP transport: never contacts a server or resolves credentials.
-    private sealed class LeaseService(bool hang) : HttpMessageHandler
+    private sealed class LeaseService(bool hang, int? failures = null) : HttpMessageHandler
     {
         public int Writes;
+        public int Renews;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var action = request.Headers.TryGetValues("x-ms-lease-action", out var values) ? values.Single() : "write";
-            if (action == "renew")
+            if (action == "renew" && (Interlocked.Increment(ref Renews) <= failures || failures is null))
             {
                 if (hang) await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
                 var failure = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
@@ -56,8 +72,9 @@ public sealed class BlobClaimFailureTests
                 return failure;
             }
             if (action == "write") Writes++;
-            var response = new HttpResponseMessage(action == "acquire" ? HttpStatusCode.Created : HttpStatusCode.OK);
+            var response = new HttpResponseMessage(action is "acquire" or "write" ? HttpStatusCode.Created : HttpStatusCode.OK);
             if (action == "acquire") response.Headers.Add("x-ms-lease-id", request.Headers.GetValues("x-ms-proposed-lease-id").Single());
+            if (action == "renew") response.Headers.Add("x-ms-lease-id", request.Headers.GetValues("x-ms-lease-id").Single());
             return response;
         }
     }

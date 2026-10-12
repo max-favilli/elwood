@@ -8,6 +8,7 @@
     <Project Path="src/Elwood.Xlsx/Elwood.Xlsx.csproj" />
     <Project Path="src/Elwood.Parquet/Elwood.Parquet.csproj" />
     <Project Path="src/Elwood.Pipeline.RabbitMq/Elwood.Pipeline.RabbitMq.csproj" />
+    <Project Path="src/Elwood.Pipeline.Redis/Elwood.Pipeline.Redis.csproj" />
     <Project Path="src/Elwood.Pipeline.Sql/Elwood.Pipeline.Sql.csproj" />
     <Project Path="src/Elwood.Pipeline/Elwood.Pipeline.csproj" />
     <Project Path="src/Elwood.Pipeline.Azure/Elwood.Pipeline.Azure.csproj" />
@@ -23,6 +24,7 @@
     <Project Path="tests/Elwood.Cli.Tests/Elwood.Cli.Tests.csproj" />
     <Project Path="tests/Elwood.Parquet.Tests/Elwood.Parquet.Tests.csproj" />
     <Project Path="tests/Elwood.Pipeline.Tests/Elwood.Pipeline.Tests.csproj" />
+    <Project Path="tests/Elwood.Pipeline.Redis.Tests/Elwood.Pipeline.Redis.Tests.csproj" />
     <Project Path="tests/Elwood.Pipeline.Azure.Tests/Elwood.Pipeline.Azure.Tests.csproj" />
   </Folder>
 </Solution>

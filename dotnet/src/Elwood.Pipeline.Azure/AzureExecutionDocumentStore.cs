@@ -13,8 +13,9 @@ namespace Elwood.Pipeline.Azure;
 /// </summary>
 public sealed class AzureExecutionDocumentStore(BlobContainerClient container, string storageNamespace = "elwood", int maxDocumentBytes = 32 * 1024 * 1024,
     BlobRetentionLedger? retention = null, TimeProvider? timeProvider = null)
-    : IExecutionDocumentStore, IDocumentPreviewStore
+    : IExecutionDocumentStore, IDocumentPreviewStore, IStorageFailureClassifier, IImmutableDocumentStore
 {
+    public bool IsTransient(Exception exception) => AzureTransportFault.IsTransient(exception);
     private readonly string _prefix = SafePath.Id(storageNamespace) + "/";
     private readonly int _maxBytes = maxDocumentBytes > 0 ? maxDocumentBytes : throw new ArgumentOutOfRangeException(nameof(maxDocumentBytes));
 
@@ -40,7 +41,7 @@ public sealed class AzureExecutionDocumentStore(BlobContainerClient container, s
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
         var entry = new BlobRetentionEntry { BlobUri = Blob(reference).Uri.ToString(), Kind = "document", ExecutionId = key.Split('/')[1],
-            RegisteredAt = now, ExpiresAt = now.AddDays(372), Bytes = bytes.Length };
+            RegisteredAt = now, ExpiresAt = now.AddDays(1), Bytes = bytes.Length };
         if (retention is not null) await retention.RegisterAsync(entry, timeout.Token);
         var result = await Blob(reference).UploadAsync(BinaryData.FromBytes(bytes), new BlobUploadOptions
         {
@@ -49,7 +50,13 @@ public sealed class AzureExecutionDocumentStore(BlobContainerClient container, s
             HttpHeaders = new BlobHttpHeaders { ContentType = "application/json; charset=utf-8" }
         }, timeout.Token);
         if (retention is not null) await retention.UpdateAsync(entry.Id, stored =>
-        { stored.ETag = result.Value.ETag.ToString(); stored.VersionId = result.Value.VersionId; }, timeout.Token);
+        {
+            stored.ETag = result.Value.ETag.ToString(); stored.VersionId = result.Value.VersionId;
+            // Only confirmed documents may be retained for long-running executions.
+            // Normal execution expiry deletes them sooner; unconfirmed late uploads
+            // remain independently discoverable for at most one day.
+            stored.ExpiresAt = now.AddDays(372);
+        }, timeout.Token);
         return reference;
     }
 

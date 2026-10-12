@@ -50,6 +50,8 @@ public sealed class PartitionedBlobRetentionLedger : BlobRetentionLedger
         if (!allowExisting && VerifyAdmissionAsync is not null) await VerifyAdmissionAsync(token);
         await For(entry.Id).RegisterAsync(entry, token, allowExisting);
     }
+    public override async Task CheckRegistrationAsync(BlobRetentionEntry entry, CancellationToken token = default)
+    { await Verify(token); await For(entry.Id).CheckRegistrationAsync(entry, token); }
     public override async Task UpdateAsync(string id, Action<BlobRetentionEntry> update, CancellationToken token = default)
     { await Verify(token); await For(id).UpdateAsync(id, update, token); }
     public override async Task RemovedAsync(string id, CancellationToken token = default)
@@ -84,27 +86,8 @@ public sealed class RetentionLayout(BlobClient marker, BlobClient legacyLedger, 
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
             {
-                if (expected == "single-v1")
-                {
-                    var prefix = legacyLedger.Name[..(legacyLedger.Name.LastIndexOf('/') + 1)] + "retention/";
-                    await foreach (var page in legacyLedger.GetParentBlobContainerClient().GetBlobsAsync(prefix: prefix, cancellationToken: token).AsPages(pageSizeHint: 1))
-                        if (page.Values.Count != 0) throw new InvalidOperationException("Partitioned retention artifacts exist without a layout marker. Restore the marker; do not select a different layout.");
-                }
-                if (expected != "single-v1")
-                {
-                    var existing = await new AzureBlobRetentionLedger(legacyLedger).ReadAsync(token);
-                    if (existing.Entries.Count != 0) throw new InvalidOperationException("The large-file profile requires a fresh installation or an offline migration of the existing retention ledger.");
-                }
-                try
-                {
-                    await marker.UploadAsync(BinaryData.FromString(expected), new BlobUploadOptions
-                    { Conditions = new() { IfNoneMatch = ETag.All }, HttpHeaders = new() { ContentType = "text/plain" } }, token);
-                }
-                catch (RequestFailedException conflict) when (conflict.Status is 409 or 412)
-                {
-                    var current = await marker.DownloadContentAsync(token);
-                    if (current.Value.Content.ToString() != expected) throw new InvalidOperationException("Another host selected a different retention layout.");
-                }
+                _ = legacyLedger; // Kept for source compatibility with existing host setup.
+                throw new InvalidOperationException("Retention layout is missing. Initialize a fresh installation explicitly or restore its control data; automatic reinitialization is forbidden.", ex);
             }
             _verified = true;
         }

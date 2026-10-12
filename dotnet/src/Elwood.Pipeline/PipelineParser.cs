@@ -160,6 +160,8 @@ public sealed class PipelineParser
         errors.AddRange(DependencyResolver.ValidateDependencies(config.Sources));
         foreach (var source in config.Sources)
         {
+            if (source.From?.Http is { MaxBytes: < 1 or > 128 * 1024 * 1024 })
+                errors.Add($"Source '{source.Name}': HTTP maxBytes must be between 1 and 134217728.");
             ValidateRetry(source.Retry, source.Name, errors);
             if (string.IsNullOrWhiteSpace(source.Name)) errors.Add("Every source needs a non-empty name.");
             if (!fileInputs && !string.IsNullOrWhiteSpace(source.Path))

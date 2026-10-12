@@ -14,7 +14,8 @@ resource storage 'Microsoft.Storage/storageAccounts@2025-06-01' = {
   tags: { project: 'elwood', profile: 'azure-small' }
   sku: { name: 'Standard_LRS' }
   kind: 'StorageV2'
-  properties: { accessTier: 'Hot', minimumTlsVersion: 'TLS1_2', supportsHttpsTrafficOnly: true, allowBlobPublicAccess: false, allowSharedKeyAccess: false, defaultToOAuthAuthentication: true }
+  // Authenticated public endpoints: private networking is a separate hosting profile (see README).
+  properties: { accessTier: 'Hot', minimumTlsVersion: 'TLS1_2', supportsHttpsTrafficOnly: true, allowBlobPublicAccess: false, allowSharedKeyAccess: false, defaultToOAuthAuthentication: true, publicNetworkAccess: 'Enabled', networkAcls: { defaultAction: 'Allow', bypass: 'None', ipRules: [], virtualNetworkRules: [] } }
 }
 resource blobs 'Microsoft.Storage/storageAccounts/blobServices@2025-06-01' = {
   parent: storage

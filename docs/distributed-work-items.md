@@ -1,0 +1,102 @@
+# Distributed work items and Redis coordination
+
+Status: coordination foundation implemented and locally verified, 10 October 2026. New M7 development is paused during the third-review M6 follow-up; only the requested residual fixes are included in that package. Runtime integration and durable reconciliation remain unimplemented and are required before Eagle adoption. M6 covers the bounded Azure storage profile, not concurrent fan-out within an execution.
+
+The 12 October follow-up makes failure acknowledgement idempotent for the same owner token and decision, and surfaces Redis connection/timeouts as `WorkCoordinationOutcomeUncertainException`. Reconcile a submitted operation using its original identity; never assume a lost reply means no mutation. Local verification is 27 tests (25 against a loopback Garnet protocol server, two injected Redis transport-failure tests); Docker CI still must verify the protocol cases against real Redis 7.4. The adapter remains experimental, is not wired into the runtime and is not packable.
+
+## Ownership and release scope
+
+Elwood supplies runtime code, provider adapters, release packages, infrastructure, tutorials and consumer prompts. The Eagle and Deldo project sessions provision and operate their installations. No permanent Azure resources are provisioned by this work package.
+
+Keep the current storage-only profile for compatible low-volume pipelines. Add Redis-backed coordination as a separate, explicit profile; do not silently change existing deployments. The old Redis state adapter does not implement the durable ownership contract and is not a substitute for this work.
+
+## Execution contract
+
+- An execution uses its original immutable pipeline revision. Each dependency stage has a generation, a durable manifest reference, an absolute execution deadline and a finite retention expiry.
+- Each item has a stable ordinal in that manifest, an independent attempt number, a unique owner token and a lease. Different items can run concurrently; two owners cannot commit the same attempt. A stage-wide concurrency limit applies across all workers, not separately to each process.
+- Redis holds compact coordination data, item status and document references. Large input/output data remains in document storage. No worker rewrites one execution-wide status document for each item update.
+- Queue messages remain delivery hints. Work eligibility is persisted before publication. Duplicate claims and duplicate completion acknowledgements must not duplicate completion counters.
+- A checkpoint records whether a potentially writing external call is in flight. A per-attempt sequence prevents a delayed checkpoint from reversing a later call status. An expired lease is held for recovery review. An uncertain write requires the authored retry policy or an explicit operator acknowledgement before rescheduling; lease expiry alone never grants permission to repeat an external write.
+- Retry requests have stable identities. Repeating a request after losing its response must not schedule another attempt. Completed items cannot be reset by retry.
+- Aggregation reads results in manifest order. Only after every item completes may an aggregator claim and publish the stage result. An empty manifest has a valid empty aggregation. Aggregation ownership can expire; only its current token may publish.
+- Every Redis operation validates the stage generation. Ordinary operations reject missing or structurally inconsistent coordination data. Recreating an evicted stage as new pending work is forbidden. Registration is only for a newly admitted durable stage, not an automatic fallback on a missing-key error. A coherent rollback to an earlier Redis state cannot be detected by these structural checks alone.
+- Redis expiry is absolute and finite; ordinary activity must not keep records forever. The expiry follows the execution's maximum lifetime plus configured history retention. A separate durable manifest/checkpoint journal and reconciliation protocol is required before production activation: replication or persistence alone does not guarantee that every acknowledged mutation survives Redis failover.
+- Source fan-out uses the authored path and preserves item identity through fetch, map, retry and aggregation. Output fan-out must be explicit: existing output `path` selects a value processed once, and must not silently acquire different semantics. No DSL engine changes are part of this work.
+
+## Work breakdown
+
+- [x] 7.1 Coordination contract and atomic Redis implementation: item claims, global stage concurrency, fenced checkpoints, duplicate completion, explicit retry, bounded expiry recovery, ordered result inspection/aggregation ownership, finite expiry and structural corruption detection. Verified with the 23 local protocol tests below; real Redis verification remains 7.7.
+- [ ] 7.2 Durable manifests/checkpoints and Redis-loss reconciliation, including failover during an external write. Establish the authoritative state and admission protocol; do not enable a Redis-only production path before this passes.
+- [ ] 7.3 Integrate item dispatch and independent source stages into the runtime; preserve existing execution semantics, warnings, connector captures, revision pinning and source/output retry policy.
+- [ ] 7.4 Add explicit YAML fan-out, bounded scheduling, source aggregation and output fan-out without changing the meaning of existing deployed definitions.
+- [ ] 7.5 Item-aware inspection, operator recovery, retention, quotas and backpressure; paginate large execution histories.
+- [ ] 7.6 Immutable pipeline/route distribution cache, deployment invalidation and cold-cache correctness.
+- [ ] 7.7 Local and real Redis tests: thousands of items across independent workers, duplicate delivery, lost responses, expired owners, restart/failover, downstream uncertainty and retention. Report emulator/protocol tests separately from real Redis tests.
+- [ ] 7.8 Consumer Redis infrastructure/configuration, published packages, installation smoke tests and versioned Eagle/Deldo handoffs. Provisioning and cost approval stay in those projects.
+
+## Redis implementation constraints
+
+Atomic scripts must be bounded: claims and checkpoints are constant-sized operations, recovery processes a capped page, and result inspection is paginated. Keys for a stage share one Redis Cluster hash tag. Different stages can live on different slots. Use a dedicated namespace and a non-evicting operational-state policy. A hot single stage can still saturate one shard; partitioning and load measurements are release requirements.
+
+Redis scripting atomicity prevents interleaving, not loss on server failure or rollback of script errors. Validate data and key types before mutation; detect incomplete state and stop further claims. Never report protocol tests as proof of durable failover. See [Redis scripting semantics](https://redis.io/docs/latest/develop/programmability/eval-intro/).
+
+## Current implementation and limits
+
+`IWorkItemCoordinator` is provider-neutral; `Elwood.Pipeline.Redis` implements it using one bounded Lua script. The adapter is experimental, is not packable, and is not registered in any production host. Existing pipeline execution and YAML behavior are unchanged. This package does not yet execute connector calls concurrently or aggregate payloads; it coordinates ownership and exposes ordered result references for that future executor.
+
+Each stage has five same-slot keys: header, item records, active lease index, result references and delayed retries. Item records are created on first claim, rather than materializing the entire manifest in a script. Recovery and inspection are capped at 256 items per call. Server time governs leases. Registration accepts a deadline within seven days, leases are 100 ms–2 minutes with renewal, history expiry is finite and at most 365 days after the deadline, and a stage is bounded to 100,000 items / 1,000 concurrent owners / 100 attempts per item. These are protective ceilings, not measured production capacity promises. References are at most 2 KiB and diagnostics at most 1 KiB; callers must redact diagnostics before storage.
+
+Claim and retry request IDs must be retained by their caller and reused after a lost response. Cancellation cannot undo a script already submitted to Redis. Checkpoints require contiguous sequence numbers within an attempt. Completion accepts an identical repeated result but cannot replace it. Retry schedules only failed/review items, guards the expected attempt, preserves its request identity after the next worker claims, and requires acknowledgement of uncertain writes. The host will translate an explicit authored automatic retry policy into that acknowledgement; this adapter never decides whether a destination is safe to repeat.
+
+All normal writes use the same absolute expiry. Durable cleanup of partial script failures, abandoned manifests and document payloads belongs to 7.2/7.5. TTL alone is not the full retention implementation.
+
+### Durable activation gate (7.2)
+
+Before enabling connector dispatch, implement and verify a durable admission/checkpoint protocol that remains authoritative when Redis loses an acknowledged write or rolls back to a structurally valid older state. In particular:
+
+1. Persist immutable stage manifests and their pipeline revision before admitting work. Reconstruction must use those records and item outcomes, never assume that an absent Redis item has not run.
+2. Fence durable item ownership and journal the intent to make an external call before sending it. Redis-only lease ownership is insufficient after failover. Preserve uncertain outcomes and the authored automatic/manual retry decision across a restart.
+3. Persist completed results before publishing their coordination references. Reconcile completion idempotently after losing either reply, without redoing the external write. Fence aggregation publication against the durable stage generation.
+4. Prevent over-admission after loss of Redis's running count. Restoring only completed-item counters cannot establish a safe global concurrency limit while pre-failover workers are still active.
+5. Verify full loss, partial loss and coherent rollback during claim, external call, completion, retry and aggregation. Retain the 30-day default and independently tracked output cleanup obligations.
+
+These are remaining implementation requirements, not capabilities of the current adapter.
+
+## Verification evidence and reproduction
+
+Local run, 10 October 2026:
+
+- New suite: **23 passed**, using two independent StackExchange.Redis connections to Garnet 2.1.8 on loopback with Lua transaction mode enabled.
+- Load case: **3,000 items**, 32 competing tasks, shared stage limit 12, duplicate completion for every item, ordered inspection of all results: **2.59 seconds** in the recorded run. This is a coordination-only local check; no connector calls, durable journal, cross-process workers or cloud network are included.
+- Failure cases: lost claim/retry replies, stale checkpoint ordering, expired ownership, acknowledged uncertain-write retry, bounded recovery, missing keys, malformed records/flags, partial batch validation, deadline, cancellation, single aggregation publication and absolute expiry.
+- Existing pipeline suite: **227 passed**. Adapter builds for both .NET 8 and .NET 10.
+- Real Redis, Redis Cluster and failover campaigns: **not run locally**. Docker/WSL are unavailable on this workstation. CI now runs this suite with a disposable `redis:7.4-alpine` Testcontainers instance; a CI pass has not yet been observed for this change.
+
+With Docker available, run:
+
+```sh
+dotnet test dotnet/tests/Elwood.Pipeline.Redis.Tests --filter "Category=Integration"
+```
+
+For an explicitly started loopback test server, set `ELWOOD_TEST_WORK_REDIS` to its connection string. Non-loopback endpoints are rejected. Tests use unique namespaces and delete only their exact five keys per stage; they never flush a database. The test server must support atomic Lua, hashes, sorted sets and absolute expirations. A protocol-compatible server run does not replace the real Redis campaign.
+
+The Windows check used a workspace-local .NET tool, without installing a service or changing the system runtime:
+
+```powershell
+dotnet tool install garnet-server --version 2.1.8 --tool-path .private/tools/garnet
+$testServer = Join-Path (Get-Location) '.private/tools/garnet/garnet-server.exe'
+New-Item -ItemType Directory -Path .private/garnet-work-tests -Force | Out-Null
+Push-Location .private/garnet-work-tests
+try {
+    & $testServer --bind 127.0.0.1 --port 16389 --lua --lua-transaction-mode --memory 128m --index 8m
+} finally { Pop-Location }
+```
+
+In a second terminal at the repository root:
+
+```powershell
+$env:ELWOOD_TEST_WORK_REDIS = '127.0.0.1:16389'
+dotnet test dotnet/tests/Elwood.Pipeline.Redis.Tests --filter 'Category=Integration'
+```
+
+The server is a separate process: use separate terminals for server and tests, and stop it when finished. Garnet flags are documented in [its configuration reference](https://microsoft.github.io/garnet/docs/getting-started/configuration). No cloud resources were created for these checks.

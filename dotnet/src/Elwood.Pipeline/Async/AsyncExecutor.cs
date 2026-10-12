@@ -59,7 +59,7 @@ public sealed class AsyncExecutor
         if (idempotencyKey is { Length: > 200 }) throw new ArgumentException("Idempotency-Key must be at most 200 characters.");
         var id = string.IsNullOrWhiteSpace(idempotencyKey) ? Guid.NewGuid().ToString() :
             "event-" + Hash((pipeline.PipelineId ?? pipeline.Config.Name) + "\n" + triggerSourceName + "\n" + idempotencyKey);
-        await using var claim = await _states.TryClaimAsync(id, cancellationToken) ?? throw new RecoveryConflictException("This execution is busy. Retry the request.");
+        await using var claim = await _states.TryCreateClaimAsync(id, cancellationToken) ?? throw new RecoveryConflictException("This execution is busy. Retry the request.");
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, claim.OwnershipLost);
         await claim.ValidateAsync(lifetime.Token);
         var input = ExecutionOperations.Json(triggerPayload);
@@ -220,7 +220,8 @@ public sealed class AsyncExecutor
             var policy = pipeline is null ? null : Policy(pipeline, message);
             var status = ex is HttpRequestException http ? (int?)http.StatusCode : (ex as ConnectorFailure)?.StatusCode ?? (ex as ConnectorException)?.StatusCode;
             if (status == 0) status = null; // Azure uses zero for a transport failure without an HTTP response.
-            var transport = ex is HttpRequestException or OperationCanceledException || ex is ConnectorFailure && status is null;
+            var storageFault = IsStorageFault(ex);
+            var transport = storageFault || ex is HttpRequestException or OperationCanceledException or TimeoutException || ex is ConnectorFailure && status is null;
             var uncertain = attempt.ExternalCallStarted && attempt.MayHaveWritten && status is null &&
                 (transport || ex is IOException);
             if (ex is ConnectorException classified) uncertain = classified.OutcomeUncertain;
@@ -232,6 +233,13 @@ public sealed class AsyncExecutor
                 step.Status = ExecutionStatus.AwaitingReview; attempt.Status = "Uncertain";
                 state.Errors = [.. step.Errors, "The external write may have completed. Review it before resuming."];
                 Terminal(state, ExecutionStatus.AwaitingReview);
+            }
+            else if (storageFault && pipeline is null)
+            {
+                // The policy snapshot could not be read. No new connector call has
+                // started: retain recoverable work until its policy can be loaded.
+                step.Status = state.Status = ExecutionStatus.Retrying;
+                step.NextAttemptAt = Now.AddSeconds(5); state.CompletedAt = null; state.ExpiresAt = null;
             }
             else if (retryable && CanRetry(step, policy)) ScheduleRetry(state, step, policy!);
             else if (retryable && policy?.Mode == "manual")
@@ -322,6 +330,7 @@ public sealed class AsyncExecutor
             }
             catch (ExecutionOwnershipLostException) { continue; }
             catch (Exception) when (claim.OwnershipLost.IsCancellationRequested) { continue; }
+            catch (Exception ex) when (IsStorageFault(ex)) { continue; } // Retry the persisted checkpoint on the next recovery tick.
             catch (Exception ex) { state.Errors.Add("Recovery: " + ex.Message); Terminal(state, ExecutionStatus.Failed); await Save(state, claim); }
         }
     }
@@ -620,6 +629,9 @@ public sealed class AsyncExecutor
         catch { /* Pending work is committed. Recovery will republish; acceptance must not be revoked. */ }
     }
     private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+    private bool IsStorageFault(Exception exception) =>
+        (_states as IStorageFailureClassifier)?.IsTransient(exception) == true ||
+        (_documents as IStorageFailureClassifier)?.IsTransient(exception) == true;
 }
 
 public class RecoveryConflictException(string message) : Exception(message);

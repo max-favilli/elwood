@@ -25,8 +25,8 @@ resource work 'Microsoft.ServiceBus/namespaces/queues@2024-01-01' = {
     enablePartitioning: false
   }
 }
-var dataRole = '090c5cfd-751d-490a-894a-3ce6f1109419'
-resource runtimeAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+var dataRoles = ['69a216fc-b8fb-44d8-bc22-1f3c2cd27a39', '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0'] // Sender + Receiver
+resource runtimeAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for dataRole in dataRoles: {
   name: guid(work.id, runtimePrincipalId, dataRole)
   scope: work
   properties: {
@@ -34,8 +34,8 @@ resource runtimeAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalId: runtimePrincipalId
     principalType: 'ServicePrincipal'
   }
-}
-resource operatorAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(operatorPrincipalId)) {
+}]
+resource operatorAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for dataRole in dataRoles: if (!empty(operatorPrincipalId)) {
   name: guid(work.id, operatorPrincipalId, dataRole)
   scope: work
   properties: {
@@ -43,6 +43,6 @@ resource operatorAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = i
     principalId: operatorPrincipalId
     principalType: 'User'
   }
-}
+}]
 output fullyQualifiedNamespace string = '${broker.name}.servicebus.windows.net'
 output workQueue string = work.name

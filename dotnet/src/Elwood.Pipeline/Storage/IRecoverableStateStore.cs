@@ -10,6 +10,10 @@ public interface IRecoverableStateStore : IStateStore
 {
     Task<IAsyncDisposable?> TryLockAsync(string executionId);
 
+    /// <summary>Acceptance only: may create a new checkpoint. Recovery must use TryClaimAsync.</summary>
+    Task<IExecutionClaim?> TryCreateClaimAsync(string executionId, CancellationToken cancellationToken = default)
+        => TryClaimAsync(executionId, cancellationToken);
+
     /// <summary>
     /// Acquire fenced execution ownership. The default is only valid for non-expiring
     /// locks. Cloud adapters must override this and reject unfenced state mutations.

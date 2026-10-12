@@ -1,6 +1,6 @@
 # Elwood delivery checklist and work breakdown
 
-Last updated: 8 October 2026. Scope: the `elwood` backend and sibling `elwood-portal` repositories. This is the master progress checklist; [implementation-plan.md](implementation-plan.md) retains the design rationale and historical verification results.
+Last updated: 12 October 2026. Scope: the `elwood` backend and sibling `elwood-portal` repositories. This is the master progress checklist; [implementation-plan.md](implementation-plan.md) retains the design rationale and historical verification results.
 
 Check a box only when its stated behavior is implemented and verified. An unchecked item may be underway; **Active** identifies current work. Add evidence and remaining limitations when checking an item. A completed service probe does not complete a runtime adapter or a milestone. No work runs in the background between chat turns unless explicitly scheduled.
 
@@ -11,7 +11,8 @@ Check a box only when its stated behavior is implemented and verified. An unchec
 - [x] M3 — Explicit real/mock local testing and inspection.
 - [x] M4 — Durable local execution, retries, recovery and internal retention.
 - [x] M5 — Representative connectors and controlled integration verification.
-- [x] M6 — Native Azure installation and enforced storage lifecycle, within the documented guarded-profile limits. [Closeout evidence](m6-release-evidence.md).
+- [ ] M6 — Third-review code blockers fixed and locally verified. Revised installer permissions, bootstrap and monitoring need consumer live verification before final hosting sign-off; historical [campaign evidence](m6-release-evidence.md) applies to its recorded build.
+- [ ] M7 — No new feature work during this review package; the existing experimental foundation and its requested residual fixes are committed together with solution/CI registration. Distributed fan-out, durable reconciliation and consumer release packaging remain open. [Contract and work breakdown](distributed-work-items.md).
 - [ ] Adoption — Eagle SAP and Deldo real-world acceptance tests after M6.
 
 M1–M5 completion describes their implemented scope, not production/cloud readiness. The first and second independent-review follow-ups are part of that baseline. DSL behavior is outside the M6 implementation scope.
@@ -108,7 +109,7 @@ Depends on 6.1; coordinates with 6.2 and 6.5.
 - [x] Implement execution-scoped deletion including versions/snapshots and restartable progress.
 - [x] Recover/clean failed acceptance through a durable initialization intent and a grace period, protected by the execution lease.
 - [x] Cover uploads arriving after lease loss/deletion and temporary/uncommitted provider data with the final lifecycle/admission policy (6.7).
-- [x] Keep drafts and referenced immutable definitions separate from expiring execution data; bounded cloud catalog with retained content-addressed revisions.
+- [x] Keep draft/published definitions separate from expiring execution data; bounded mutable cloud catalog with revision hashes verified on read (not separately immutable content-addressed blobs).
 - [x] Verify restart, prefix isolation, missing/corrupt documents, stale writes and cleanup.
 
 ### 6.4 — Queue transport and recovery scheduling — Complete
@@ -178,6 +179,24 @@ Depends on the preceding implementation packages.
 
 ## Adoption after M6
 
+### Third review — 12 October 2026
+
+- [x] Classify Azure throttles/server errors/timeouts as retryable transport faults; fake Table 429/500/503 and recovery outage regressions pass.
+- [x] Retry lease renewal until the existing local deadline; a single failed renewal leaves a 20-second connector call alive, while persistent failures still fence writes.
+- [x] Separate OAuth shared fetch cancellation from waiter cancellation; caller A aborts and caller B receives the token.
+- [x] Missing initialized ledgers refuse admission and report unhealthy; readiness requires an initial sweep. Add explicit fresh-install bootstrap.
+- [x] Add catalog export/prune, conditional ETag route caching and batched ingress polling; exclude tombstones from live quota and test cached bundle isolation/pinning.
+- [x] Reserve only after claiming; unknown recovery IDs create no blobs/reservations and contending claims cannot rotate generations. Preserve repeated event acceptance.
+- [x] Remove unused Azure alias writes, shorten unconfirmed upload obligations, bound/hash streamed HTTP reads, and isolate retention error-recording failures.
+- [x] Keep probes/management reads outside memory admission; busy writes return 503/Retry-After.
+- [x] Prepare least-privilege Blob/SB roles, Key Vault references, monitoring/retention alert and default scale ceiling 3. Document authenticated public networking and additional monitoring cost; Bicep compiles, no deployment claimed.
+- [x] Fix Redis uncertain transport outcomes and idempotent failure; keep the adapter experimental. Local Garnet + injected fault tests pass; real Redis CI remains pending.
+- [x] Portal preserves tokens on non-401 errors and stops polling terminal executions; regressions pass.
+- [x] Correct historical evidence, capacity contingency, runtime fan-out caveats, version policy and component counts; remove the placeholder conformance CI job and stray text.
+- [ ] Consumer live install: verify new custom roles/version deletion, explicit bootstrap, Key Vault resolution, monitoring/alert notification and scale settings in its approved environment. No Azure lab was recreated for this review.
+
+The consumer project sessions own permanent infrastructure provisioning and operating costs. This Elwood session owns reusable runtime, infrastructure, installation documentation and releases. Eagle adoption depends on M7's item-level concurrency and recovery work; the existing Blob execution lock serializes steps within an execution.
+
 - [ ] Approve permanent hosting cost for the [verified larger-file profile](capacity-profile.md). Owner prioritises 25 MiB / 1,000 files per month over the earlier budget target; measured model projects €45–55/month excluding SQL/application hosting.
 - [x] Measure the actual Deldo normalization script on 1 MiB and 25 MiB generated fixtures; establish 3 GiB managed-heap requirement for the large fixture.
 - [x] Implement a 4 GiB/128 MiB document profile with per-host memory admission and bounded portal inspection.
@@ -192,11 +211,11 @@ Depends on the preceding implementation packages.
 - [ ] Prepare a versioned, tested handoff for the Deldo integration session; resolve its hosting/event-delivery decisions using the implemented profile.
 - [ ] Run both real-world acceptance exercises with their project owners and fix defects discovered there.
 - [ ] Decide the next native provider and public release/support claims based on verified behavior.
-
 ## Progress record
 
 | Date | Package | Evidence / result |
 |---|---|---|
+| 10 October 2026 | M7 / 7.1 Redis coordination foundation | Provider-neutral item/aggregation ownership, Lua coordination and finite expiry implemented in an experimental adapter. 23 local protocol tests pass, including 3,000 items across two clients; 227 existing pipeline tests pass. Real Redis CI added, result pending. Durable reconciliation, runtime wiring, connector fan-out and consumer release remain open in the [M7 checklist](distributed-work-items.md). No cloud resources provisioned. |
 | 8 October 2026 | Baseline | M1–M5 and review follow-ups recorded in implementation-plan.md; no new rerun claimed here. |
 | 8 October 2026 | 6.0 | Temporary storage lab deployed; 3 live Blob tests passed; `3b3b85b`. Actual billing query still had no rows. |
 | 8 October 2026 | Checklist | Master WBS created; subsequent packages are tracked below. |
@@ -214,3 +233,4 @@ Depends on the preceding implementation packages.
 
 | 8 October 2026 | M6 closeout | Final package `3805e7dca4534ee94ad6f750dcd1ddc8ff4ad693898efacba0d0984c8f514c40` deployed successfully; readiness 200, final hosted queue/replay and portal browser tests pass. Temporary resource group deletion verified (`exists=false`). Local API/portal restarted, both HTTP 200. |
 | 8 October 2026 | Content deduplication / capacity | Strict optional SHA-256 suppression, 30-day history and forced replay implemented. Pipeline 227, Azure 25, Hosting 12, five API contracts, portal 120 + 10 component checks pass. Internal review findings resolved. Three final 25 MiB hosted runs completed in 49–54 seconds; duplicate skipped and replay delivered. 49,000-obligation monthly metadata model measured 14.7 seconds per scheduled sweep. Cleanup reached zero history/registrations/live output versions, leaving sources untouched. Temporary group removed (`exists=false`). [Evidence and €45–55/month projection](capacity-profile.md); permanent cost approval and actual project acceptance remain open. |
+| 12 October 2026 | Third review | Five blocking regressions and the listed smaller fixes completed. Fresh Release suites/API contracts, portal tests/build and Bicep compilation pass; [detailed evidence and live consumer gates](m6-release-evidence.md#third-review-follow-up--12-october-2026). Redis foundation is included atomically with solution/CI registration; no new M7 runtime feature work and no cloud provisioning. |

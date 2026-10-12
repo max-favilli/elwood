@@ -67,6 +67,7 @@ public sealed class BlobRetentionTests
             return container.GetBlobClient(parsed.BlobName);
         }
         var ledger = new AzureBlobRetentionLedger(controls.GetBlobClient(prefix + "ledger.json"), clock);
+        await ledger.InitializeAsync();
         var retention = new BlobOutputRetention(ledger, Resolve, clock);
         var connector = new BlobConnector(clientFactory: (_, _, _, path) => container.GetBlobClient(prefix + path), retention: retention);
         try

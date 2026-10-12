@@ -23,6 +23,8 @@ oauth2:
 
 `oauth2` has the same shape on each `destinations.http` entry. Token endpoints require HTTPS, except loopback HTTP for controlled tests. Successful tokens with a usable `expires_in` are cached until shortly before expiry; see authentication lifetimes below. Interactive authorization-code flows are not supported. Default clients do not follow redirects. An unsuccessful token request fails before sending the business request and is not an uncertain business write. Token exchanges and tokens are excluded from traces; authorization headers are redacted.
 
+HTTP sources accept `maxBytes` (default 10 MiB / 10,485,760; range 1–134,217,728). The limit applies while reading the response, including chunked/rejected bodies; an oversized body fails the step without buffering the full response. SHA-256 is calculated incrementally from the exact response bytes before text decoding for content deduplication. `connectionTimeout` covers the streamed body as well as headers; the client's default timeout is also respected. A canceled OAuth waiter stops only its own wait: the shared, bounded token fetch continues for other callers.
+
 Sources can send raw string bodies with `bodyFormat: text` or `xml`; default `json` serializes the evaluated value. Outputs use `contentType: text` or `xml` and their map must return a string. HTTP headers can specify `Content-Type` and `SOAPAction`. This supports authored XML envelopes over HTTP, not WSDL discovery, automatic SOAP object mapping or TQL. The confirmed M5 SAP PI/PO flow is JSON HTTP with Basic authentication. Response bodies from destinations are retained as receipts. To use a response in later transformations, model the request as a dependent HTTP pull source, as in the CRM sample.
 
 ## SQL Server procedures

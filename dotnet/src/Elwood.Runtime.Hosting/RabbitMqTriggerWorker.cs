@@ -17,6 +17,7 @@ public sealed class RabbitMqTriggerWorker(IDeploymentStore catalog, DurableRunti
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var active = new Dictionary<string, (CancellationTokenSource Stop, Task Task)>();
+        var parsedRevisions = new Dictionary<string, ParsedPipeline>();
         try
         {
             while (!stoppingToken.IsCancellationRequested)
@@ -24,15 +25,19 @@ public sealed class RabbitMqTriggerWorker(IDeploymentStore catalog, DurableRunti
                 try
                 {
                     var desired = new Dictionary<string, (string Id, string Source, RabbitMqTriggerConfig Config)>();
-                    foreach (var entry in await catalog.ListAsync())
+                    var seen = new HashSet<string>();
+                    foreach (var entry in await catalog.ListActiveAsync())
                     {
-                        var bundle = await catalog.GetActiveAsync(entry.Id);
-                        if (bundle is null) continue;
-                        var parsed = new PipelineParser().ParseContent(bundle.Content, entry.Id, bundle.RevisionId);
+                        var bundle = entry.Bundle;
+                        var revisionKey = entry.Id + "/" + bundle.RevisionId;
+                        seen.Add(revisionKey);
+                        if (!parsedRevisions.TryGetValue(revisionKey, out var parsed))
+                            parsedRevisions[revisionKey] = parsed = new PipelineParser().ParseContent(bundle.Content, entry.Id, bundle.RevisionId);
                         if (DeploymentValidation.Errors(parsed).Count > 0) continue;
                         foreach (var source in parsed.Config.Sources.Where(s => s.Rabbitmq is not null))
                             desired[entry.Id + "/" + source.Name + "/" + bundle.RevisionId] = (entry.Id, source.Name, source.Rabbitmq!);
                     }
+                    foreach (var key in parsedRevisions.Keys.Except(seen).ToList()) parsedRevisions.Remove(key);
                     foreach (var key in active.Keys.Except(desired.Keys).ToList())
                     {
                         active[key].Stop.Cancel();

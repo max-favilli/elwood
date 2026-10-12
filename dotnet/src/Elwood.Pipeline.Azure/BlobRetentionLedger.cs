@@ -62,10 +62,17 @@ public abstract class BlobRetentionLedger(TimeProvider? timeProvider = null, int
     public abstract Task<BlobRetentionSnapshot> ReadAsync(CancellationToken token = default);
     protected abstract Task ChangeAsync(Action<BlobRetentionSnapshot> change, CancellationToken token);
 
+    // Read-only preflight avoids creating known-rejected intents. RegisterAsync still
+    // performs the authoritative atomic admission after ownership has been acquired.
+    public virtual async Task CheckRegistrationAsync(BlobRetentionEntry entry, CancellationToken token = default)
+        => Register(Decode(Encode(await ReadAsync(token))), entry, false);
+
     public virtual async Task RegisterAsync(BlobRetentionEntry entry, CancellationToken token = default, bool allowExisting = false)
     {
         if (!allowExisting && VerifyAdmissionAsync is not null) await VerifyAdmissionAsync(token);
-        await ChangeAsync(state =>
+        await ChangeAsync(state => Register(state, entry, allowExisting), token);
+    }
+    private void Register(BlobRetentionSnapshot state, BlobRetentionEntry entry, bool allowExisting)
     {
         if (maxObjects <= 0 || maxBytes <= 0 || maxWritesPerHour <= 0) throw new InvalidOperationException("Retention limits must be positive.");
         if (state.Entries.TryGetValue(entry.Id, out var existing))
@@ -90,7 +97,6 @@ public abstract class BlobRetentionLedger(TimeProvider? timeProvider = null, int
         state.WindowWrites++;
         state.WindowBytes += writtenBytes;
         state.Entries.Add(entry.Id, entry);
-        }, token);
     }
 
     public virtual Task UpdateAsync(string id, Action<BlobRetentionEntry> update, CancellationToken token = default) => ChangeAsync(state =>
@@ -152,6 +158,10 @@ public sealed class AzureBlobRetentionLedger(BlobClient blob, TimeProvider? time
     Func<CancellationToken, Task>? verifyLayout = null)
     : BlobRetentionLedger(timeProvider, maxObjects, maxBytes, maxWritesPerHour, maxBytesPerHour)
 {
+    /// <summary>Explicit operator/test bootstrap only. Never called by admission or recovery.</summary>
+    public Task InitializeAsync(CancellationToken token = default) => blob.UploadAsync(BinaryData.FromBytes(Encode(new())),
+        new BlobUploadOptions { Conditions = new() { IfNoneMatch = ETag.All }, HttpHeaders = new() { ContentType = "application/json" } }, token);
+
     private async Task<(BlobRetentionSnapshot State, ETag? ETag)> Read(CancellationToken token)
     {
         if (verifyLayout is not null) await verifyLayout(token);
@@ -168,7 +178,8 @@ public sealed class AzureBlobRetentionLedger(BlobClient blob, TimeProvider? time
             }
             return (Decode(memory.ToArray()), response.Value.Details.ETag);
         }
-        catch (RequestFailedException ex) when (ex.Status == 404) { return (new(), null); }
+        catch (RequestFailedException ex) when (ex.Status == 404)
+        { throw new InvalidOperationException("Retention ledger is missing. Initialize a new installation explicitly, or restore the ledger; admission is blocked.", ex); }
     }
     public override async Task<BlobRetentionSnapshot> ReadAsync(CancellationToken token = default) => (await Read(token)).State;
     protected override async Task ChangeAsync(Action<BlobRetentionSnapshot> change, CancellationToken token)

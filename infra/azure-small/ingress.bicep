@@ -21,6 +21,7 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
+    keyVaultReferenceIdentity: identity.id
     siteConfig: {
       alwaysOn: true
       linuxFxVersion: 'DOTNETCORE|10.0'

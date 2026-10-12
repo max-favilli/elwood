@@ -25,6 +25,11 @@ param managementTokenSha256 string
 param queueProvider string = 'storage'
 @allowed(['guarded', 'files-25m'])
 param capacityProfile string = 'guarded'
+@minValue(1)
+@maxValue(1000)
+param maximumInstanceCount int = 3
+param retentionAlertActionGroups array = []
+param secretReferences array = []
 param serviceBusNamespace string = 'unused.servicebus.windows.net'
 @secure()
 param additionalSettings object = {}
@@ -52,10 +57,50 @@ resource poison 'Microsoft.Storage/storageAccounts/queueServices/queues@2025-06-
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = { name: identityName }
 var dataRoles = [
   'acdd72a7-3385-48ef-bd42-f606fba81ae7' // Reader verifies actual lifecycle and soft-delete settings.
-  'b7e6dc6d-f1e8-4753-8033-0f276bb0955b' // Blob Data Owner includes version deletion.
   '974c5e8b-45b9-4653-ba55-5f855dd0fb88'
   '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
 ]
+resource blobRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
+  name: guid(resourceGroup().id, 'elwood-blob-contributor-with-version-delete')
+  properties: {
+    roleName: 'Elwood Blob Contributor and version cleanup ${uniqueString(resourceGroup().id)}'
+    description: 'Storage Blob Data Contributor permissions plus deletion of owned blob versions; no ACL ownership actions.'
+    type: 'CustomRole'
+    assignableScopes: [resourceGroup().id]
+    permissions: [{
+      actions: [
+        'Microsoft.Storage/storageAccounts/blobServices/containers/delete'
+        'Microsoft.Storage/storageAccounts/blobServices/containers/read'
+        'Microsoft.Storage/storageAccounts/blobServices/containers/write'
+        'Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action'
+      ]
+      dataActions: [
+        'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete'
+        'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'
+        'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write'
+        'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/move/action'
+        'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action'
+        'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/deleteBlobVersion/action'
+      ]
+    }]
+  }
+}
+resource blobAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storage.id, identity.id, blobRole.id)
+  scope: storage
+  properties: { roleDefinitionId: blobRole.id, principalId: identity.properties.principalId, principalType: 'ServicePrincipal' }
+}
+resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+  name: '${appName}-logs'
+  location: location
+  properties: { sku: { name: 'PerGB2018' }, retentionInDays: 30, workspaceCapping: { dailyQuotaGb: json('0.1') } }
+}
+resource insights 'Microsoft.Insights/components@2020-02-02' = {
+  name: '${appName}-insights'
+  location: location
+  kind: 'web'
+  properties: { Application_Type: 'web', WorkspaceResourceId: logs.id }
+}
 resource access 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for role in dataRoles: {
   name: guid(storage.id, identity.id, role)
   scope: storage
@@ -75,6 +120,7 @@ resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
 }
 var originSettings = [for (origin, i) in portalOrigins: { name: 'Elwood__Management__Origins__${i}', value: origin }]
 var baseSettings = concat([
+        { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: insights.properties.ConnectionString }
         { name: 'AzureWebJobsStorage__accountName', value: storage.name }
         { name: 'AzureWebJobsStorage__credential', value: 'managedidentity' }
         { name: 'AzureWebJobsStorage__clientId', value: identity.properties.clientId }
@@ -126,7 +172,8 @@ var baseSettings = concat([
         { name: 'Elwood__VerificationOnly', value: string(verificationOnly) }
         { name: 'Elwood__RabbitMqIngressEnabled', value: string(enableRabbitMqIngress) }
       ], largeFiles ? [{ name: 'DOTNET_GCHeapHardLimit', value: '0xD9999999' }] : [], originSettings) // Explicit 3.4 GiB ceiling, independent of host-reported physical memory.
-var extraSettings = additionalSettings.?values ?? []
+var keyVaultSettings = [for secret in secretReferences: { name: secret.name, value: '@Microsoft.KeyVault(SecretUri=${secret.secretUri})' }]
+var extraSettings = concat(additionalSettings.?values ?? [], keyVaultSettings)
 var allSettings = concat(filter(baseSettings, s => !contains(map(extraSettings, extra => extra.name), s.name)), extraSettings)
 
 // App Service settings updates reject hyphens in keys. Keep binding settings
@@ -144,6 +191,7 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
+    keyVaultReferenceIdentity: identity.id
     siteConfig: {
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'
@@ -160,13 +208,36 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
         }
       }
       scaleAndConcurrency: {
-        maximumInstanceCount: 40 // Azure minimum; no always-ready instances.
+        maximumInstanceCount: maximumInstanceCount
         instanceMemoryMB: largeFiles ? 4096 : 512
         triggers: { http: { perInstanceConcurrency: largeFiles ? 1 : 2 } }
       }
     }
   }
-  dependsOn: [access, poison]
+  dependsOn: [access, blobAccess, poison]
+}
+resource retentionAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = {
+  name: '${appName}-retention-health'
+  location: location
+  properties: {
+    displayName: 'Elwood retention unhealthy or heartbeat absent'
+    description: 'Retention failed or no healthy sweep was observed in 15 minutes. Pause admission and inspect /api/retention.'
+    enabled: true
+    severity: 1
+    scopes: [logs.id]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    skipQueryValidation: true // AppTraces may not exist until the first package runs.
+    criteria: { allOf: [{
+      query: 'AppTraces | where AppRoleName == "${appName}" | where Message startswith "ELWOOD_RETENTION_" | summarize Good=countif(Message == "ELWOOD_RETENTION_HEALTHY"), Bad=countif(Message startswith "ELWOOD_RETENTION_UNHEALTHY") | where Good == 0 or Bad > 0'
+      timeAggregation: 'Count'
+      operator: 'GreaterThan'
+      threshold: 0
+      failingPeriods: { numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 }
+    }] }
+    autoMitigate: true
+    actions: { actionGroups: retentionAlertActionGroups }
+  }
 }
 resource scmBasic 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2024-04-01' = {
   parent: app
@@ -186,5 +257,5 @@ output identityId string = identity.id
 module ingress 'ingress.bicep' = if (enableRabbitMqIngress) {
   name: 'elwood-rabbitmq-ingress'
   params: { appName: '${appName}-ingress', location: location, identityName: identityName, settings: { values: allSettings } }
-  dependsOn: [access]
+  dependsOn: [access, blobAccess]
 }
