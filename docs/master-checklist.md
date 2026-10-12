@@ -11,7 +11,7 @@ Check a box only when its stated behavior is implemented and verified. An unchec
 - [x] M3 — Explicit real/mock local testing and inspection.
 - [x] M4 — Durable local execution, retries, recovery and internal retention.
 - [x] M5 — Representative connectors and controlled integration verification.
-- [ ] M6 — Code complete; fourth-review fresh bootstrap, custom host role, readiness and scheduled retention verified on Azure. Complete-day telemetry sizing and release publication remain active. [Campaign and installer evidence](m6-release-evidence.md).
+- [ ] M6 — Code and installer verified; `v0.7.26` published. Fresh bootstrap, custom host role, readiness, scheduled retention and hosted queue/replay pass. Scheduled complete-day telemetry sizing and lab cleanup remain active. [Campaign and installer evidence](m6-release-evidence.md).
 - [ ] M7 — No new feature work during this review package; the existing experimental foundation and its requested residual fixes are committed together with solution/CI registration. Distributed fan-out, durable reconciliation and consumer release packaging remain open. [Contract and work breakdown](distributed-work-items.md).
 - [ ] Adoption — Eagle SAP and Deldo real-world acceptance tests after M6.
 
@@ -202,7 +202,8 @@ Depends on the preceding implementation packages.
 - [x] Preserve health traces while sampling other telemetry; disable automatic SDK dependencies and document cap-induced false alarms.
 - [x] Return 404 for unknown recovery IDs, permit catalog management despite conflicting routes, use `AzureServices` network bypass and correct HTTP limit/component-count documentation.
 - [x] Push backend and portal history; repair Linux/Docker harness failures exposed by remote CI.
-- [ ] Verify final remote CI and publish `v0.7.26`, with Core publicly available before dependent NuGet packages.
+- [x] Verify final remote CI and publish `v0.7.26`, with Core publicly available before dependent NuGet packages. [Release](https://github.com/max-favilli/elwood/releases/tag/v0.7.26).
+- [x] Repeat hosted management, queue execution, duplicate acceptance and pinned replay using the default three-instance ceiling; record reduced-ceiling failures without claiming it certified.
 - [ ] Measure a complete day of maintenance telemetry, size the provisional cap with headroom, record the limits of that measurement, and remove the disposable lab.
 
 The consumer project sessions own permanent infrastructure provisioning and operating costs. This Elwood session owns reusable runtime, infrastructure, installation documentation and releases. Eagle adoption depends on M7's item-level concurrency and recovery work; the existing Blob execution lock serializes steps within an execution.

@@ -27,6 +27,8 @@ Worker adaptive sampling targets two items/second, excluding traces and exceptio
 
 The default `maximumInstanceCount` is 3, with no always-ready allocation. Azure applies this ceiling per independently scaling function group, not as a total app or euro cap. Approve a different ceiling for larger bursts. [Flex scale limits](https://learn.microsoft.com/en-us/azure/azure-functions/flex-consumption-plan#maximum-instance-count-the-ceiling).
 
+Keep the default three-instance ceiling for initial adoption. A disposable one-instance trial produced intermittent readiness timeouts; the hosted management/queue/replay smoke passed after restoring three. Lower ceilings require separate verification and are not certified by this install check. This observation does not establish the cause of the reduced-ceiling failures.
+
 ## Installation
 
 Use .NET 10 SDK and Azure CLI/Bicep. Obtain approval for the subscription, resource group, region and costs. West Europe was verified. If CLI authentication expires, the owner signs in; automation must not initiate an interactive login.
