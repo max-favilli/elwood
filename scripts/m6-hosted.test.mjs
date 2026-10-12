@@ -8,7 +8,7 @@ const endpoint = process.env.ELWOOD_M6_HOST_URL;
 test('M6 hosted management, synchronous draft test, durable queue execution, inspection and replay',
   { skip: !endpoint, timeout: 300_000 }, async () => {
     const base = new URL(endpoint);
-    assert.match(base.hostname, /^elwood-m6-api-[a-z0-9]+(?:-[a-z0-9]+)?\.azurewebsites\.net$/);
+    assert.match(base.hostname, /^elwood-(?:m6|review)-api-[a-z0-9]+(?:-[a-z0-9]+)?\.azurewebsites\.net$/);
     assert.equal(base.protocol, 'https:'); assert.equal(base.pathname, '/');
     assert.equal(base.username + base.password + base.search + base.hash, '');
     const token = (await readFile(process.env.ELWOOD_M6_HOST_TOKEN_FILE, 'utf8')).trim();

@@ -1,6 +1,6 @@
 # M6 verification and external review handoff
 
-This document preserves the historical native Azure campaign within guarded-profile limits. Its baselines were backend `655c359`, portal `b6af335`; subsequent capacity and review evidence is explicitly separated below. The five third-review code blockers are fixed and locally verified. Updated installer permissions, bootstrap and monitoring have not been live-deployed; consumer verification remains open. The historical cloud campaign used temporary `elwood-m6-rg`, West Europe, with a €10 allowance. No workplace production system was used.
+This document preserves the historical native Azure campaign within guarded-profile limits. Its baselines were backend `655c359`, portal `b6af335`; subsequent capacity and review evidence is explicitly separated below. The fourth-review section records the fresh installer deployment, real bootstrap and custom host-role verification. A complete-day telemetry measurement remains pending. Both campaigns use temporary `elwood-m6-rg`, West Europe, within the owner's cumulative €10 allowance. No workplace production system was used.
 
 Follow-up: [content suppression](content-deduplication.md) and the [large-file capacity profile](capacity-profile.md) are now implemented and separately verified on Azure. The evidence below remains the original guarded-profile campaign; the follow-up document records its additional tests, revised cost model and remaining permanent-hosting approval.
 
@@ -67,3 +67,41 @@ Verification: Core **374**, Pipeline **231**, CLI **22**, Parquet **7**, Connect
 `az bicep build` compiles the updated installer. The explicit retention bootstrap script passes PowerShell parsing. No Azure resources were created and none of the previous live service results were rerun: the lab is gone. Consumer installation must verify the new custom Blob role and Sender/Receiver grants, Key Vault references, first-sweep readiness, monitoring/alert delivery and scale ceiling. Removing old Owner grants is an explicit upgrade step; incremental ARM deployment does not remove them. The storage/SB public endpoints are documented as authenticated public networking, not private connectivity. Monitoring charges are additional to the historical capacity estimate.
 
 The experimental Redis source/test directories are included with the solution and CI registration; runtime fan-out and durable reconciliation remain unimplemented. The echo-only conformance job was removed: ordinary Core/TypeScript suites remain the executable language checks. No DSL behavior changed. This review package is ready for another code review; it is not a claim of a newly verified Azure deployment.
+
+## Fourth-review installer verification — 12 October 2026
+
+The third-review paragraph above describes its historical state. For this follow-up a fresh `elwood-m6-rg` was created in West Europe. Azure Cost Management reported **€0.05287948** for the previous campaign when checked before creating it (billing is delayed). The new lab contains only the native Functions/storage/monitoring installation; no SQL, RabbitMQ, Redis or always-ready instances. It uses `files-25m`, one maximum instance per scaling group, and the same account-scoped runtime/host identity. The approved campaign allowance remains €10.
+
+Backend application source: `881a32c`; package SHA-256: `12c6f12c3ed0f767504799473394b83f1e27f20a3168f908a06a40e711a42860`. Deployment `fourth-review` returned **Succeeded** after a real what-if reported **26 Create** changes. App: `elwood-review-api-r3m5auolhstum`; account: `elwr3m5auolhstum`. Its identity has the custom Blob contributor/version-cleanup role, Queue Data Contributor, Table Data Contributor and Reader. It has **no Blob Data Owner** grant. The operator separately received Blob Data Contributor on this disposable account to run bootstrap. Deployers need `Microsoft.Authorization/roleDefinitions/write` at the resource group and role assignment permission; Contributor alone is insufficient.
+
+The corrected script was run with real Azure CLI **2.86.0**:
+
+```powershell
+./scripts/initialize-azure-retention.ps1 -SubscriptionId <approved-subscription> -StorageAccount elwr3m5auolhstum -CapacityProfile files-25m
+```
+
+Actual output (middle partition lines omitted):
+
+```text
+Initialized elwood/retention/00.json
+...
+Initialized elwood/retention/63.json
+Initialized elwood/retention/health.json
+Initialization complete. Start workers and require a successful retention sweep before readiness.
+```
+
+Listing with `--include dv` found **66 objects**: 64 partitions, health and the final layout marker. A second script invocation stopped with `Namespace already has data/versions in control. Restore existing control data or choose a fresh namespace; do not reinitialize.` No ledger was overwritten.
+
+The published ZIP was deployed through `az functionapp deployment source config-zip` (exit 0; deployment ID `afa3ec34-6746-4835-8811-5137f753500a`), followed by `az functionapp start`. ARM reported Running and all seven functions registered. Initial probes timed out while the HTTP group started; liveness then returned 200, and readiness initially returned 503 before the first sweep. At **10:48:21 UTC**, a Node HTTP probe recorded:
+
+```text
+GET /api/health     200  {"status":"healthy",...}
+GET /api/readiness  200  {"status":"ready"}
+GET /api/retention  200  storage.healthy=true, overdueObjects=0, failures=[]
+```
+
+Retention's ledger recorded `lastSweepAt=2026-10-12T10:45:00.6458695+00:00`; Application Insights recorded `ELWOOD_RETENTION_HEALTHY` at **10:45:00.729 UTC**. Host storage contains timer monitor/lease records for ExecutionRecovery and ExecutionRetention. Readiness also confirmed the live lifecycle policy and managed-identity deletion of probe versions/snapshots. These establish the custom role for this deployment's host requirements; they are not a claim that it covers every Functions binding.
+
+Fourth-review regressions cover unknown recovery IDs, duplicate-route management repair, and the telemetry sampling/dependency configuration. The complete local non-integration run passed Core **374**, Pipeline **231**, CLI **22**, Parquet **7**, Connectors **21**, Hosting **13**, Azure **37**, Redis injected transport **2**. All **five API contracts** passed against the explicit Release DLL. Backend and portal history were pushed. Portal [CI](https://github.com/max-favilli/elwood-portal/actions/runs/38237759336) passed its tests, lint, type check and build. The first backend CI run exposed two previously unexercised harness defects: SIGABRT cleanup awaiting a second exit event on Linux, and duplicated Azurite listener arguments. Commit `2f77e4b` fixes them; its complete [backend CI](https://github.com/max-favilli/elwood/actions/runs/38238628431) is green. Docker adapter tests passed **26** cases, with **25 live-Azure opt-ins skipped**; a separate real Redis run passed **25** coordination cases. SQL/Blob/RabbitMQ contracts, hosted RabbitMQ recovery, .NET/API/Bicep and TypeScript jobs also passed.
+
+Monitoring is configured with adaptive sampling, unsampled traces/exceptions and automatic SDK dependency tracking disabled. A capped workspace can still cause a false retention alert; consult live retention status and ingestion health. A short initial observation is **not a measured day**. The complete 24-hour maintenance measurement, cap sizing and disposable lab teardown remain open and must be recorded before claiming this follow-up fully closed. Consumer traffic and notification action groups still need consumer-specific validation.

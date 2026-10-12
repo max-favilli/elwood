@@ -11,7 +11,7 @@ Check a box only when its stated behavior is implemented and verified. An unchec
 - [x] M3 — Explicit real/mock local testing and inspection.
 - [x] M4 — Durable local execution, retries, recovery and internal retention.
 - [x] M5 — Representative connectors and controlled integration verification.
-- [ ] M6 — Third-review code blockers fixed and locally verified. Revised installer permissions, bootstrap and monitoring need consumer live verification before final hosting sign-off; historical [campaign evidence](m6-release-evidence.md) applies to its recorded build.
+- [ ] M6 — Code complete; fourth-review fresh bootstrap, custom host role, readiness and scheduled retention verified on Azure. Complete-day telemetry sizing and release publication remain active. [Campaign and installer evidence](m6-release-evidence.md).
 - [ ] M7 — No new feature work during this review package; the existing experimental foundation and its requested residual fixes are committed together with solution/CI registration. Distributed fan-out, durable reconciliation and consumer release packaging remain open. [Contract and work breakdown](distributed-work-items.md).
 - [ ] Adoption — Eagle SAP and Deldo real-world acceptance tests after M6.
 
@@ -193,7 +193,17 @@ Depends on the preceding implementation packages.
 - [x] Fix Redis uncertain transport outcomes and idempotent failure; keep the adapter experimental. Local Garnet + injected fault tests pass; real Redis CI remains pending.
 - [x] Portal preserves tokens on non-401 errors and stops polling terminal executions; regressions pass.
 - [x] Correct historical evidence, capacity contingency, runtime fan-out caveats, version policy and component counts; remove the placeholder conformance CI job and stray text.
-- [ ] Consumer live install: verify new custom roles/version deletion, explicit bootstrap, Key Vault resolution, monitoring/alert notification and scale settings in its approved environment. No Azure lab was recreated for this review.
+- [ ] Consumer acceptance: verify its Key Vault resolution, notification action groups and scale settings. The separate fourth-review lab now verifies fresh bootstrap, custom host role/version deletion, readiness and heartbeat.
+
+### Fourth review — installer and release
+
+- [x] Fix `--include dv`; run bootstrap on a fresh real account and verify a repeated invocation refuses reinitialization.
+- [x] What-if, deploy and start the custom-role Functions installation; observe readiness 200 and an independent scheduled retention sweep.
+- [x] Preserve health traces while sampling other telemetry; disable automatic SDK dependencies and document cap-induced false alarms.
+- [x] Return 404 for unknown recovery IDs, permit catalog management despite conflicting routes, use `AzureServices` network bypass and correct HTTP limit/component-count documentation.
+- [x] Push backend and portal history; repair Linux/Docker harness failures exposed by remote CI.
+- [ ] Verify final remote CI and publish `v0.7.26`, with Core publicly available before dependent NuGet packages.
+- [ ] Measure a complete day of maintenance telemetry, size the provisional cap with headroom, record the limits of that measurement, and remove the disposable lab.
 
 The consumer project sessions own permanent infrastructure provisioning and operating costs. This Elwood session owns reusable runtime, infrastructure, installation documentation and releases. Eagle adoption depends on M7's item-level concurrency and recovery work; the existing Blob execution lock serializes steps within an execution.
 
