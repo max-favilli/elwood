@@ -17,7 +17,8 @@ namespace Elwood.Pipeline.Async;
 /// <summary>
 /// Durable step runner. Persisted pending steps are the scheduling intent; queue messages
 /// are replaceable wake-up hints. One execution lock covers a complete attempt, including
-/// external effects and its checkpoint. Independent executions can run concurrently.
+/// external effects and its checkpoint, in the default profile. The optional experimental
+/// distributed scheduler uses parent claims for control and journal claims for item attempts.
 /// </summary>
 public sealed class AsyncExecutor
 {
@@ -29,17 +30,20 @@ public sealed class AsyncExecutor
     private readonly TimeProvider _time;
     private readonly ContentFingerprintStore? _fingerprints;
     private readonly ExecutionConcurrencyGate? _concurrency;
+    private readonly DistributedStepScheduler? _distributed;
     private DateTime Now => _time.GetUtcNow().UtcDateTime;
 
     public AsyncExecutor(IStateStore stateStore, IDocumentStore documentStore, IStepQueue stepQueue,
         ISecretProvider? secretProvider = null, IEnumerable<ISourceConnector>? sourceConnectors = null,
         IEnumerable<IDestinationConnector>? destinationConnectors = null, ElwoodEngine? engine = null,
-        LocalTestSession? testSession = null, TimeProvider? timeProvider = null, ContentFingerprintStore? fingerprints = null, ExecutionConcurrencyGate? concurrency = null)
+        LocalTestSession? testSession = null, TimeProvider? timeProvider = null, ContentFingerprintStore? fingerprints = null, ExecutionConcurrencyGate? concurrency = null,
+        DistributedStepScheduler? distributedWork = null)
     {
         _states = stateStore as IRecoverableStateStore ?? throw new ArgumentException("Queued execution requires a recoverable state store with cross-worker exclusion.");
         _documents = documentStore; _queue = stepQueue; _test = testSession; _time = timeProvider ?? TimeProvider.System;
         _fingerprints = fingerprints;
         _concurrency = concurrency;
+        _distributed = distributedWork;
         _operations = new(documentStore, secretProvider, sourceConnectors, destinationConnectors, engine, testSession) { InspectContent = InspectContent };
     }
 
@@ -76,6 +80,8 @@ public sealed class AsyncExecutor
             ExecutionId = id, PipelineId = pipeline.PipelineId, RevisionId = pipeline.RevisionId,
             PipelineName = pipeline.Config.Name ?? "unknown", Status = ExecutionStatus.Running, StartedAt = Now,
             Durable = durable && !isTest && _test is null, IsTest = isTest || _test is not null, TestMode = _test?.Mode,
+            WorkProfile = _distributed is not null && durable && !isTest && _test is null && executionDeadlineAt is null && pipeline.Config.Mode == "async"
+                ? DistributedStepScheduler.Profile : null,
             TriggerSourceName = triggerSourceName, ReplayOf = replayOf, ForceProcessing = forceProcessing, InputHash = Hash(input),
             ExecutionDeadlineAt = executionDeadlineAt,
             LifetimeExpiresAt = Now.AddSeconds(Math.Clamp(pipeline.Config.MaxExecutionSeconds, 1, RetentionPolicy.MaximumExecutionSeconds)),
@@ -92,6 +98,8 @@ public sealed class AsyncExecutor
         }));
         List<List<string>> stages = [];
         var errors = pipeline.Errors.Concat(PipelineParser.ValidateExecutionConfig(pipeline.Config)).ToList();
+        if (state.WorkProfile is not null && state.Sources.Count + state.Outputs.Count > DistributedStepScheduler.MaximumSteps)
+            errors.Add("The distributed profile supports at most 256 source/output definitions per execution.");
         try { stages = DependencyResolver.ResolveStages(pipeline.Config.Sources).Select(stage => stage.Select(s => s.Name).ToList()).ToList(); }
         catch (InvalidOperationException ex) { errors.Add(ex.Message); }
         await _documents.StoreAsync($"exec/{id}/stages", JsonSerializer.Serialize(stages));
@@ -107,6 +115,15 @@ public sealed class AsyncExecutor
     {
         using var slot = _concurrency is null ? null : await _concurrency.EnterAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
+        if (message.WorkGeneration is not null || message.WorkOrdinal is not null)
+        {
+            var observed = await _states.GetExecutionAsync(message.ExecutionId);
+            if (observed?.WorkProfile is null) return; // Never reinterpret an item hint as an ordinary step.
+            RequireDistributed(observed);
+            await _distributed!.ExecuteAsync(message, cancellationToken);
+            await RefreshDistributedAsync(message.ExecutionId, cancellationToken);
+            return;
+        }
         await using var claim = await _states.TryClaimAsync(message.ExecutionId, cancellationToken);
         if (claim is null) return;
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, claim.OwnershipLost);
@@ -125,12 +142,20 @@ public sealed class AsyncExecutor
     {
         var state = await _states.GetExecutionAsync(message.ExecutionId);
         if (state is null || state.Deleting || state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview or ExecutionStatus.Skipped) return;
+        RequireDistributed(state);
+        if (state.WorkProfile is not null && (state.SupersededByForcedReplay || state.RecoveryCapacityExhausted)) return;
         if (await StopExpiredLifetime(state, claim)) return;
         using var executionBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         executionBudget.CancelAfter(Lifetime(state) - Now);
         cancellationToken = executionBudget.Token;
         var step = Step(state, message);
         if (step is null || step.Status == ExecutionStatus.Completed) return;
+        if (step.Work is not null)
+        {
+            await _distributed!.RefreshAsync(state, claim, cancellationToken);
+            if (state.Status is ExecutionStatus.Running or ExecutionStatus.Retrying) await Advance(state, await Load(state), claim);
+            return;
+        }
         if (step.NextAttemptAt > Now) return;
         PipelineContentDto? pipeline = null;
         IElwoodValue idm = JsonNodeValueFactory.Instance.CreateObject([]);
@@ -139,6 +164,18 @@ public sealed class AsyncExecutor
         {
             pipeline = await Load(state);
             var stages = Stages(pipeline);
+            if (state.WorkProfile is not null && DistributedStepScheduler.Eligible(pipeline, message))
+            {
+                if (!Ready(state, stages).Any(m => m.Type == message.Type && m.StepName == message.StepName)) return;
+                if (message.Type == StepType.Source)
+                {
+                    var index = stages.FindIndex(s => s.Contains(message.StepName));
+                    idm = await _operations.Assemble(state, stages.Take(index).SelectMany(s => s));
+                }
+                else idm = await _operations.Read(state.IdmRef, "IDM");
+                await _distributed!.AdmitAsync(state, pipeline, message, idm, claim, cancellationToken);
+                return;
+            }
             if (step.Status == ExecutionStatus.Running)
             {
                 RecoverInterrupted(state, step, Policy(pipeline, message));
@@ -186,6 +223,7 @@ public sealed class AsyncExecutor
             await Save(state, claim);
         }
         catch (ExecutionOwnershipLostException) { throw; }
+        catch (Exception) when (step.Work is not null) { throw; } // Admission/reply loss is recovered from the persisted work identity.
         catch (Exception ex) when (claim.OwnershipLost.IsCancellationRequested)
         {
             // The old owner must not publish a result, retry or terminal state.
@@ -293,6 +331,29 @@ public sealed class AsyncExecutor
         if (state.Status is ExecutionStatus.Running or ExecutionStatus.Retrying) await Notify(Ready(state, stages));
     }
 
+    private void RequireDistributed(ExecutionState state)
+    {
+        if (state.WorkProfile is not null && (_distributed is null || state.WorkProfile != DistributedStepScheduler.Profile))
+            throw new InvalidOperationException("This execution requires its distributed work profile; the ordinary executor cannot run it.");
+    }
+    private static void RejectLegacyRecovery(ExecutionState state)
+    {
+        if (state.WorkProfile is not null)
+            throw new RecoveryConflictException("Distributed item recovery and replay require the item-aware operator endpoints (M7.5).");
+    }
+    private async Task RefreshDistributedAsync(string id, CancellationToken token)
+    {
+        await using var claim = await _states.TryClaimAsync(id, token);
+        if (claim is null) return; // The durable recovery index retries parent publication.
+        await claim.ValidateAsync(token);
+        var state = await _states.GetExecutionAsync(id);
+        if (state is null || state.Deleting || state.Status is not (ExecutionStatus.Running or ExecutionStatus.Retrying)) return;
+        RequireDistributed(state);
+        if (await StopExpiredLifetime(state, claim)) return;
+        await _distributed!.RefreshAsync(state, claim, token);
+        if (state.Status is ExecutionStatus.Running or ExecutionStatus.Retrying) await Advance(state, await Load(state), claim);
+    }
+
     /// <summary>Recover dropped queue hints, checkpoint-to-publish gaps and interrupted attempts.</summary>
     public async Task RecoverAsync(CancellationToken cancellationToken = default)
     {
@@ -300,6 +361,7 @@ public sealed class AsyncExecutor
         foreach (var snapshot in await _states.ListRecoverableAsync())
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (snapshot.WorkProfile is not null && (_distributed is null || snapshot.WorkProfile != DistributedStepScheduler.Profile)) continue;
             if ((!snapshot.Durable && snapshot.ExecutionDeadlineAt is null) ||
                 snapshot.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview or ExecutionStatus.Skipped || snapshot.Deleting) continue;
             await using var claim = await _states.TryClaimAsync(snapshot.ExecutionId, cancellationToken);
@@ -316,9 +378,10 @@ public sealed class AsyncExecutor
             try
             {
                 var pipeline = await Load(state);
-                foreach (var (name, step) in state.Sources.Where(s => s.Value.Status == ExecutionStatus.Running))
+                if (state.WorkProfile is not null) await _distributed!.RefreshAsync(state, claim, cancellationToken);
+                foreach (var (name, step) in state.Sources.Where(s => s.Value.Status == ExecutionStatus.Running && s.Value.Work is null))
                     RecoverInterrupted(state, step, pipeline.Yaml.Sources.Single(s => s.Name == name).Retry);
-                foreach (var (name, step) in state.Outputs.Where(s => s.Value.Status == ExecutionStatus.Running))
+                foreach (var (name, step) in state.Outputs.Where(s => s.Value.Status == ExecutionStatus.Running && s.Value.Work is null))
                     RecoverInterrupted(state, step, pipeline.Yaml.Outputs.Single(s => s.Name == name).Retry);
                 if (state.Status is ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) await Save(state, claim);
                 else await Advance(state, pipeline, claim);
@@ -359,6 +422,7 @@ public sealed class AsyncExecutor
     {
         await using var claim = await ClaimExistingAsync(id);
         var state = await _states.GetExecutionAsync(id) ?? throw new KeyNotFoundException("Execution not found.");
+        RejectLegacyRecovery(state);
         if (state.SupersededByForcedReplay) throw new RecoveryConflictException("This execution was fenced by an explicit forced replay and cannot resume.");
         if (state.RecoveryCapacityExhausted) throw new RecoveryConflictException("This execution used reserved recovery capacity. Reclaim storage and explicitly replay it instead of resuming.");
         if (!state.Durable || state.IsTest || state.Deleting || state.ExpiresAt <= Now) throw new RecoveryConflictException("This execution cannot be resumed.");
@@ -384,6 +448,7 @@ public sealed class AsyncExecutor
     {
         await using var claim = await ClaimExistingAsync(id);
         var state = await _states.GetExecutionAsync(id) ?? throw new KeyNotFoundException("Execution not found.");
+        RejectLegacyRecovery(state);
         if (!state.Durable || state.IsTest || state.Deleting || state.ExpiresAt <= Now || state.Status is ExecutionStatus.Running or ExecutionStatus.Pending or ExecutionStatus.Retrying)
             throw new RecoveryConflictException("Only retained terminal executions can be replayed.");
         if (state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values).Any(s => s.OutcomeUncertain) && !acknowledgeUncertain)
@@ -421,6 +486,7 @@ public sealed class AsyncExecutor
         foreach (var snapshot in await _states.ListRetainedAsync())
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (snapshot.WorkProfile is not null) continue; // 7.5 must drain items and prune their journal before deleting the parent.
             if (!snapshot.Deleting && !(snapshot.ExpiresAt <= Now)) continue;
             try
             {
@@ -457,6 +523,8 @@ public sealed class AsyncExecutor
 
     internal async Task<PipelineResult> RunToCompletion(string id, CancellationToken cancellationToken = default, CancellationToken budgetCancellation = default, bool responseOutputOnly = false)
     {
+        if ((await _states.GetExecutionAsync(id))?.WorkProfile is not null)
+            throw new InvalidOperationException("Distributed executions require item dispatch; the single-owner synchronous loop cannot drain them.");
         // Hold ownership across retry waits as well as connector calls. Recovery cannot
         // steal a pending sync step or escape the request's cancellation token.
         IExecutionClaim? claim;
@@ -546,6 +614,7 @@ public sealed class AsyncExecutor
     private async Task<bool> StopExpiredLifetime(ExecutionState state, IExecutionClaim claim)
     {
         if (Lifetime(state) > Now) return false;
+        if (state.WorkProfile is not null) await _distributed!.CaptureUncertaintyAsync(state, claim.OwnershipLost);
         await StopSync(state, claim, true, "Execution lifetime exceeded; no further automatic attempts or manual resumes are allowed. Replay to start a new execution.");
         return true;
     }

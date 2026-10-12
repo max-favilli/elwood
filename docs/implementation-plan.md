@@ -42,7 +42,7 @@ Redis provides shared coordination and cached status. Durable manifests, checkpo
 |---|---|---|
 | 7.1 Coordination contract and Redis adapter | Complete as an experimental component; real Redis protocol tests pass | Production activation depends on the following packages |
 | 7.2 Durable manifests, checkpoints and reconciliation | Complete as a component; local and Redis/Azurite CI checks pass | Provider failover/load certification remains 7.7 |
-| 7.3 Runtime integration | In progress; isolated item runner passes CI | Parent execution coordination, persistent stage discovery, queue dispatch, aggregate publication, local real/mock parity and host registration |
+| 7.3 Runtime integration | In progress; item runner passes CI, experimental parent scheduling and recovery pass local tests pending CI | Synchronous local real/mock parity and host registration; expanded-item aggregation is 7.4, registration also requires 7.5 |
 | 7.4 Explicit YAML fan-out | Open | Validated source/output fan-out, bounded scheduling and deterministic aggregation, preserving existing definitions |
 | 7.5 Inspection, recovery and retention | Open | Paginated item history, operator actions, finite physical cleanup, quotas and backpressure |
 | 7.6 Shared pipeline/route cache | Open | Immutable bundle distribution, deployment invalidation and correct cold-cache behavior |

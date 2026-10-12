@@ -12,7 +12,7 @@ public sealed class RuntimeStepQueue : IStepQueue
 {
     private readonly Channel<StepMessage> _channel = Channel.CreateUnbounded<StepMessage>();
     private readonly ConcurrentDictionary<string, byte> _pending = new();
-    private static string Key(StepMessage message) => $"{message.ExecutionId}/{message.Type}/{message.StepName}";
+    private static string Key(StepMessage message) => $"{message.ExecutionId}/{message.Type}/{message.StepName}/{message.WorkGeneration}/{message.WorkOrdinal}";
     public Task EnqueueAsync(StepMessage message)
     {
         if (_pending.TryAdd(Key(message), 0)) _channel.Writer.TryWrite(message);

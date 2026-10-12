@@ -20,4 +20,25 @@ public sealed class StepQueueCodecTests
 
     [Fact]
     public void OversizedMessagesAreRejectedBeforeParsing() => Assert.Throws<ArgumentException>(() => StorageQueueStepQueue.Deserialize(new string('x', 4097)));
+
+    [Fact]
+    public void ItemHintsUseVersionTwoAndPreserveGenerationAndOrdinal()
+    {
+        var item = new StepMessage { ExecutionId = "execution", PipelineId = "pipeline", StepName = "orders", Type = StepType.Source,
+            WorkGeneration = "generation-1", WorkOrdinal = 42 };
+        var json = StorageQueueStepQueue.Serialize(item);
+        using var envelope = JsonDocument.Parse(json);
+        Assert.Equal(2, envelope.RootElement.GetProperty("version").GetInt32());
+        Assert.Equal(JsonSerializer.Serialize(item), JsonSerializer.Serialize(StorageQueueStepQueue.Deserialize(json)));
+        Assert.Throws<ArgumentException>(() => StorageQueueStepQueue.Deserialize(json.Replace("\"version\":2", "\"version\":1")));
+    }
+
+    [Theory]
+    [InlineData(null, 0)]
+    [InlineData("generation", null)]
+    [InlineData("generation", -1)]
+    [InlineData("generation", 100000)]
+    public void IncompleteItemIdentityCannotFallThroughToOrdinaryStep(string? generation, int? ordinal)
+        => Assert.Throws<ArgumentException>(() => StorageQueueStepQueue.Serialize(new() { ExecutionId = "execution", PipelineId = "pipeline",
+            StepName = "orders", WorkGeneration = generation, WorkOrdinal = ordinal }));
 }

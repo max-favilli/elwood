@@ -2,7 +2,9 @@ namespace Elwood.Pipeline.Storage;
 
 /// <summary>
 /// A durable host must implement cross-worker exclusion for an execution for the entire
-/// step, including external calls. A lease adapter must fence/cancel a worker before
+/// ordinary step, including external calls. The experimental distributed profile uses
+/// this claim for parent transitions and separate durable journal claims for item calls.
+/// A lease adapter must fence/cancel a worker before
 /// allowing takeover. A process-local mutex is suitable only for in-memory tests.
 /// Persist pending steps before acknowledging; queues are hints, recovery scans are authoritative.
 /// </summary>

@@ -27,7 +27,7 @@ Keep the current storage-only profile for compatible low-volume pipelines. Add R
 
 - [x] 7.1 Coordination contract and atomic Redis implementation: item claims, global stage concurrency, fenced checkpoints, duplicate completion, explicit retry, bounded expiry recovery, ordered result inspection/aggregation ownership, finite expiry and structural corruption detection. Foundation protocol cases also pass against real Redis 7.4 in CI; the broader failure/load campaign remains 7.7.
 - [x] 7.2 Durable manifests/checkpoints and Redis-loss reconciliation. Immutable admission, fenced item sessions, durable concurrency permits, uncertainty after interrupted writes and reconstruction after lost/rolled-back cache mutations pass local and Docker CI protocol tests. Production load/provider-failover certification remains 7.7, and activation depends on 7.3–7.5.
-- [ ] 7.3 **Active:** integrate item dispatch and independent source stages into the runtime. The item runner now uses shared connector/evaluation operations, preserves warnings/captures/revision pinning and applies authored source/output retries. Parent-execution fencing, persistent stage discovery, queue dispatch, host registration and local real/mock parity remain open.
+- [ ] 7.3 **Active:** item execution and the experimental runtime scheduler are implemented. Parent intents, indexed recovery, generation-qualified queue hints and aggregate publication pass local tests; remote verification is pending for the scheduler package. Synchronous real/mock parity and production host registration remain open, with registration dependent on 7.5.
 - [ ] 7.4 Add explicit YAML fan-out, bounded scheduling, source aggregation and output fan-out without changing the meaning of existing deployed definitions.
 - [ ] 7.5 Item-aware inspection, operator recovery, retention, quotas and backpressure; paginate large execution histories.
 - [ ] 7.6 Immutable pipeline/route distribution cache, deployment invalidation and cold-cache correctness.
@@ -42,7 +42,7 @@ Redis scripting atomicity prevents interleaving, not loss on server failure or r
 
 ## Current implementation and limits
 
-`IWorkItemCoordinator` is provider-neutral; `Elwood.Pipeline.Redis` implements it using one bounded Lua script. The adapter is experimental, is not packable, and is not registered in any production host. Existing pipeline execution and YAML behavior are unchanged. The standalone coordinator exposes ordered result references; the separate durable journal and item runner below are the authority for connector calls. Host scheduling and payload aggregation are not enabled yet.
+`IWorkItemCoordinator` is provider-neutral; `Elwood.Pipeline.Redis` implements it using one bounded Lua script. The adapter is experimental, is not packable, and is not registered in any production host. Existing pipeline execution and YAML behavior are unchanged. The standalone coordinator exposes ordered result references; the separate durable journal and item runner below are the authority for connector calls. An explicit scheduler can now connect the runner to `AsyncExecutor` in component tests. Production host registration and expanded-item payload aggregation are not enabled yet.
 
 Each stage has five same-slot keys: header, item records, active lease index, result references and delayed retries. Item records are created on first claim, rather than materializing the entire manifest in a script. Recovery and inspection are capped at 256 items per call. Server time governs leases. Registration accepts a deadline within seven days, leases are 100 ms–2 minutes with renewal, history expiry is finite and at most 365 days after the deadline, and a stage is bounded to 100,000 items / 1,000 concurrent owners / 100 attempts per item. These are protective ceilings, not measured production capacity promises. References are at most 2 KiB and diagnostics at most 1 KiB; callers must redact diagnostics before storage.
 
@@ -92,11 +92,25 @@ The remaining 7.3 integration tasks are tracked separately so component completi
 
 - [x] Freeze the stage context and execute independently fenced items through shared source/output operations.
 - [x] Preserve receipts, captures, warning diagnostics and authored retry decisions across interrupted item attempts.
-- [ ] Persist the parent's admitted stages and dispatch intents under its execution claim; reject dispatch for canceled, deleting or superseded parents.
-- [ ] Add bounded stage discovery and queue item messages, with recovery after a lost notification and isolation of one corrupt item.
-- [ ] Publish aggregated stage results to the pinned parent, release dependent stages once, and settle execution status without rewriting parent state on every item checkpoint.
+- [x] Persist the parent's admitted stages and dispatch intents under its execution claim; reject dispatch for stopped, deleting or superseded parents. An already dispatched write can remain uncertain; cancellation cannot undo it.
+- [x] Add bounded stage discovery and queue item messages, with recovery after a lost notification and isolation of one corrupt item. Current scheduling is one whole-step item per source/output; explicit expansion remains 7.4.
+- [x] Publish the journal's completed stage result to the pinned parent and release dependent stages idempotently, without rewriting parent state on every item checkpoint. Many-item aggregation remains 7.4.
 - [ ] Run the same item semantics through synchronous local real/mock testing; mocks must never fall through to a real connector.
 - [ ] Register the distributed profile only together with item inspection, finite physical retention, admission/accounting and recovery endpoints from 7.5.
+
+### Parent scheduling and recovery (7.3)
+
+`DistributedStepScheduler` is an explicit dependency of `AsyncExecutor`; neither hosted startup path supplies it. Eligible asynchronous executions persist `workProfile: distributed-v1`. The parent claim protects stage admission and result publication; independently owned items perform connector calls outside that claim. Triggers and the content-deduplication source continue through the ordinary parent-owned path. A source/output currently creates one whole-step item, so independent pull sources and outputs can overlap, while array-valued outputs still produce a single delivery. YAML fan-out and its concurrency configuration remain 7.4.
+
+Admission persists an immutable context, input manifest, generation and deadline in the parent **before** initializing the journal or publishing a hint. If initialization stops, indexed parent recovery finishes the same manifest. Recovery visits at most 64 admitted stages per parent per pass, with a persisted rotating cursor; the experimental profile caps source/output definitions at 256. Each stage is isolated during recovery, so a corrupt record records a bounded `recoveryIssue` without preventing sibling stages or other executions from progressing.
+
+Item hints include generation and ordinal and use queue envelope version 2; ordinary hints retain version 1. Local queue coalescing includes both item fields. A stale generation or invalid ordinal cannot dispatch a connector, and ordinary executors never reinterpret item hints as regular source/output work. Queue messages contain no pipeline context or credentials.
+
+The runner checks parent authorization at each pre-call/checkpoint boundary, under a short parent claim. It rejects a stopped, expired, deleting or superseded parent, a changed revision, or a different admitted stage. Stopping a parent after a call was dispatched does not establish that the remote write was canceled. Deadline handling reads the item journal and retains that uncertainty in parent history. A completed item/aggregate survives loss of the parent-state save response; recovery publishes its saved result without repeating delivery. Successful results and failed-step diagnostics/attempts are copied into the parent on publication, rather than on every item checkpoint.
+
+Activation remains blocked until 7.5 supplies journal-aware cleanup and operator actions: the ordinary retention loop skips distributed parents, and ordinary resume/replay explicitly refuse them. This prevents deleting recovery evidence or resetting a parent independently of its children. **Do not register this experimental constructor in a consumer installation.** Hosts must also supply consistently scoped connector/secret providers to both ordinary and distributed runners. The existing production profile is unchanged.
+
+Local scheduler verification on 12 October: **281 pipeline tests**, including **16 scheduling regressions**, **14 hosting tests** and **10 queue-codec tests** pass. Both .NET targets build. The new cases cover overlapping sources, duplicate/lost hints, interrupted admission, lost parent saves before/after commit, parent stops, in-flight expiry, authored automatic/manual retries, failed diagnostics, stale generations, corrupt-item isolation and fair recovery across 70 stages. These tests use independent filesystem store instances and controlled connectors; cross-process provider failover and cloud cost measurements remain 7.7. Remote CI evidence will be recorded after verification.
 
 ## Verification evidence and reproduction
 

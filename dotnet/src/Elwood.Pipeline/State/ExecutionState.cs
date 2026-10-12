@@ -37,6 +37,9 @@ public sealed class ExecutionState
     public string? TestMode { get; set; }
     public string? TestContextRef { get; set; }
     public bool Durable { get; set; }
+    /// <summary>Explicit experimental dispatch profile; never inferred from a queue message.</summary>
+    public string? WorkProfile { get; set; }
+    public int WorkRecoveryCursor { get; set; }
     public string? TriggerRef { get; set; }
     public string? TriggerSourceName { get; set; }
     public string? ReplayOf { get; set; }
@@ -82,6 +85,7 @@ public sealed class OutputStepState : StepState
 
 public class StepState
 {
+    public DistributedStepState? Work { get; set; }
     public ExecutionStatus Status { get; set; } = ExecutionStatus.Pending;
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
@@ -92,6 +96,16 @@ public class StepState
     public DateTime? NextAttemptAt { get; set; }
     public int RetryBase { get; set; }
     public bool OutcomeUncertain { get; set; }
+}
+
+/// <summary>Compact parent intent. Item checkpoints remain in the work journal.</summary>
+public sealed class DistributedStepState
+{
+    public required Async.WorkStage Stage { get; init; }
+    public required string InputsReference { get; init; }
+    public required string InputsSha256 { get; init; }
+    public bool Admitted { get; set; }
+    public string? RecoveryIssue { get; set; }
 }
 
 public sealed class StepAttempt

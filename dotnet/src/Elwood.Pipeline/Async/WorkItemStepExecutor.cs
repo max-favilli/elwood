@@ -16,8 +16,8 @@ public sealed record WorkStepOutcome(string DocumentReference, string DocumentSh
 
 /// <summary>
 /// Experimental item runner using the ordinary connector/evaluation operations.
-/// Hosts must still supply stage scheduling, parent-execution fencing and retention
-/// before enabling this path. No existing API/Functions route registers this runner.
+/// DistributedStepScheduler supplies parent scheduling/guards. Hosts still need item
+/// retention and operator endpoints before activation. No API/Functions route registers it.
 /// </summary>
 public sealed class WorkItemStepExecutor(
     DurableWorkJournal journal, IDocumentStore documents,
@@ -120,8 +120,10 @@ public sealed class WorkItemStepExecutor(
             throw new WorkJournalException("Stored item step has the wrong execution identity.");
     }
 
-    public async Task<bool> ExecuteAsync(WorkStage stage, int ordinal, string owner, string requestId, CancellationToken token = default)
+    public async Task<bool> ExecuteAsync(WorkStage stage, int ordinal, string owner, string requestId, CancellationToken token = default,
+        Func<CancellationToken, Task>? validateParent = null)
     {
+        if (validateParent is not null) await validateParent(token);
         var item = await journal.TryStartAsync(stage, ordinal, owner, requestId, token);
         if (item is null) return false;
         DateTimeOffset? retryAt = null; var acknowledge = false;
@@ -153,7 +155,7 @@ public sealed class WorkItemStepExecutor(
             if (output is not null && step.DocumentRef is not null) step.Diagnostics.RemoveAll(d => d.Severity != "warning");
             else step.Diagnostics.Clear();
             var policy = source?.Retry ?? output?.Retry;
-            var claim = new ItemClaim(item, documents, attempt);
+            var claim = new ItemClaim(item, documents, attempt, validateParent);
             var operations = new ExecutionOperations(new ImmutableReferences(documents),
                 secrets?.Invoke(state.PipelineId ?? state.PipelineName) ?? new ScopedSecretProvider(new DictionarySecretProvider([]), []),
                 sourceConnectors, destinationConnectors, engineFactory?.Invoke(), null, Factory.Parse(input.Slice), ordinal);
@@ -210,15 +212,21 @@ public sealed class WorkItemStepExecutor(
         return Encoding.UTF8.GetString(bytes, 0, length);
     }
 
-    private sealed class ItemClaim(DurableWorkJournal.DurableWorkItem item, IDocumentStore documents, StepAttempt attempt) : IExecutionClaim
+    private sealed class ItemClaim(DurableWorkJournal.DurableWorkItem item, IDocumentStore documents, StepAttempt attempt,
+        Func<CancellationToken, Task>? validateParent) : IExecutionClaim
     {
         public string ExecutionId => item.Stage.ExecutionId;
         public CancellationToken OwnershipLost => item.OwnershipLost;
-        public Task ValidateAsync(CancellationToken cancellationToken = default) => item.ValidateAsync(cancellationToken);
+        public async Task ValidateAsync(CancellationToken cancellationToken = default)
+        {
+            await item.ValidateAsync(cancellationToken);
+            if (validateParent is not null) await validateParent(cancellationToken);
+            await item.ValidateAsync(cancellationToken);
+        }
         public async Task SaveAsync(ExecutionState state)
         {
             if (state.ExecutionId != ExecutionId) throw new ArgumentException("Wrong item execution.");
-            await item.ValidateAsync();
+            await ValidateAsync(item.OwnershipLost);
             var reference = await documents.StoreAsync($"exec/{ExecutionId}/work-checkpoint/{Guid.NewGuid():N}", JsonSerializer.Serialize(state));
             await item.CheckpointAsync(item.State.CheckpointSequence + 1, reference, attempt.ExternalCallStarted,
                 attempt.ExternalCallStarted && attempt.MayHaveWritten, callId: attempt.ExternalCallStarted ? attempt.AttemptId : null);

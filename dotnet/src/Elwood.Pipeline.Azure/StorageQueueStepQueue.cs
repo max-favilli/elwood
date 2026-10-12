@@ -39,7 +39,7 @@ public sealed class StorageQueueStepQueue : IStepQueue
     public static string Serialize(StepMessage message)
     {
         Validate(message);
-        var json = JsonSerializer.Serialize(new Envelope { Version = 1, Step = message }, JsonOptions);
+        var json = JsonSerializer.Serialize(new Envelope { Version = message.WorkGeneration is null ? 1 : 2, Step = message }, JsonOptions);
         if (Encoding.UTF8.GetByteCount(json) > 4096) throw new ArgumentException("Step queue message exceeds 4096 bytes.");
         return json;
     }
@@ -48,7 +48,8 @@ public sealed class StorageQueueStepQueue : IStepQueue
     {
         if (Encoding.UTF8.GetByteCount(json) > 4096) throw new ArgumentException("Step queue message exceeds 4096 bytes.");
         var envelope = JsonSerializer.Deserialize<Envelope>(json, JsonOptions);
-        if (envelope is not { Version: 1, Step: not null }) throw new ArgumentException("Unsupported or incomplete step queue message.");
+        if (envelope is not { Version: 1 or 2, Step: not null } || (envelope.Version == 2) != (envelope.Step.WorkGeneration is not null))
+            throw new ArgumentException("Unsupported or incomplete step queue message.");
         Validate(envelope.Step);
         return envelope.Step;
     }
@@ -57,6 +58,9 @@ public sealed class StorageQueueStepQueue : IStepQueue
     {
         ArgumentNullException.ThrowIfNull(message);
         SafePath.Id(message.ExecutionId);
+        if ((message.WorkGeneration is null) != (message.WorkOrdinal is null) || message.WorkOrdinal is < 0 or >= 100000)
+            throw new ArgumentException("Incomplete or invalid distributed item identity.");
+        if (message.WorkGeneration is not null) SafePath.Id(message.WorkGeneration);
         if (string.IsNullOrWhiteSpace(message.PipelineId) || message.PipelineId.Length > 128 ||
             string.IsNullOrWhiteSpace(message.StepName) || message.StepName.Length > 128 ||
             !Enum.IsDefined(message.Type) || message.StageIndex < 0)

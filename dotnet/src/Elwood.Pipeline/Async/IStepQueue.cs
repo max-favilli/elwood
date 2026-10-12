@@ -31,6 +31,9 @@ public sealed class StepMessage
 
     /// <summary>Which dependency stage this source belongs to (Source steps only).</summary>
     public int StageIndex { get; set; }
+    /// <summary>Both fields are present only for a durably admitted distributed item.</summary>
+    public string? WorkGeneration { get; set; }
+    public int? WorkOrdinal { get; set; }
 }
 
 public enum StepType
