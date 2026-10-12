@@ -1,6 +1,6 @@
 # Distributed work items and Redis coordination
 
-Status: **M7 resumed on 12 October 2026 at the owner's request.** Durable journals (7.2), item execution and parent scheduling pass CI. M7.4 adds explicit YAML fan-out, bounded recovery/aggregation and sequential local real/mock parity; local suites and API contracts pass, with remote verification tracked below. Production host registration, work-item inspection/recovery, retention/accounting and consumer installation remain required before Eagle adoption. M6's scheduled full-day measurement and temporary-lab cleanup continue separately; no changes are deployed into that measurement. M6 covers the bounded Azure storage profile, not concurrent fan-out within an execution.
+Status: **M7 resumed on 12 October 2026 at the owner's request.** Durable journals (7.2), item execution and parent scheduling pass CI. M7.4 adds explicit YAML fan-out, bounded recovery/aggregation and sequential local real/mock parity; all local and remote checks pass. Production host registration, work-item inspection/recovery, retention/accounting and consumer installation remain required before Eagle adoption. M6's scheduled full-day measurement and temporary-lab cleanup continue separately; no changes are deployed into that measurement. M6 covers the bounded Azure storage profile, not concurrent fan-out within an execution.
 
 The 12 October follow-up makes failure acknowledgement idempotent for the same owner token and decision, and surfaces Redis connection/timeouts as `WorkCoordinationOutcomeUncertainException`. Reconcile a submitted operation using its original identity; never assume a lost reply means no mutation. The foundation's 25 protocol cases subsequently passed against **real Redis 7.4 in CI**, alongside two injected transport tests. See [M6 release evidence](m6-release-evidence.md#fourth-review-installer-verification--12-october-2026). The adapter remains experimental, is not wired into the runtime and is not packable.
 
@@ -48,6 +48,8 @@ Admission still creates and verifies the bounded manifest under the parent/heade
 
 Verification on 12 October: the full local non-integration run passed 374 Core / 303 Pipeline / 22 CLI / 7 Parquet / 21 connector / 14 hosting / 45 Azure / 2 Redis fault tests. Two additional pipeline regressions and targeted local failure/cancellation checks then passed (305 pipeline cases in total). Five API contracts pass against an explicitly selected Release DLL, including per-item mock testing and continued rejection by production deployment validation. The sample runs with its committed fixtures. The concurrent parent-claim regression exposed and fixed a filesystem containment-check/deletion race by moving transient lock-path inspection inside the existing namespace lock. No Azure resources were changed and no packages were published.
 
+Commit `1fa6bf7` passed [all remote CI jobs](https://github.com/max-favilli/elwood/actions/runs/38266789932): **374 Core / 305 Pipeline / 22 CLI / 7 Parquet / 21 connector / 14 hosting / 45 Azure / 2 Redis fault tests**, five API contracts, 52 Azure adapter integration tests, 30 real Redis tests, nine real connector contracts, one hosted RabbitMQ recovery contract, TypeScript tests and Bicep compilation. The next implementation package is 7.5, following the [inspection/recovery design](item-inspection-recovery-design.md).
+
 ## Redis implementation constraints
 
 Atomic scripts must be bounded: claims and checkpoints are constant-sized operations, recovery processes a capped page, and result inspection is paginated. Keys for a stage share one Redis Cluster hash tag. Different stages can live on different slots. Use a dedicated namespace and a non-evicting operational-state policy. A hot single stage can still saturate one shard; partitioning and load measurements are release requirements.
@@ -92,6 +94,8 @@ The journal package (`c7bf6c7`) passed [all CI jobs on 12 October](https://githu
 
 ### Isolated step runner (7.3, in progress)
 
+Historical 7.3 implementation notes below describe the runner before YAML expansion. The current 7.4 behavior and limits are recorded above; only host registration remains gated on 7.5.
+
 `WorkItemStepExecutor` freezes the pipeline revision and assembled dependencies once per stage. Each item has a separate input, checkpoint history and durable ownership; shared `ExecutionOperations` perform connector calls and DSL evaluation with `$slice` and `$index` bindings. Ordinary execution does not receive these additional bindings. Output `path` retains its existing meaning; no YAML fan-out behavior is enabled by this package.
 
 Successful source responses are checkpointed before mapping, and delivered destinations retain their receipts. Retrying one item therefore reuses its fetched response or already delivered destinations. The item runner preserves successful mapping warnings, including when an output payload is reused after a delivery retry. It shares failure classification and retry timing with the existing async executor. An unresolved write remains associated with the same call identity while inspection details are added; a new call cannot replace it.
@@ -107,12 +111,14 @@ The remaining 7.3 integration tasks are tracked separately so component completi
 - [x] Freeze the stage context and execute independently fenced items through shared source/output operations.
 - [x] Preserve receipts, captures, warning diagnostics and authored retry decisions across interrupted item attempts.
 - [x] Persist the parent's admitted stages and dispatch intents under its execution claim; reject dispatch for stopped, deleting or superseded parents. An already dispatched write can remain uncertain; cancellation cannot undo it.
-- [x] Add bounded stage discovery and queue item messages, with recovery after a lost notification and isolation of one corrupt item. Current scheduling is one whole-step item per source/output; explicit expansion remains 7.4.
-- [x] Publish the journal's completed stage result to the pinned parent and release dependent stages idempotently, without rewriting parent state on every item checkpoint. Many-item aggregation remains 7.4.
-- [x] Verify current whole-step processing against synchronous local real/mock testing, including output selection and absence of fan-out-only bindings; mocks never fall through to a real connector. Expanded-item parity remains part of 7.4 before activation.
+- [x] Add bounded stage discovery and queue item messages, with recovery after a lost notification and isolation of one corrupt item. M7.4 extends whole-step scheduling with explicit expansion.
+- [x] Publish the journal's completed stage result to the pinned parent and release dependent stages idempotently, without rewriting parent state on every item checkpoint. M7.4 adds ordered many-item aggregation.
+- [x] Verify whole-step processing against synchronous local real/mock testing, including output selection and absence of fan-out-only bindings; mocks never fall through to a real connector. M7.4 adds expanded-item parity.
 - [ ] Register the distributed profile only together with item inspection, finite physical retention, admission/accounting and recovery endpoints from 7.5.
 
 ### Parent scheduling and recovery (7.3)
+
+Historical 7.3 baseline: explicit fan-out and expanded-item parity were subsequently implemented in 7.4 above.
 
 `DistributedStepScheduler` is an explicit dependency of `AsyncExecutor`; neither hosted startup path supplies it. Eligible asynchronous executions persist `workProfile: distributed-v1`. The parent claim protects stage admission and result publication; independently owned items perform connector calls outside that claim. Triggers and the content-deduplication source continue through the ordinary parent-owned path. A source/output currently creates one whole-step item, so independent pull sources and outputs can overlap, while array-valued outputs still produce a single delivery. YAML fan-out and its concurrency configuration remain 7.4.
 
