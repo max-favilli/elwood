@@ -341,8 +341,10 @@ test('Local development token cannot start behind a configured proxy', { timeout
         Elwood__AppConfiguration: '', ELWOOD_APP_CONFIGURATION: '', APPLICATIONINSIGHTS_CONNECTION_STRING: '' },
     });
     child.stdout.on('data', chunk => { logs += chunk; }); child.stderr.on('data', chunk => { logs += chunk; });
-    await once(child, 'exit', { signal: AbortSignal.timeout(60000) });
+    // close also waits for stderr; Unix reports unhandled exceptions as SIGABRT
+    // with a null exitCode, which must not be mistaken for a still-running child.
+    await once(child, 'close', { signal: AbortSignal.timeout(60000) });
     assert.notEqual(child.exitCode, 0);
     assert.match(logs, /LocalDevelopment.*reverse proxy/);
-  } finally { if (child?.exitCode === null) { child.kill(); await once(child, 'exit'); } await rm(root, { recursive: true, force: true }); }
+  } finally { if (child && child.exitCode === null && child.signalCode === null) { child.kill(); await once(child, 'close'); } await rm(root, { recursive: true, force: true }); }
 });

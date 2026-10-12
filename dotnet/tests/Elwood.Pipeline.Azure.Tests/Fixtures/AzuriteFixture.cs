@@ -14,28 +14,13 @@ namespace Elwood.Pipeline.Azure.Tests.Fixtures;
 /// </summary>
 public sealed class AzuriteFixture : IAsyncLifetime
 {
-    // Two compatibility shims work together to make Azurite + Azure.Storage.Blobs SDK pair cleanly:
-    //
-    //   1. Azure.Storage.Blobs is pinned to 12.20.x in the csproj (uses API 2024-05-04
-    //      request shapes, which Azurite 3.28.0 actually understands).
-    //
-    //   2. --skipApiVersionCheck below tells Azurite to accept the version *header*.
-    //      Even with matching request shapes, Azurite 3.28.0 explicitly does not
-    //      claim 2024-05-04 in its supported-versions table, so without the flag
-    //      it returns 400 InvalidHeaderValue on every request.
-    //
-    // Override notes:
-    //   - "azurite" is the entrypoint, NOT part of the command (don't include it)
-    //   - The default args are exactly --blobHost/--queueHost/--tableHost 0.0.0.0
-    //     (no -l, no port flags); we replicate them and append --skipApiVersionCheck
-    //   - The wait strategy ("Blob service is successfully listening") survives
-    //     the WithCommand override because AzuriteBuilder.Build() sets it after
+    // Match the connector CI service. The module otherwise defaults to 3.28.0.
+    // WithCommand appends to the module's existing public-listener arguments;
+    // repeating --blobHost/--queueHost/--tableHost turns them into arrays in the
+    // emulator's argument parser and breaks connections through Docker's ports.
     private readonly AzuriteContainer _container = new AzuriteBuilder()
-        .WithCommand(
-            "--blobHost", "0.0.0.0",
-            "--queueHost", "0.0.0.0",
-            "--tableHost", "0.0.0.0",
-            "--skipApiVersionCheck")
+        .WithImage("mcr.microsoft.com/azure-storage/azurite:3.35.0")
+        .WithCommand("--skipApiVersionCheck")
         .Build();
 
     public BlobServiceClient ServiceClient { get; private set; } = null!;
