@@ -135,7 +135,7 @@ public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore d
                 // If either reply is lost, the next permit owner must recover this item.
                 await permit.SaveAsync(Encode(new Slot(stage.Generation, ordinal)), token);
                 item = item with { Version = item.Version + 1, Status = "Running", Attempt = item.Attempt + 1,
-                    Owner = owner, Token = requestId, CallInFlight = false, MayWrite = false, Uncertain = false,
+                    Owner = owner, Token = requestId, CallInFlight = false, CallId = null, MayWrite = false, Uncertain = false,
                     Diagnostic = null, NotBefore = null };
                 await itemClaim.SaveAsync(Encode(item), token);
                 var result = new DurableWorkItem(this, stage, item, permit, itemClaim);
@@ -400,19 +400,21 @@ public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore d
             ? Task.FromResult<string?>(null) : ReadCheckpoint(token);
         private async Task<string?> ReadCheckpoint(CancellationToken token) => await _journal.ReadDocument(State.CheckpointReference!, State.CheckpointSha256!, token);
 
-        public async Task CheckpointAsync(int sequence, string reference, bool callInFlight, bool mayWrite, CancellationToken token = default)
+        public async Task CheckpointAsync(int sequence, string reference, bool callInFlight, bool mayWrite, CancellationToken token = default, string? callId = null)
         {
             if (sequence < 1 || mayWrite && !callInFlight) throw new ArgumentException("Invalid call checkpoint.");
+            callId = callInFlight ? SafePath.Id(callId ?? $"attempt-{State.Attempt}-call-{sequence}") : null;
             await _gate.WaitAsync(token);
             try
             {
                 await ValidateAsync(token);
                 var hash = await _journal.DocumentHash(reference, token);
-                if (State.CheckpointSequence == sequence && State.CheckpointReference == reference && State.CheckpointSha256 == hash && State.CallInFlight == callInFlight && State.MayWrite == mayWrite) return;
+                if (State.CheckpointSequence == sequence && State.CheckpointReference == reference && State.CheckpointSha256 == hash && State.CallInFlight == callInFlight && State.MayWrite == mayWrite && State.CallId == callId) return;
                 if (State.Status != "Running" || sequence != State.CheckpointSequence + 1) throw new WorkJournalException("Checkpoint sequence or item status conflicts.");
-                if (State.CallInFlight && callInFlight) throw new WorkJournalException("Settle the current call before recording another call intent.");
+                if (State.CallInFlight && callInFlight && (State.CallId != callId || State.MayWrite != mayWrite))
+                    throw new WorkJournalException("Settle the current call before recording another call intent.");
                 await Save(State with { Version = State.Version + 1, CheckpointSequence = sequence, CheckpointReference = reference,
-                    CheckpointSha256 = hash, CallInFlight = callInFlight, MayWrite = mayWrite, Uncertain = false }, token);
+                    CheckpointSha256 = hash, CallInFlight = callInFlight, CallId = callId, MayWrite = mayWrite, Uncertain = false }, token);
             }
             finally { _gate.Release(); }
         }

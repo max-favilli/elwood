@@ -12,7 +12,7 @@ Check a box only when its stated behavior is implemented and verified. An unchec
 - [x] M4 — Durable local execution, retries, recovery and internal retention.
 - [x] M5 — Representative connectors and controlled integration verification.
 - [ ] M6 — Code and installer verified; `v0.7.26` published. Fresh bootstrap, custom host role, readiness, scheduled retention and hosted queue/replay pass. Scheduled complete-day telemetry sizing and lab cleanup remain active. [Campaign and installer evidence](m6-release-evidence.md).
-- [ ] M7 — **Active, resumed 12 October at the owner's request.** Durable item journals, concurrency permits and Redis reconciliation are implemented; verification is underway. Runtime fan-out, inspection/retention and consumer release packaging remain open. [Contract and work breakdown](distributed-work-items.md).
+- [ ] M7 — **Active, resumed 12 October at the owner's request.** Durable item journals, concurrency permits and Redis reconciliation pass CI. The isolated item runner is implemented and under verification; host scheduling, YAML fan-out, inspection/retention and consumer release packaging remain open. [Contract and work breakdown](distributed-work-items.md).
 - [ ] Adoption — Eagle SAP and Deldo real-world acceptance tests after M6.
 
 M1–M5 completion describes their implemented scope, not production/cloud readiness. The first and second independent-review follow-ups are part of that baseline. DSL behavior is outside the M6 implementation scope.
@@ -190,7 +190,7 @@ Depends on the preceding implementation packages.
 - [x] Remove unused Azure alias writes, shorten unconfirmed upload obligations, bound/hash streamed HTTP reads, and isolate retention error-recording failures.
 - [x] Keep probes/management reads outside memory admission; busy writes return 503/Retry-After.
 - [x] Prepare least-privilege Blob/SB roles, Key Vault references, monitoring/retention alert and default scale ceiling 3. Document authenticated public networking and additional monitoring cost; Bicep compiles, no deployment claimed.
-- [x] Fix Redis uncertain transport outcomes and idempotent failure; keep the adapter experimental. Local Garnet + injected fault tests pass; real Redis CI remains pending.
+- [x] Fix Redis uncertain transport outcomes and idempotent failure; keep the adapter experimental. Local Garnet, injected faults and real Redis CI pass; foundation verification was completed with the fourth-review release.
 - [x] Portal preserves tokens on non-401 errors and stops polling terminal executions; regressions pass.
 - [x] Correct historical evidence, capacity contingency, runtime fan-out caveats, version policy and component counts; remove the placeholder conformance CI job and stray text.
 - [ ] Consumer acceptance: verify its Key Vault resolution, notification action groups and scale settings. The separate fourth-review lab now verifies fresh bootstrap, custom host role/version deletion, readiness and heartbeat.

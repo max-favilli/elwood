@@ -21,12 +21,16 @@ internal sealed class ExecutionOperations
     private readonly List<ISourceConnector> _sources;
     private readonly List<IDestinationConnector> _destinations;
     private readonly LocalTestSession? _test;
+    private readonly IElwoodValue? _slice;
+    private readonly int? _ordinal;
     public Func<ExecutionState, PipelineContentDto, SourceFetchResult, IExecutionClaim, CancellationToken, Task>? InspectContent { get; set; }
 
     public ExecutionOperations(IDocumentStore documents, ISecretProvider? secrets,
-        IEnumerable<ISourceConnector>? sources, IEnumerable<IDestinationConnector>? destinations, ElwoodEngine? engine, LocalTestSession? test)
+        IEnumerable<ISourceConnector>? sources, IEnumerable<IDestinationConnector>? destinations, ElwoodEngine? engine, LocalTestSession? test,
+        IElwoodValue? slice = null, int? ordinal = null)
     {
         _documents = documents; _test = test;
+        _slice = slice; _ordinal = ordinal;
         _evaluator = new StepEvaluator(engine ?? new ElwoodEngine(_factory));
         _resolver = new StringResolver(secrets);
         _sources = sources?.ToList() ?? [new HttpSourceConnector(), new FileSourceConnector()];
@@ -141,7 +145,7 @@ internal sealed class ExecutionOperations
         if (step.DocumentRef is not null) content = await _documents.GetAsync(step.DocumentRef) ?? throw new InvalidOperationException("Stored output is missing.");
         else
         {
-            var data = idm;
+            var data = _slice ?? idm;
             var bindings = Bindings(state, config.Name, idm);
             if (!string.IsNullOrWhiteSpace(config.Path))
             {
@@ -294,12 +298,18 @@ internal sealed class ExecutionOperations
         return copy;
     }
 
-    private Dictionary<string, IElwoodValue> Bindings(ExecutionState state, string step, IElwoodValue idm) => new()
+    private Dictionary<string, IElwoodValue> Bindings(ExecutionState state, string step, IElwoodValue idm)
     {
-        ["$idm"] = idm,
-        ["$execution"] = _factory.CreateObject([new("id", _factory.CreateString(state.ExecutionId)),
-            new("step", _factory.CreateString(step)), new("revision", _factory.CreateString(state.RevisionId ?? ""))]),
-    };
+        var bindings = new Dictionary<string, IElwoodValue>
+        {
+            ["$idm"] = idm,
+            ["$execution"] = _factory.CreateObject([new("id", _factory.CreateString(state.ExecutionId)),
+                new("step", _factory.CreateString(step)), new("revision", _factory.CreateString(state.RevisionId ?? ""))]),
+        };
+        if (_slice is not null) bindings["$slice"] = _slice;
+        if (_ordinal is { } ordinal) bindings["$index"] = _factory.CreateNumber(ordinal);
+        return bindings;
+    }
 
     internal static int? Status(IElwoodValue status)
     {

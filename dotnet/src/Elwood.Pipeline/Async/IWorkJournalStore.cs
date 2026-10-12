@@ -44,6 +44,7 @@ public sealed record WorkJournalItem
     public string? CheckpointReference { get; init; }
     public string? CheckpointSha256 { get; init; }
     public bool CallInFlight { get; init; }
+    public string? CallId { get; init; }
     public bool MayWrite { get; init; }
     public bool Uncertain { get; init; }
     public string? ResultReference { get; init; }

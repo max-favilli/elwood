@@ -218,16 +218,11 @@ public sealed class AsyncExecutor
             attempt.CompletedAt = Now; attempt.Error = ex.Message; attempt.Status = "Failed"; attempt.Diagnostics = [.. step.Diagnostics];
             step.Errors = [$"{message.Type} '{message.StepName}': {ex.Message}"]; step.CompletedAt = Now;
             var policy = pipeline is null ? null : Policy(pipeline, message);
-            var status = ex is HttpRequestException http ? (int?)http.StatusCode : (ex as ConnectorFailure)?.StatusCode ?? (ex as ConnectorException)?.StatusCode;
-            if (status == 0) status = null; // Azure uses zero for a transport failure without an HTTP response.
             var storageFault = IsStorageFault(ex);
-            var transport = storageFault || ex is HttpRequestException or OperationCanceledException or TimeoutException || ex is ConnectorFailure && status is null;
-            var uncertain = attempt.ExternalCallStarted && attempt.MayHaveWritten && status is null &&
-                (transport || ex is IOException);
-            if (ex is ConnectorException classified) uncertain = classified.OutcomeUncertain;
+            var decision = StepFailurePolicy.Classify(ex, attempt, policy, storageFault);
+            var uncertain = decision.Uncertain;
             step.OutcomeUncertain = uncertain;
-            var retryable = status is not null ? policy?.StatusCodes.Contains(status.Value) == true : transport && policy?.TransportErrors == true;
-            if (ex is ConnectorException failure && status is null) retryable = failure.Retryable && policy?.TransportErrors == true;
+            var retryable = decision.Retryable;
             if (uncertain && policy?.AllowUncertainWrites != true)
             {
                 step.Status = ExecutionStatus.AwaitingReview; attempt.Status = "Uncertain";
@@ -618,10 +613,10 @@ public sealed class AsyncExecutor
         return state.Outputs.Where(s => Due(s.Value)).Select(s => new StepMessage { ExecutionId = state.ExecutionId, PipelineId = state.PipelineId ?? state.PipelineName, Type = StepType.Output, StepName = s.Key }).ToList();
     }
     private bool Due(StepState step) => step.Status is ExecutionStatus.Pending or ExecutionStatus.Retrying && !(step.NextAttemptAt > Now);
-    private static bool CanRetry(StepState step, RetryPolicy? policy) => policy is { Mode: "automatic" } && step.Attempts.Count < 100 && step.Attempts.Count - step.RetryBase < policy.MaxAttempts;
+    private static bool CanRetry(StepState step, RetryPolicy? policy) => StepFailurePolicy.CanRetry(step, policy);
     private void ScheduleRetry(ExecutionState state, StepState step, RetryPolicy policy)
     {
-        var delay = Math.Min(policy.MaxDelayMs, policy.DelayMs * Math.Pow(policy.BackoffMultiplier, Math.Max(0, step.Attempts.Count - step.RetryBase - 1)));
+        var delay = StepFailurePolicy.Delay(step, policy);
         step.NextAttemptAt = Now.AddMilliseconds(delay); step.Status = ExecutionStatus.Retrying; state.Status = ExecutionStatus.Retrying;
         state.CompletedAt = null; state.ExpiresAt = null; state.Errors.Clear();
     }

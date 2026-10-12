@@ -290,6 +290,22 @@ public sealed class DurableWorkJournalTests : IDisposable
         Assert.Equal("AwaitingReview", item.State.Status); Assert.True(item.State.Uncertain);
     }
 
+    [Fact]
+    public async Task Inflight_call_details_can_advance_without_replacing_the_call_identity()
+    {
+        var stage = await Stage();
+        await using var item = await Journal.TryStartAsync(stage, 0, "worker", "claim");
+        await item!.CheckpointAsync(1, await Document("intent"), true, true, callId: "call-1");
+        var details = await Document("inspection", "{\"error\":\"timeout\"}");
+        await item.CheckpointAsync(2, details, true, true, callId: "call-1");
+        await item.CheckpointAsync(2, details, true, true, callId: "call-1");
+        await Assert.ThrowsAsync<WorkJournalException>(() => item.CheckpointAsync(3, details, true, true, callId: "call-2"));
+        await Assert.ThrowsAsync<WorkJournalException>(() => item.CheckpointAsync(3, details, true, false, callId: "call-1"));
+        await item.FailAsync(false, "timeout");
+        Assert.Equal("AwaitingReview", item.State.Status);
+        Assert.Equal("call-1", item.State.CallId);
+    }
+
     private sealed class Clock : TimeProvider
     {
         private DateTimeOffset _now = DateTimeOffset.UtcNow;
