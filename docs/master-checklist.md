@@ -204,7 +204,10 @@ Depends on the preceding implementation packages.
 - [x] Push backend and portal history; repair Linux/Docker harness failures exposed by remote CI.
 - [x] Verify final remote CI and publish `v0.7.26`, with Core publicly available before dependent NuGet packages. [Release](https://github.com/max-favilli/elwood/releases/tag/v0.7.26).
 - [x] Repeat hosted management, queue execution, duplicate acceptance and pinned replay using the default three-instance ceiling; record reduced-ceiling failures without claiming it certified.
-- [ ] Measure a complete day of maintenance telemetry, size the provisional cap with headroom, record the limits of that measurement, and remove the disposable lab.
+- [x] Record the fifth review's independent suite, release and live installer confirmation; all fourth-review fixes are closed.
+- [x] Verify the local follow-up is active; schedule collection for 13 October 11:45 UTC (13:45 Rome), after the 11:15 UTC measurement-window end, and document local execution requirements/manual cleanup fallback.
+- [ ] Measure a complete day of maintenance `_BilledSize` by type, record heartbeat gaps/quota status, decide whether to disable performance-counter collection, and size the provisional cap with headroom and explicit workload limits.
+- [ ] Delete `elwood-m6-rg`, record the actual timestamped `az group exists=false`, and record the final reported Cost Management figure with billing-delay limitations; follow up delayed billing without retaining resources.
 
 The consumer project sessions own permanent infrastructure provisioning and operating costs. This Elwood session owns reusable runtime, infrastructure, installation documentation and releases. Eagle adoption depends on M7's item-level concurrency and recovery work; the existing Blob execution lock serializes steps within an execution.
 

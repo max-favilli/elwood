@@ -113,3 +113,23 @@ Release [v0.7.26](https://github.com/max-favilli/elwood/releases/tag/v0.7.26) wa
 A thread follow-up is scheduled to measure **12 October 11:15 UTC through 13 October 11:15 UTC**, allow ingestion delay, record maintenance-only volume and heartbeat gaps, check costs, size the cap with headroom, and delete only `elwood-m6-rg` after checking its tags/inventory. It must verify the group is gone and pause itself. The last reported campaign cost is still **€0.05287948**, excluding charges not yet reported. The lab remains allocated specifically for that measurement; no permanent consumer infrastructure was created.
 
 Post-publication verification: all four 0.7.26 packages returned HTTP 200 from NuGet's public flat-container feed. A fresh consumer with an isolated package cache and only `PackageReference Include="Elwood.Pipeline.Azure" Version="0.7.26"` restored and built for **net8.0 and net10.0**, with zero warnings/errors. Running it on net10.0 exercised `StepEvaluator.IsScript`, including the string-literal case, through the published Core `Lexer.FirstToken` API. Pipeline's published nuspec requires Core 0.7.26 for both target frameworks. The test-only follow-up `979a0f1` also passed [full CI](https://github.com/max-favilli/elwood/actions/runs/38240812736).
+
+## Fifth-review confirmation and remaining closeout — 12 October 2026
+
+The owner's independent reviewer reported matching suite totals (**374/231/22/7/21/13/37/2**), green CI and all four public 0.7.26 NuGet packages with the correct Core dependency. Direct lab inspection confirmed the custom Blob role plus Queue/Table/Reader grants only, a three-instance ceiling, the 0.1 GB/day ingestion cap and readiness 200. The reviewer observed **13 consecutive `ELWOOD_RETENTION_HEALTHY` traces from 10:45 through 11:45 UTC**, without gaps; all 131 dependency records were InProc. These are attributed independent observations, not an additional rerun by this session. All fourth-review fixes are closed.
+
+The reviewer also reported this preliminary three-hour idle ingestion sample, using `_BilledSize` (rounded MB as supplied):
+
+| Telemetry type | MB |
+| --- | ---: |
+| AppPerformanceCounters | 0.83 |
+| AppTraces | 0.65 |
+| AppMetrics | 0.46 |
+| AppDependencies | 0.12 |
+| Total | 2.06 |
+
+This is not the requested full-day measurement or a Cost Management charge. Performance counters remain enabled during the baseline. The closeout must report the complete day's bytes by type and explicitly decide whether to disable `EnablePerformanceCounterCollectionModule`; the retention alert does not use those counters. Any change must preserve the health traces and have focused verification. Cap sizing must retain headroom and distinguish idle maintenance from consumer workloads.
+
+The existing local follow-up `complete-elwood-telemetry-measurement` was verified active and changed from a 25-hour interval to **13:45 Europe/Rome daily**, making its next intended run **13 October 2026 at 11:45 UTC**. **11:15 UTC is the measurement-window end, not the cleanup start**; the extra 30 minutes allow ingestion delay. The follow-up will collect the fixed 24-hour window, preserve evidence locally, delete only the approved disposable group, record `az group exists=false` with timestamp, and query Cost Management for the final reported campaign figure. Delayed billing must be labelled and followed up without retaining or recreating resources. It pauses after closeout is complete.
+
+This is a local scheduled task, not an Azure-side deletion guarantee: the PC and app must remain running, Azure authentication must remain valid, and unattended permissions must permit the operations. See [scheduled-task requirements](https://learn.chatgpt.com/docs/automations?surface=app). The owner was informed of this dependency. If the local follow-up cannot run, the owner must arrange manual deletion of `elwood-m6-rg` after the measurement; cleanup remains unverified until an actual `az group exists` result is recorded. M6 stays unchecked until full-day telemetry, the performance-counter decision, deletion confirmation and cost evidence are recorded. The optional redundant release-step condition is left unchanged.
