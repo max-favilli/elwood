@@ -12,6 +12,7 @@ internal sealed class ReviewBlobService : HttpMessageHandler
     private int _version;
     private readonly Dictionary<string, string> _leases = [];
     public int Downloads, NotModified, Writes;
+    public void LoseLease(BlobClient blob) { lock (_blobs) _leases.Remove(blob.Uri.AbsolutePath); }
     public BlobContainerClient Container { get; }
     private readonly HttpClient _http;
     public ReviewBlobService()
@@ -37,6 +38,9 @@ internal sealed class ReviewBlobService : HttpMessageHandler
                     if (_leases.ContainsKey(path)) return Error(HttpStatusCode.Conflict, "LeaseAlreadyPresent");
                     _leases[path] = request.Headers.GetValues("x-ms-proposed-lease-id").Single();
                 }
+                else if (!_leases.TryGetValue(path, out var currentLease) ||
+                    !request.Headers.TryGetValues("x-ms-lease-id", out var supplied) || supplied.Single() != currentLease)
+                    return Error(HttpStatusCode.PreconditionFailed, "LeaseIdMismatchWithLeaseOperation");
                 var response = Success(action == "acquire" ? HttpStatusCode.Created : HttpStatusCode.OK, [], etag);
                 if (_leases.TryGetValue(path, out var lease)) response.Headers.Add("x-ms-lease-id", lease);
                 if (action == "release") _leases.Remove(path);
@@ -57,6 +61,9 @@ internal sealed class ReviewBlobService : HttpMessageHandler
             }
             if (request.Headers.IfNoneMatch.Any() && exists ||
                 request.Headers.IfMatch.Any(t => !exists || t.Tag != etag)) return Error(HttpStatusCode.PreconditionFailed, "ConditionNotMet");
+            var writeLease = request.Headers.TryGetValues("x-ms-lease-id", out var writeIds) ? writeIds.Single() : null;
+            if (_leases.TryGetValue(path, out var requiredLease) ? writeLease != requiredLease : writeLease is not null)
+                return Error(HttpStatusCode.PreconditionFailed, "LeaseIdMismatchWithBlobOperation");
             Writes++; _blobs[path] = (content!, ++_version);
             return Success(HttpStatusCode.Created, [], $"\"{_version}\"");
         }

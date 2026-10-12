@@ -12,7 +12,7 @@ Check a box only when its stated behavior is implemented and verified. An unchec
 - [x] M4 — Durable local execution, retries, recovery and internal retention.
 - [x] M5 — Representative connectors and controlled integration verification.
 - [ ] M6 — Code and installer verified; `v0.7.26` published. Fresh bootstrap, custom host role, readiness, scheduled retention and hosted queue/replay pass. Scheduled complete-day telemetry sizing and lab cleanup remain active. [Campaign and installer evidence](m6-release-evidence.md).
-- [ ] M7 — No new feature work during this review package; the existing experimental foundation and its requested residual fixes are committed together with solution/CI registration. Distributed fan-out, durable reconciliation and consumer release packaging remain open. [Contract and work breakdown](distributed-work-items.md).
+- [ ] M7 — **Active, resumed 12 October at the owner's request.** Durable item journals, concurrency permits and Redis reconciliation are implemented; verification is underway. Runtime fan-out, inspection/retention and consumer release packaging remain open. [Contract and work breakdown](distributed-work-items.md).
 - [ ] Adoption — Eagle SAP and Deldo real-world acceptance tests after M6.
 
 M1–M5 completion describes their implemented scope, not production/cloud readiness. The first and second independent-review follow-ups are part of that baseline. DSL behavior is outside the M6 implementation scope.

@@ -1,8 +1,8 @@
 # Distributed work items and Redis coordination
 
-Status: coordination foundation implemented and locally verified, 10 October 2026. New M7 development is paused during the third-review M6 follow-up; only the requested residual fixes are included in that package. Runtime integration and durable reconciliation remain unimplemented and are required before Eagle adoption. M6 covers the bounded Azure storage profile, not concurrent fan-out within an execution.
+Status: **M7 resumed on 12 October 2026 at the owner's request.** The durable-journal package (7.2) is implemented and under verification. Runtime integration, work-item retention/accounting and consumer installation remain required before Eagle adoption. M6's scheduled full-day measurement and temporary-lab cleanup continue separately; no changes are deployed into that measurement. M6 covers the bounded Azure storage profile, not concurrent fan-out within an execution.
 
-The 12 October follow-up makes failure acknowledgement idempotent for the same owner token and decision, and surfaces Redis connection/timeouts as `WorkCoordinationOutcomeUncertainException`. Reconcile a submitted operation using its original identity; never assume a lost reply means no mutation. Local verification is 27 tests (25 against a loopback Garnet protocol server, two injected Redis transport-failure tests); Docker CI still must verify the protocol cases against real Redis 7.4. The adapter remains experimental, is not wired into the runtime and is not packable.
+The 12 October follow-up makes failure acknowledgement idempotent for the same owner token and decision, and surfaces Redis connection/timeouts as `WorkCoordinationOutcomeUncertainException`. Reconcile a submitted operation using its original identity; never assume a lost reply means no mutation. The foundation's 25 protocol cases subsequently passed against **real Redis 7.4 in CI**, alongside two injected transport tests. See [M6 release evidence](m6-release-evidence.md#fourth-review-installer-verification--12-october-2026). The adapter remains experimental, is not wired into the runtime and is not packable.
 
 ## Ownership and release scope
 
@@ -25,8 +25,8 @@ Keep the current storage-only profile for compatible low-volume pipelines. Add R
 
 ## Work breakdown
 
-- [x] 7.1 Coordination contract and atomic Redis implementation: item claims, global stage concurrency, fenced checkpoints, duplicate completion, explicit retry, bounded expiry recovery, ordered result inspection/aggregation ownership, finite expiry and structural corruption detection. Verified with the 23 local protocol tests below; real Redis verification remains 7.7.
-- [ ] 7.2 Durable manifests/checkpoints and Redis-loss reconciliation, including failover during an external write. Establish the authoritative state and admission protocol; do not enable a Redis-only production path before this passes.
+- [x] 7.1 Coordination contract and atomic Redis implementation: item claims, global stage concurrency, fenced checkpoints, duplicate completion, explicit retry, bounded expiry recovery, ordered result inspection/aggregation ownership, finite expiry and structural corruption detection. Foundation protocol cases also pass against real Redis 7.4 in CI; the broader failure/load campaign remains 7.7.
+- [ ] 7.2 **Active verification:** durable manifests/checkpoints and Redis-loss reconciliation, including failover during an external write. The authoritative journal, fenced item sessions and durable concurrency permits are implemented; retain the production activation gate until verification and the runtime/retention packages pass.
 - [ ] 7.3 Integrate item dispatch and independent source stages into the runtime; preserve existing execution semantics, warnings, connector captures, revision pinning and source/output retry policy.
 - [ ] 7.4 Add explicit YAML fan-out, bounded scheduling, source aggregation and output fan-out without changing the meaning of existing deployed definitions.
 - [ ] 7.5 Item-aware inspection, operator recovery, retention, quotas and backpressure; paginate large execution histories.
@@ -60,7 +60,21 @@ Before enabling connector dispatch, implement and verify a durable admission/che
 4. Prevent over-admission after loss of Redis's running count. Restoring only completed-item counters cannot establish a safe global concurrency limit while pre-failover workers are still active.
 5. Verify full loss, partial loss and coherent rollback during claim, external call, completion, retry and aggregation. Retain the 30-day default and independently tracked output cleanup obligations.
 
-These are remaining implementation requirements, not capabilities of the current adapter.
+These are the acceptance requirements for the durable journal below. Runtime activation additionally depends on 7.3–7.5 and the consumer profile; the journal is not registered in a production host.
+
+### Durable journal implementation (7.2)
+
+`DurableWorkJournal` stores an immutable stage definition and hash-verified manifest pages, plus one independently fenced record per item. Admission writes every item and concurrency permit before committing the ready marker. Interrupted initialization can resume against the same manifest. Once ready, missing records fail closed; re-admission never recreates a completed/missing item as pending. Inputs, checkpoints and results carry document hashes, so changed or absent referenced content cannot silently change a resumed execution.
+
+Concurrency is enforced by `MaxConcurrency` durable permit records, each held across one item attempt. A permit records its item before that item becomes running. A replacement owner must also acquire/recover the previous item before reusing the permit. Losing Redis's running count, or losing only the permit lease while the item remains held, therefore cannot grant another active attempt. Checkpoints update only their own item record; no execution-wide document is rewritten per item update. The filesystem adapter uses cross-process claims and flushed atomic replacement; the Azure adapter reuses the tested renewable Blob lease fence.
+
+The item session journals an external-call intent before dispatch, then a response/receipt checkpoint before clearing that intent. A lost journal acknowledgement invalidates the session. Recovery retains a possibly writing call as `AwaitingReview`; an interrupted read or post-response transformation becomes `Failed`, retaining its checkpoint. Rescheduling uses the pipeline's explicit retry decision, expected attempt and stable request ID. Completed items cannot be reset. A stage-wide aggregation claim may publish only after every item completes; result pages preserve manifest order, including a valid empty aggregation. Stale aggregation owners cannot publish.
+
+`RedisWorkJournalProjection` is a disposable per-item projection with monotonic durable versions and absolute expiry. Missing entries mean **unknown**, never pending. Full loss, partial loss and a coherent rollback are repaired by bounded durable-page reconciliation. Future dispatch **must acquire `DurableWorkJournal.TryStartAsync`**, even when a cached status says pending; the standalone Redis coordinator from 7.1 is not authority to call a connector. Cache writes happen after durable changes and never authorize another attempt. The generic journal deliberately does not decide which connector writes are safe to retry.
+
+The first implementation favors explicit durable fences over a Redis-only fast path. It precreates one record per item and uses two renewable claims per active attempt; Azure operation counts and throughput must be measured in 7.7 before making Eagle capacity claims. It supports at most 100,000 items, 1,000 durable permits and 100 attempts per item; pages are bounded to 256, admission manifest pages to 128, and journal records to 1 MiB. These remain protective limits, not a measured operating envelope. Absolute execution/history deadlines are enforced; automatic discovery, physical pruning, orphan cleanup, reserved capacity and output-retention integration remain 7.3/7.5. **Neither new store is enabled by the API/Functions host.** Existing deployed YAML and DSL behavior are unchanged.
+
+Verification in progress on 12 October: 18 durable-journal tests pass locally, plus three Azure SDK/fake-transport fencing tests and five journal/projection tests against local Garnet. The latter include 300 durably checkpointed items across 16 tasks with eight shared permits, ordered aggregation and full cache reconstruction. This is not an Azure throughput or real Redis claim. A Docker/Azurite service-fencing test and the same projection tests are included in the existing CI adapter jobs; their result will be recorded after the run.
 
 ## Verification evidence and reproduction
 

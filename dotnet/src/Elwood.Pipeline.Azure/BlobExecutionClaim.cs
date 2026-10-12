@@ -106,9 +106,16 @@ public sealed class BlobExecutionClaim : IExecutionClaim
     internal async Task SaveAsync(ExecutionState state, IDictionary<string, string>? metadata)
     {
         if (state.ExecutionId != ExecutionId) throw new ArgumentException("A claim can save only its own execution.", nameof(state));
-        ThrowIfLost();
         var content = BinaryData.FromString(JsonSerializer.Serialize(state, JsonOptions));
-        using var request = CancellationTokenSource.CreateLinkedTokenSource(_lostToken);
+        await SaveContentAsync(content, metadata);
+    }
+
+    // The same lease fence protects compact work-item journal records. Callers own
+    // schema/size validation; the lease identity always remains private to this claim.
+    internal async Task SaveContentAsync(BinaryData content, IDictionary<string, string>? metadata = null, CancellationToken cancellationToken = default)
+    {
+        ThrowIfLost();
+        using var request = CancellationTokenSource.CreateLinkedTokenSource(_lostToken, cancellationToken);
         request.CancelAfter(_requestBudget);
         try
         {
