@@ -8,6 +8,7 @@ using Elwood.Pipeline.Registry;
 using Elwood.Pipeline.Schema;
 using Elwood.Pipeline.State;
 using Elwood.Pipeline.Storage;
+using Elwood.Pipeline.Testing;
 
 namespace Elwood.Pipeline.Tests;
 
@@ -284,6 +285,59 @@ public sealed class DistributedSchedulingTests : IDisposable
         var second = _queue.Drain(); Assert.Equal(64, second.Count);
         Assert.Equal(70, first.Concat(second).Select(m => m.StepName).Distinct().Count());
         Assert.Equal(ExecutionStatus.Running, (await States.GetExecutionAsync(id))!.Status);
+    }
+
+    [Theory]
+    [InlineData("real")]
+    [InlineData("mock")]
+    public async Task Distributed_whole_steps_match_synchronous_local_real_and_mock_results(string mode)
+    {
+        var calls = 0;
+        var source = new Source((config, _) =>
+        {
+            calls++;
+            return Task.FromResult(new SourceFetchResult(config.Http!.Url.EndsWith("left") ? "1" : "2", statusCode: 200));
+        });
+        var pipeline = Pipeline(); pipeline.Config.Outputs[0].Path = "[$idm.left, $idm.right]"; pipeline.Config.Outputs[0].Map = "$";
+        var runner = Runner(source); var (id, hints) = await Prepare(runner, pipeline);
+        foreach (var hint in hints) await runner.ExecuteStepAsync(hint);
+        await Drain(runner);
+        var distributed = (await States.GetExecutionAsync(id))!;
+        var fixtures = LocalTestSession.Template(pipeline);
+        fixtures.Sources["left"].Body = System.Text.Json.Nodes.JsonValue.Create(1);
+        fixtures.Sources["right"].Body = System.Text.Json.Nodes.JsonValue.Create(2);
+        fixtures.Sources["left"].ExpectBody = JsonSerializer.Deserialize<JsonElement>("{\"id\":42}");
+        var session = new LocalTestSession(mode, mode == "mock" ? fixtures : null, pipeline);
+        var localStates = new InMemoryStateStore(); var localDocs = new InMemoryDocumentStore();
+        var result = await new SyncExecutor(stateStore: localStates, documentStore: localDocs, sourceConnectors: [source], testSession: session)
+            .ExecuteAsync(pipeline, JsonNodeValueFactory.Instance.Parse("{\"id\":42}"), triggerSourceName: "input");
+        Assert.True(result.IsSuccess, string.Join("; ", result.Errors));
+        var local = (await localStates.GetExecutionAsync(result.ExecutionId!))!;
+        Assert.Equal(await Documents.GetAsync(distributed.Outputs["result"].DocumentRef!), await localDocs.GetAsync(local.Outputs["result"].DocumentRef!));
+        Assert.Equal("[1,2]", await localDocs.GetAsync(local.Outputs["result"].DocumentRef!));
+        Assert.Equal(mode == "real" ? 4 : 2, calls); // Mock mode cannot fall through to the real connector.
+        Assert.Null(local.WorkProfile); Assert.True(local.IsTest); Assert.Equal(mode, local.TestMode);
+        Assert.Equal(distributed.RevisionId, local.RevisionId);
+    }
+
+    [Theory]
+    [InlineData("$index")]
+    [InlineData("$slice")]
+    public async Task Whole_step_dispatch_does_not_introduce_fanout_only_bindings(string expression)
+    {
+        var source = new Source((_, _) => Task.FromResult(new SourceFetchResult("1")));
+        var pipeline = Pipeline(false, expression); var runner = Runner(source);
+        var (id, hints) = await Prepare(runner, pipeline);
+        await runner.ExecuteStepAsync(Assert.Single(hints));
+        var distributed = (await States.GetExecutionAsync(id))!;
+        var states = new InMemoryStateStore(); var docs = new InMemoryDocumentStore();
+        var result = await new SyncExecutor(stateStore: states, documentStore: docs, sourceConnectors: [source])
+            .ExecuteAsync(pipeline, JsonNodeValueFactory.Instance.Parse("{}"), triggerSourceName: "input");
+        var local = (await states.GetExecutionAsync(result.ExecutionId!))!;
+        Assert.Equal(local.Status, distributed.Status);
+        Assert.Equal(local.Sources["left"].Diagnostics.Select(d => d.Message), distributed.Sources["left"].Diagnostics.Select(d => d.Message));
+        if (local.Sources["left"].DocumentRef is { } localReference)
+            Assert.Equal(await docs.GetAsync(localReference), await Documents.GetAsync(distributed.Sources["left"].DocumentRef!));
     }
 
     private sealed class Source(Func<PullSourceConfig, CancellationToken, Task<SourceFetchResult>> run) : ISourceConnector

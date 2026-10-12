@@ -26,13 +26,13 @@ public sealed class WorkItemStepExecutor(
     IEnumerable<IDestinationConnector>? destinationConnectors = null,
     Func<ElwoodEngine>? engineFactory = null)
 {
-    private sealed record Context(string ExecutionId, string StageId, StepType Type, string StepName, PipelineContentDto Pipeline, string Idm);
+    private sealed record Context(string ExecutionId, string StageId, StepType Type, string StepName, PipelineContentDto Pipeline, string Idm, bool BindSlice = true);
     private sealed record Input(PreparedWorkStep Context, string Slice);
     private static readonly JsonNodeValueFactory Factory = JsonNodeValueFactory.Instance;
     private DateTime Now => journal.Time.GetUtcNow().UtcDateTime;
 
     /// <summary>Freeze the original bundle and assembled dependencies once for every item in this stage.</summary>
-    public async Task<PreparedWorkStep> PrepareAsync(string executionId, ParsedPipeline pipeline, StepType type, string stepName, string idm)
+    public async Task<PreparedWorkStep> PrepareAsync(string executionId, ParsedPipeline pipeline, StepType type, string stepName, string idm, bool bindSlice = true)
     {
         SafePath.Id(executionId); SafePath.Id(stepName); _ = Factory.Parse(idm);
         pipeline = PipelineSnapshot.Detach(pipeline);
@@ -49,7 +49,7 @@ public sealed class WorkItemStepExecutor(
         var stageId = type.ToString().ToLowerInvariant() + "-" + DurableWorkJournal.Hash(stepName)[..24];
         var snapshot = new PipelineContentDto { PipelineId = pipeline.PipelineId, RevisionId = pipeline.RevisionId,
             Content = pipeline.Content, Yaml = pipeline.Config, Scripts = new(pipeline.Scripts) };
-        var context = JsonSerializer.Serialize(new Context(executionId, stageId, type, stepName, snapshot, idm));
+        var context = JsonSerializer.Serialize(new Context(executionId, stageId, type, stepName, snapshot, idm, bindSlice));
         var reference = await documents.StoreAsync($"exec/{executionId}/work-context/{Guid.NewGuid():N}", context);
         return new(executionId, stageId, pipeline.RevisionId!, reference, DurableWorkJournal.Hash(context));
     }
@@ -158,7 +158,8 @@ public sealed class WorkItemStepExecutor(
             var claim = new ItemClaim(item, documents, attempt, validateParent);
             var operations = new ExecutionOperations(new ImmutableReferences(documents),
                 secrets?.Invoke(state.PipelineId ?? state.PipelineName) ?? new ScopedSecretProvider(new DictionarySecretProvider([]), []),
-                sourceConnectors, destinationConnectors, engineFactory?.Invoke(), null, Factory.Parse(input.Slice), ordinal);
+                sourceConnectors, destinationConnectors, engineFactory?.Invoke(), null,
+                context.BindSlice ? Factory.Parse(input.Slice) : null, context.BindSlice ? ordinal : null);
             try
             {
                 await claim.SaveAsync(state);

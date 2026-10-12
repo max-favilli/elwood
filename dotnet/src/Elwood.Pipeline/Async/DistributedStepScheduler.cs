@@ -39,7 +39,7 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
         {
             var parsed = new ParsedPipeline(pipeline.Yaml, ".", pipeline.Scripts, [])
                 { PipelineId = pipeline.PipelineId, RevisionId = pipeline.RevisionId, Content = pipeline.Content };
-            var prepared = await runner.PrepareAsync(state.ExecutionId, parsed, message.Type, message.StepName, ExecutionOperations.Json(idm));
+            var prepared = await runner.PrepareAsync(state.ExecutionId, parsed, message.Type, message.StepName, ExecutionOperations.Json(idm), bindSlice: false);
             // 7.3 dispatches one whole step per stage. Explicit item expansion is 7.4;
             // an array-valued output must not silently become many deliveries.
             var inputs = JsonSerializer.Serialize(new[] { await runner.CreateInputAsync(prepared, ExecutionOperations.Json(idm)) });
