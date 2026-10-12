@@ -50,6 +50,9 @@ public sealed class ThirdReviewTests
         var store = new AzureExecutionStateStore(service.Container, table, new InMemoryDocumentStore(), retention: ledger);
         var writes = service.Writes;
         Assert.Null(await store.TryClaimAsync("unknown"));
+        var runner = new AsyncExecutor(store, new InMemoryDocumentStore(), new InMemoryStepQueue());
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => runner.ResumeAsync("unknown"));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => runner.ReplayAsync("unknown"));
         Assert.Equal(writes, service.Writes); Assert.Equal(0, tableTransport.Count);
         Assert.Empty((await ledger.ReadAsync()).Entries);
         await using var first = await store.TryCreateClaimAsync("owned");
@@ -138,6 +141,25 @@ public sealed class ThirdReviewTests
 
     private static PipelineContent Content(string value, string route = "/orders") => new()
     { Yaml = $"mode: async\nsources: [{{name: input, trigger: http, endpoint: '{route}'}}]\noutputs: [{{name: result, map: transform.elwood}}]", Scripts = new() { ["transform.elwood"] = $"return '{value}'" } };
+
+    [Fact]
+    public async Task DuplicateRoutesBlockOnlyMatchingAndRemainRepairableThroughManagement()
+    {
+        using var service = new ReviewBlobService(); var store = new BlobDeploymentStore(service.Container);
+        var content = Content("original"); var hash = PipelineBundle.Hash(content);
+        var bundle = new PipelineBundle { RevisionId = hash, Content = content };
+        var entry = new { draft = content, activeRevisionId = hash, revisions = new Dictionary<string, PipelineBundle> { [hash] = bundle } };
+        var catalog = new { format = 1, pipelines = new Dictionary<string, object> { ["first"] = entry, ["second"] = entry } };
+        await service.Container.GetBlobClient("elwood/catalog.json").UploadAsync(BinaryData.FromObjectAsJson(catalog,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)));
+        Assert.Equal(2, (await store.ListAsync()).Count);
+        Assert.NotNull(await store.GetAsync("first"));
+        Assert.Single((await store.ExportAsync("second")).Revisions);
+        Assert.Null(await store.MatchAsync("/unrelated"));
+        await Assert.ThrowsAsync<DeploymentConflictException>(() => store.MatchAsync("/ORDERS"));
+        await store.DeleteAsync("second", hash);
+        Assert.Equal("first", (await store.MatchAsync("/orders"))!.Value.PipelineId);
+    }
 
     [Fact]
     public async Task ConditionalRouteAndIngressCacheInvalidatesAndDoesNotExposeMutableBundles()

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-12 — Native installer review and .NET release (v0.7.26)
+
+- Correct retention bootstrap to pass Azure CLI's combined `--include dv` flag. Existing/missing ledgers still fail closed; bootstrap is only for an empty namespace.
+- Keep conflicting deployment routes unavailable without blocking management list/export/repair. Unknown resume/replay IDs return 404 instead of a misleading busy response.
+- Restore worker adaptive sampling while excluding Trace/Exception items and disable automatic Azure SDK/HTTP dependency tracking for the low-cost host. Execution connector history remains available. A capped workspace can suppress the heartbeat and produce a false retention alert; its quota needs measurement against the installation's workload.
+- HTTP pull sources, **including the offline CLI**, now default to a **10 MiB `maxBytes`** response limit. Configure an explicit higher limit (up to 128 MiB) for existing larger downloads. Responses are bounded and hashed during streaming.
+- Core, Pipeline, Pipeline.Azure and CLI ship as 0.7.26. Pipeline/CLI 0.7.14 already exists on NuGet and cannot be overwritten, so changed packages require new versions. Core must be publicly downloadable before publishing dependent packages; release automation enforces this ordering. Json/TypeScript remain 0.7.25 under the .NET-only API version policy below.
+
 ## 2026-10-07 — Public lexer entry point (.NET v0.7.26)
 
 `Elwood.Core` now packages the public `Lexer.FirstToken()` API used by pipeline script/expression classification. Publish Core 0.7.26 before packages that depend on this member; NuGet 0.7.25 does not expose it. This is a .NET API/package correction with no DSL syntax or evaluation changes; the TypeScript package remains 0.7.25.

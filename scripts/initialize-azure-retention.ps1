@@ -15,7 +15,7 @@ function Invoke-Azure([string[]]$Arguments) {
 }
 $common = @('--account-name', $StorageAccount, '--subscription', $SubscriptionId, '--auth-mode', 'login', '--only-show-errors')
 foreach ($container in @($ControlContainer, $StateContainer, $DocumentContainer, $OutputContainer)) {
-    $existing = Invoke-Azure (@('storage','blob','list','--container-name',$container,'--prefix',"$StorageNamespace/",'--include','d','v','--num-results','1','-o','json') + $common)
+    $existing = Invoke-Azure (@('storage','blob','list','--container-name',$container,'--prefix',"$StorageNamespace/",'--include','dv','--num-results','1','-o','json') + $common)
     if (@($existing | ConvertFrom-Json).Count -ne 0) {
         throw "Namespace already has data/versions in $container. Restore existing control data or choose a fresh namespace; do not reinitialize."
     }

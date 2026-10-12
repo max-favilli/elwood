@@ -15,7 +15,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2025-06-01' = {
   sku: { name: 'Standard_LRS' }
   kind: 'StorageV2'
   // Authenticated public endpoints: private networking is a separate hosting profile (see README).
-  properties: { accessTier: 'Hot', minimumTlsVersion: 'TLS1_2', supportsHttpsTrafficOnly: true, allowBlobPublicAccess: false, allowSharedKeyAccess: false, defaultToOAuthAuthentication: true, publicNetworkAccess: 'Enabled', networkAcls: { defaultAction: 'Allow', bypass: 'None', ipRules: [], virtualNetworkRules: [] } }
+  properties: { accessTier: 'Hot', minimumTlsVersion: 'TLS1_2', supportsHttpsTrafficOnly: true, allowBlobPublicAccess: false, allowSharedKeyAccess: false, defaultToOAuthAuthentication: true, publicNetworkAccess: 'Enabled', networkAcls: { defaultAction: 'Allow', bypass: 'AzureServices', ipRules: [], virtualNetworkRules: [] } }
 }
 resource blobs 'Microsoft.Storage/storageAccounts/blobServices@2025-06-01' = {
   parent: storage

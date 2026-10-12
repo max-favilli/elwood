@@ -23,6 +23,8 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
+      - name: Require publishing credentials
+        run: test -n "$NUGET_API_KEY" || { echo 'NUGET_API_KEY is missing; this release cannot publish.'; exit 1; }
       - name: Pack
         run: |
           dotnet pack dotnet/src/Elwood.Core/Elwood.Core.csproj -c Release
@@ -32,10 +34,22 @@ jobs:
           dotnet pack dotnet/src/Elwood.Cli/Elwood.Cli.csproj -c Release
           dotnet pack dotnet/src/Elwood.Xlsx/Elwood.Xlsx.csproj -c Release
           dotnet pack dotnet/src/Elwood.Parquet/Elwood.Parquet.csproj -c Release
-      - name: Push to NuGet
+      - name: Publish Core first
         if: ${{ env.NUGET_API_KEY != '' }}
         run: |
-          dotnet nuget push dotnet/src/Elwood.Core/bin/Release/*.nupkg            --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push dotnet/src/Elwood.Core/bin/Release/*.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+          VERSION=$(dotnet msbuild dotnet/src/Elwood.Core/Elwood.Core.csproj -getProperty:Version)
+          for attempt in $(seq 1 120); do
+            if curl --fail --silent --output /dev/null "https://api.nuget.org/v3-flatcontainer/elwood.core/$VERSION/elwood.core.$VERSION.nupkg"; then
+              echo "Core $VERSION is available from NuGet."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Core is not available yet; refusing to publish dependent packages.'
+          exit 1
+      - name: Publish dependent packages
+        run: |
           dotnet nuget push dotnet/src/Elwood.Json/bin/Release/*.nupkg            --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
           dotnet nuget push dotnet/src/Elwood.Pipeline/bin/Release/*.nupkg        --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
           dotnet nuget push dotnet/src/Elwood.Pipeline.Azure/bin/Release/*.nupkg  --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
@@ -125,7 +139,7 @@ jobs:
 
   github-release:
     name: Create GitHub Release
-    needs: [native-binaries]
+    needs: [native-binaries, nuget, npm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

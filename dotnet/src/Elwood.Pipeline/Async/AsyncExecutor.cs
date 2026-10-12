@@ -362,7 +362,7 @@ public sealed class AsyncExecutor
 
     public async Task ResumeAsync(string id, bool acknowledgeUncertain = false)
     {
-        await using var claim = await _states.TryClaimAsync(id) ?? throw new RecoveryConflictException("An attempt is still running.");
+        await using var claim = await ClaimExistingAsync(id);
         var state = await _states.GetExecutionAsync(id) ?? throw new KeyNotFoundException("Execution not found.");
         if (state.SupersededByForcedReplay) throw new RecoveryConflictException("This execution was fenced by an explicit forced replay and cannot resume.");
         if (state.RecoveryCapacityExhausted) throw new RecoveryConflictException("This execution used reserved recovery capacity. Reclaim storage and explicitly replay it instead of resuming.");
@@ -387,7 +387,7 @@ public sealed class AsyncExecutor
 
     public async Task<string> ReplayAsync(string id, ParsedPipeline? revision = null, bool acknowledgeUncertain = false, bool forceProcessing = false)
     {
-        await using var claim = await _states.TryClaimAsync(id) ?? throw new RecoveryConflictException("An attempt is still running.");
+        await using var claim = await ClaimExistingAsync(id);
         var state = await _states.GetExecutionAsync(id) ?? throw new KeyNotFoundException("Execution not found.");
         if (!state.Durable || state.IsTest || state.Deleting || state.ExpiresAt <= Now || state.Status is ExecutionStatus.Running or ExecutionStatus.Pending or ExecutionStatus.Retrying)
             throw new RecoveryConflictException("Only retained terminal executions can be replayed.");
@@ -408,6 +408,14 @@ public sealed class AsyncExecutor
         }
         return await StartCoreAsync(pipeline, await _operations.Read(state.TriggerRef, "trigger payload"), state.TriggerSourceName, replayOf: id,
             triggerMetadata: original.TriggerMetadata is null ? null : JsonNodeValueFactory.Instance.Parse(original.TriggerMetadata), cancellationToken: claim.OwnershipLost, forceProcessing: forceProcessing);
+    }
+
+    private async Task<IExecutionClaim> ClaimExistingAsync(string id)
+    {
+        var claim = await _states.TryClaimAsync(id);
+        if (claim is not null) return claim;
+        if (await _states.GetExecutionAsync(id) is null) throw new KeyNotFoundException("Execution not found.");
+        throw new RecoveryConflictException("An attempt is still running.");
     }
 
     public async Task<int> PruneAsync(CancellationToken cancellationToken = default)

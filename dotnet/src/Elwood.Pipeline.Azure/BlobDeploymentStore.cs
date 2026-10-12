@@ -23,7 +23,7 @@ public sealed class BlobDeploymentStore : IDeploymentStore, IDeploymentMaintenan
     private readonly SemaphoreSlim _cacheGate = new(1, 1);
     private CachedCatalog? _cached;
     private sealed record CachedCatalog(Catalog Catalog, ETag? ETag,
-        Dictionary<string, (string PipelineId, string SourceName, PipelineBundle Bundle)> Routes);
+        Dictionary<string, (string PipelineId, string SourceName, PipelineBundle Bundle)> Routes, HashSet<string> Conflicts);
     private static T Copy<T>(T value) => JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value, JsonOptions), JsonOptions)!;
 
     public BlobDeploymentStore(BlobContainerClient container, string storageNamespace = "elwood", bool rabbitMqIngressEnabled = false)
@@ -130,6 +130,7 @@ public sealed class BlobDeploymentStore : IDeploymentStore, IDeploymentMaintenan
     public async Task<(string PipelineId, string SourceName, PipelineBundle Bundle)?> MatchAsync(string path)
     {
         var cached = await ReadCachedAsync();
+        if (cached.Conflicts.Contains(path)) throw new DeploymentConflictException("Multiple published pipelines match this endpoint. Repair the deployment through management.");
         return cached.Routes.TryGetValue(path, out var match) ? (match.PipelineId, match.SourceName, Copy(match.Bundle)) : null;
     }
 
@@ -162,9 +163,10 @@ public sealed class BlobDeploymentStore : IDeploymentStore, IDeploymentMaintenan
         });
     }
 
-    private static Dictionary<string, (string PipelineId, string SourceName, PipelineBundle Bundle)> Routes(Catalog catalog)
+    private static (Dictionary<string, (string PipelineId, string SourceName, PipelineBundle Bundle)> Routes, HashSet<string> Conflicts) Routes(Catalog catalog)
     {
         var routes = new Dictionary<string, (string, string, PipelineBundle)>(StringComparer.OrdinalIgnoreCase);
+        var conflicts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (id, entry) in catalog.Pipelines)
         {
             if (entry.Deleted || entry.ActiveRevisionId is null) continue;
@@ -172,9 +174,10 @@ public sealed class BlobDeploymentStore : IDeploymentStore, IDeploymentMaintenan
             var parsed = new PipelineParser().ParseContent(bundle.Content);
             foreach (var source in parsed.Config.Sources.Where(source => source.Trigger is "http" or "http-request"))
                 if (source.Endpoint is { } path && !routes.TryAdd(path, (id, source.Name, bundle)))
-                    throw new DeploymentConflictException("Multiple published pipelines match this endpoint.");
+                    conflicts.Add(path);
         }
-        return routes;
+        foreach (var path in conflicts) routes.Remove(path);
+        return (routes, conflicts);
     }
 
     private async Task<T> MutateAsync<T>(Func<Catalog, T> apply)
@@ -215,7 +218,8 @@ public sealed class BlobDeploymentStore : IDeploymentStore, IDeploymentMaintenan
             var (catalog, etag) = await DownloadAsync(timeout.Token, _cached?.ETag);
             if (_cached is not null && _cached.ETag == etag && etag is not null) return _cached;
             if (etag is null && _cached?.ETag is not null) throw new InvalidDataException("Deployment catalog disappeared; restore it before serving routes.");
-            return _cached = new(catalog, etag, Routes(catalog));
+            var (routes, conflicts) = Routes(catalog);
+            return _cached = new(catalog, etag, routes, conflicts);
         }
         finally { _cacheGate.Release(); }
     }

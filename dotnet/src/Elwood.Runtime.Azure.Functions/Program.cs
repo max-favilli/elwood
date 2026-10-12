@@ -17,8 +17,7 @@ var host = new HostBuilder()
         services.AddAzureDurableRuntime(context.Configuration);
         if (!string.IsNullOrEmpty(context.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
         {
-            services.AddApplicationInsightsTelemetryWorkerService(options => options.EnableAdaptiveSampling = false);
-            services.ConfigureFunctionsApplicationInsights();
+            services.AddElwoodTelemetry();
             services.AddLogging(logging => logging.AddFilter<ApplicationInsightsLoggerProvider>(
                 typeof(ExecutionFunctions).FullName, LogLevel.Information));
         }
