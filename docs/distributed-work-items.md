@@ -1,6 +1,6 @@
 # Distributed work items and Redis coordination
 
-Status: **M7 resumed on 12 October 2026 at the owner's request.** The durable-journal package (7.2) is implemented and under verification. Runtime integration, work-item retention/accounting and consumer installation remain required before Eagle adoption. M6's scheduled full-day measurement and temporary-lab cleanup continue separately; no changes are deployed into that measurement. M6 covers the bounded Azure storage profile, not concurrent fan-out within an execution.
+Status: **M7 resumed on 12 October 2026 at the owner's request.** The durable-journal package (7.2) passes local and remote CI; the isolated item runner starts 7.3. Host integration, work-item retention/accounting and consumer installation remain required before Eagle adoption. M6's scheduled full-day measurement and temporary-lab cleanup continue separately; no changes are deployed into that measurement. M6 covers the bounded Azure storage profile, not concurrent fan-out within an execution.
 
 The 12 October follow-up makes failure acknowledgement idempotent for the same owner token and decision, and surfaces Redis connection/timeouts as `WorkCoordinationOutcomeUncertainException`. Reconcile a submitted operation using its original identity; never assume a lost reply means no mutation. The foundation's 25 protocol cases subsequently passed against **real Redis 7.4 in CI**, alongside two injected transport tests. See [M6 release evidence](m6-release-evidence.md#fourth-review-installer-verification--12-october-2026). The adapter remains experimental, is not wired into the runtime and is not packable.
 
@@ -86,7 +86,17 @@ After permit recovery, `RecoverItemAsync` can resubmit a lost retry decision usi
 
 The current local runner regressions cover concurrent isolated slices, revision pinning, successful warnings, known rejection/manual retry, uncertain-write approval and retry limits, successful-response reuse, separate destination recovery, cancellation, and lost retry submission both before and after commit. A separate journal regression covers adding inspection details without replacing an unresolved call. These are component tests, not hosted fan-out acceptance. **The API and Functions still use the existing executor.** No new runner is registered until scheduling, parent fencing, inspection, local real/mock parity and finite physical retention are connected.
 
-Local verification on 12 October: **265 pipeline tests passed**, including 19 durable-journal tests and 15 item-runner tests; **32 Redis tests passed** against local Garnet plus injected faults. The shared pipeline library builds for .NET 8 and .NET 10. Remote CI verification for this follow-on item-runner package is pending.
+Verification on 12 October: **265 pipeline tests passed**, including 19 durable-journal tests and 15 item-runner tests; **32 Redis tests passed** against local Garnet plus injected faults. The shared pipeline library builds for .NET 8 and .NET 10. The item-runner commit `9058a5f` passed [all remote CI jobs](https://github.com/max-favilli/elwood/actions/runs/38253373274): 374 Core / 265 Pipeline / 22 CLI / 7 Parquet / 21 connector / 13 hosting / 40 Azure / 2 Redis fault tests, five API contracts, 52 Azure adapter integration tests, 30 real Redis tests, nine real connector contracts, hosted RabbitMQ recovery and the TypeScript suite. Bicep compilation also passed. No cloud resources or deployed lab packages were changed.
+
+The remaining 7.3 integration tasks are tracked separately so component completion cannot be mistaken for hosted readiness:
+
+- [x] Freeze the stage context and execute independently fenced items through shared source/output operations.
+- [x] Preserve receipts, captures, warning diagnostics and authored retry decisions across interrupted item attempts.
+- [ ] Persist the parent's admitted stages and dispatch intents under its execution claim; reject dispatch for canceled, deleting or superseded parents.
+- [ ] Add bounded stage discovery and queue item messages, with recovery after a lost notification and isolation of one corrupt item.
+- [ ] Publish aggregated stage results to the pinned parent, release dependent stages once, and settle execution status without rewriting parent state on every item checkpoint.
+- [ ] Run the same item semantics through synchronous local real/mock testing; mocks must never fall through to a real connector.
+- [ ] Register the distributed profile only together with item inspection, finite physical retention, admission/accounting and recovery endpoints from 7.5.
 
 ## Verification evidence and reproduction
 
