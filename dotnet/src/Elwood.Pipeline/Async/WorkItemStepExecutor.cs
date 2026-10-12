@@ -24,7 +24,8 @@ public sealed class WorkItemStepExecutor(
     Func<string, ISecretProvider>? secrets = null,
     IEnumerable<ISourceConnector>? sourceConnectors = null,
     IEnumerable<IDestinationConnector>? destinationConnectors = null,
-    Func<ElwoodEngine>? engineFactory = null)
+    Func<ElwoodEngine>? engineFactory = null,
+    Testing.LocalTestSession? testSession = null)
 {
     private sealed record Context(string ExecutionId, string StageId, StepType Type, string StepName, PipelineContentDto Pipeline, string Idm, bool BindSlice = true);
     private sealed record Input(PreparedWorkStep Context, string Slice);
@@ -158,7 +159,7 @@ public sealed class WorkItemStepExecutor(
             var claim = new ItemClaim(item, documents, attempt, validateParent);
             var operations = new ExecutionOperations(new ImmutableReferences(documents),
                 secrets?.Invoke(state.PipelineId ?? state.PipelineName) ?? new ScopedSecretProvider(new DictionarySecretProvider([]), []),
-                sourceConnectors, destinationConnectors, engineFactory?.Invoke(), null,
+                sourceConnectors, destinationConnectors, engineFactory?.Invoke(), testSession,
                 context.BindSlice ? Factory.Parse(input.Slice) : null, context.BindSlice ? ordinal : null);
             try
             {

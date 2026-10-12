@@ -106,7 +106,16 @@ public sealed class DistributedStepState
     public required string InputsSha256 { get; init; }
     public bool Admitted { get; set; }
     public string? RecoveryIssue { get; set; }
+    public bool Expanded { get; init; }
+    public int ItemCursor { get; set; }
+    public int PermitCursor { get; set; }
+    public int AggregatedItems { get; set; }
+    public int AggregateBytes { get; set; }
+    public int DeliveredCount { get; set; }
+    public List<WorkDataPage> ResultPages { get; set; } = [];
 }
+
+public sealed record WorkDataPage(string Reference, string Sha256, int Count);
 
 public sealed class StepAttempt
 {
@@ -126,6 +135,7 @@ public sealed class StepAttempt
 /// <summary>Evaluation diagnostics belong to the containing source or output step.</summary>
 public sealed class StepDiagnostic
 {
+    public int? ItemOrdinal { get; set; }
     public string Reference { get; set; } = "";
     public string Severity { get; set; } = "error";
     public string Message { get; set; } = "";

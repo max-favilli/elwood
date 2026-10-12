@@ -65,10 +65,10 @@ public sealed class DeploymentConflictException(string message) : Exception(mess
 
 public static class DeploymentValidation
 {
-    public static List<string> Errors(ParsedPipeline parsed)
+    public static List<string> Errors(ParsedPipeline parsed, bool fanOut = false)
     {
         var errors = parsed.Errors.ToList();
-        errors.AddRange(PipelineParser.ValidateExecutionConfig(parsed.Config));
+        errors.AddRange(PipelineParser.ValidateExecutionConfig(parsed.Config, fanOut: fanOut));
         try { DependencyResolver.ResolveStages(parsed.Config.Sources); }
         catch (InvalidOperationException ex) { errors.Add(ex.Message); }
         foreach (var source in parsed.Config.Sources)

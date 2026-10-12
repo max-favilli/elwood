@@ -64,6 +64,8 @@ public sealed class PipelineConfig
 /// </summary>
 public sealed class SourceConfig
 {
+    /// <summary>Upper bound on an expanded source manifest, checked before any item calls.</summary>
+    public int MaxItems { get; set; } = 10000;
     public RabbitMqTriggerConfig? Rabbitmq { get; set; }
     public EventGridConfig? EventGrid { get; set; }
     [YamlMember(Alias = "retry")]
@@ -281,6 +283,8 @@ public sealed class JoinConfig
 /// </summary>
 public sealed class OutputConfig
 {
+    /// <summary>Explicit expansion before output path/map. Omitted means one delivery of the selected value.</summary>
+    public FanOutConfig? FanOut { get; set; }
     [YamlMember(Alias = "retry")]
     public RetryPolicy? Retry { get; set; }
     [YamlMember(Alias = "name")]
@@ -337,6 +341,13 @@ public sealed class OutputConfig
     /// </summary>
     [YamlMember(Alias = "responseStatusCode")]
     public string? ResponseStatusCode { get; set; }
+}
+
+public sealed class FanOutConfig
+{
+    public string Path { get; set; } = "";
+    public int Concurrency { get; set; } = 1;
+    public int MaxItems { get; set; } = 10000;
 }
 
 /// <summary>One primary file gates the integration before dependent connector calls.</summary>

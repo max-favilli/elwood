@@ -161,11 +161,14 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
     {
         var directory = SafePath.Within(_baseDir, "locks");
         Directory.CreateDirectory(directory);
-        var path = SafePath.Within(directory, SafePath.Id(executionId) + ".lock");
         var guard = SafePath.Within(_baseDir, "claim-namespace");
         // Opening and removing lock files share a stable namespace lock. Never unlink
         // a held claim: on Unix another process could otherwise lock a new inode.
         await using var access = await AtomicExecutionFile.LockAsync(guard);
+        // Containment also inspects attributes. Resolve the transient claim path
+        // inside the namespace lock so another disposer cannot remove it between
+        // File.Exists and GetAttributes.
+        var path = SafePath.Within(directory, SafePath.Id(executionId) + ".lock");
         try { return new Claim(new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None), path, guard); }
         catch (IOException ex) when ((ex.HResult & 0xFFFF) is 11 or 32 or 33 or 35) { return null; }
     }

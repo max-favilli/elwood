@@ -1,0 +1,27 @@
+version: 2
+name: distributed-fanout
+mode: async
+sources:
+  - name: input
+    trigger: http
+    endpoint: /examples/distributed-fanout
+  - name: products
+    trigger: pull
+    depends: input
+    path: $idm.productIds
+    concurrency: 4
+    maxItems: 1000
+    from:
+      http:
+        url: https://catalog.example.invalid/products/{$slice}
+    map: '{ id: $slice, name: $.name, ordinal: $index }'
+outputs:
+  - name: delivery
+    fanOut:
+      path: $idm.products
+      concurrency: 4
+      maxItems: 1000
+    map: '{ productId: $.id, name: $.name }'
+    destinations:
+      http:
+        - url: https://destination.example.invalid/products

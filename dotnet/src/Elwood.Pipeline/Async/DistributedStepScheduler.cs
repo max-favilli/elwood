@@ -39,17 +39,22 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
         {
             var parsed = new ParsedPipeline(pipeline.Yaml, ".", pipeline.Scripts, [])
                 { PipelineId = pipeline.PipelineId, RevisionId = pipeline.RevisionId, Content = pipeline.Content };
-            var prepared = await runner.PrepareAsync(state.ExecutionId, parsed, message.Type, message.StepName, ExecutionOperations.Json(idm), bindSlice: false);
-            // 7.3 dispatches one whole step per stage. Explicit item expansion is 7.4;
-            // an array-valued output must not silently become many deliveries.
-            var inputs = JsonSerializer.Serialize(new[] { await runner.CreateInputAsync(prepared, ExecutionOperations.Json(idm)) });
+            var plan = FanOutPlan.Select(pipeline, message.Type, message.StepName, idm, step.Diagnostics);
+            var prepared = await runner.PrepareAsync(state.ExecutionId, parsed, message.Type, message.StepName, ExecutionOperations.Json(idm), bindSlice: plan.Expanded);
+            var references = new List<string>();
+            foreach (var input in plan.Inputs)
+            {
+                token.ThrowIfCancellationRequested();
+                references.Add(await runner.CreateInputAsync(prepared, input));
+            }
+            var inputs = JsonSerializer.Serialize(references);
             var reference = await documents.StoreAsync($"exec/{state.ExecutionId}/work-manifest/{Guid.NewGuid():N}", inputs);
             var deadline = new DateTimeOffset(DateTime.SpecifyKind(state.LifetimeExpiresAt!.Value, DateTimeKind.Utc));
             step.Work = new()
             {
                 Stage = new(state.ExecutionId, prepared.StageId, Guid.NewGuid().ToString("N"), prepared.RevisionId,
-                    prepared.ContextReference, 1, 1, deadline, deadline.AddSeconds(RetentionPolicy.Effective(state.RetentionSeconds))),
-                InputsReference = reference, InputsSha256 = DurableWorkJournal.Hash(inputs)
+                    prepared.ContextReference, plan.Inputs.Count, plan.Concurrency, deadline, deadline.AddSeconds(RetentionPolicy.Effective(state.RetentionSeconds))),
+                InputsReference = reference, InputsSha256 = DurableWorkJournal.Hash(inputs), Expanded = plan.Expanded
             };
             step.Status = ExecutionStatus.Running; step.StartedAt ??= Now;
             // Persist identity and manifest BEFORE journal admission or publication.
@@ -57,7 +62,7 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
             await claim.ValidateAsync(token); await claim.SaveAsync(state);
         }
         await Initialize(state, step.Work, claim, token);
-        await Publish(message, step.Work, token);
+        await PublishPage(message, step.Work, 0, PageSize, token);
     }
 
     private async Task Initialize(ExecutionState state, DistributedStepState work, IExecutionClaim claim, CancellationToken token)
@@ -76,12 +81,12 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
         var state = await states.GetExecutionAsync(message.ExecutionId);
         if (state is null || !Active(state) || message.PipelineId != (state.PipelineId ?? state.PipelineName)) return false;
         var step = Step(state, message); var work = step?.Work;
-        if (work is null || !work.Admitted || message.WorkGeneration != work.Stage.Generation || message.WorkOrdinal != 0 ||
+        if (work is null || !work.Admitted || message.WorkGeneration != work.Stage.Generation || message.WorkOrdinal is not { } ordinal || ordinal < 0 || ordinal >= work.Stage.ItemCount ||
             step!.Status == ExecutionStatus.Completed) return false;
         // Guard every pre-call/checkpoint boundary. A stop that follows admission
         // may leave an already dispatched call uncertain; it never permits the
         // next call. Child ownership remains the durable journal's responsibility.
-        return await runner.ExecuteAsync(work.Stage, 0, "worker-" + Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"), token,
+        return await runner.ExecuteAsync(work.Stage, ordinal, "worker-" + Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"), token,
             async ct =>
             {
                 IExecutionClaim? parent;
@@ -112,18 +117,27 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
             .Where(m => Step(state, m)?.Work is not null).ToArray();
         if (steps.Length == 0) return;
         var start = Math.Clamp(state.WorkRecoveryCursor, 0, steps.Length - 1);
-        for (var n = 0; n < Math.Min(PageSize, steps.Length); n++)
+        var visited = 0; var remaining = PageSize;
+        for (; visited < steps.Length && remaining > 0; visited++)
         {
             token.ThrowIfCancellationRequested(); await claim.ValidateAsync(token);
-            var message = steps[(start + n) % steps.Length];
+            var message = steps[(start + visited) % steps.Length];
             message.ExecutionId = state.ExecutionId; message.PipelineId = state.PipelineId ?? state.PipelineName;
             var step = Step(state, message)!; var work = step.Work!;
+            remaining--;
             if (step.Status == ExecutionStatus.Completed) continue;
             try
             {
-                if (work.Stage.ExecutionId != state.ExecutionId || work.Stage.RevisionId != state.RevisionId || work.Stage.ItemCount != 1)
+                if (work.Stage.ExecutionId != state.ExecutionId || work.Stage.RevisionId != state.RevisionId || (!work.Expanded && work.Stage.ItemCount != 1))
                     throw new WorkJournalException("Parent stage identity or item count is invalid.");
                 await Initialize(state, work, claim, token);
+                if (work.Expanded)
+                {
+                    var count = Math.Min(remaining + 1, Math.Max(1, work.Stage.ItemCount));
+                    remaining -= count - 1;
+                    await RefreshExpanded(state, message, step, work, count, token);
+                    continue;
+                }
                 await journal.RecoverAsync(work.Stage, token: token);
                 await runner.RecoverItemAsync(work.Stage, 0, token);
                 var item = (await journal.ReadPageAsync(work.Stage, 0, 1, token)).Single();
@@ -168,7 +182,7 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
                     step.CompletedAt = Now; step.OutcomeUncertain = item.Uncertain;
                     step.Errors = [item.Diagnostic ?? "Distributed item failed."];
                 }
-                else await Publish(message, work, token);
+                else await PublishPage(message, work, 0, 1, token);
             }
             catch (Exception) when (token.IsCancellationRequested || claim.OwnershipLost.IsCancellationRequested) { throw; }
             catch (Exception error)
@@ -178,7 +192,7 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
                 work.RecoveryIssue = "Stage recovery requires attention (" + error.GetType().Name + ").";
             }
         }
-        state.WorkRecoveryCursor = (start + Math.Min(PageSize, steps.Length)) % steps.Length;
+        state.WorkRecoveryCursor = (start + visited) % steps.Length;
         var failed = state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values)
             .Where(s => s.Status is ExecutionStatus.Failed or ExecutionStatus.AwaitingReview).ToArray();
         if (failed.Length != 0)
@@ -199,6 +213,14 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
         {
             try
             {
+                if (step.Work!.Expanded)
+                {
+                    // A bounded stop cannot scan an arbitrarily large stage to prove
+                    // the absence of in-flight writes. Item inspection resolves this
+                    // conservative review flag; it never authorizes a retry.
+                    step.OutcomeUncertain = step.Work.AggregatedItems < step.Work.Stage.ItemCount;
+                    continue;
+                }
                 var item = (await journal.ReadPageAsync(step.Work!.Stage, 0, 1, token)).Single();
                 step.OutcomeUncertain |= item.Uncertain || item.CallInFlight && item.MayWrite;
             }
@@ -207,15 +229,73 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
         }
     }
 
-    private async Task Publish(StepMessage message, DistributedStepState work, CancellationToken token)
+    private async Task PublishPage(StepMessage message, DistributedStepState work, int start, int count, CancellationToken token)
     {
-        var item = (await journal.ReadPageAsync(work.Stage, 0, 1, token)).Single();
+        foreach (var item in await journal.ReadPageAsync(work.Stage, start, count, token))
+            await PublishItem(message, work, item, token);
+    }
+
+    private async Task PublishItem(StepMessage message, DistributedStepState work, WorkJournalItem item, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
         if (item.Status is not ("Pending" or "Retrying") || item.NotBefore > journal.Time.GetUtcNow()) return;
         try
         {
             await queue.EnqueueAsync(new() { ExecutionId = message.ExecutionId, PipelineId = message.PipelineId,
-                StepName = message.StepName, Type = message.Type, WorkGeneration = work.Stage.Generation, WorkOrdinal = 0 });
+                StepName = message.StepName, Type = message.Type, WorkGeneration = work.Stage.Generation, WorkOrdinal = item.Ordinal });
         }
         catch { /* Accepted durable intent is republished by recovery. */ }
+    }
+
+    private async Task RefreshExpanded(ExecutionState state, StepMessage message, StepState step, DistributedStepState work, int count, CancellationToken token)
+    {
+        await journal.RecoverAsync(work.Stage, work.PermitCursor, count, token);
+        work.PermitCursor = (work.PermitCursor + count) % work.Stage.MaxConcurrency;
+        var end = Math.Min(work.Stage.ItemCount, work.ItemCursor + count);
+        work.RecoveryIssue = null;
+        for (var ordinal = work.ItemCursor; ordinal < end; ordinal++)
+        {
+            try
+            {
+                await runner.RecoverItemAsync(work.Stage, ordinal, token);
+                var item = (await journal.ReadPageAsync(work.Stage, ordinal, 1, token)).Single();
+                if (item.Status is "Failed" or "AwaitingReview")
+                {
+                    if (item.CheckpointReference is not null)
+                    {
+                        var checkpoint = JsonSerializer.Deserialize<ExecutionState>(await journal.ReadDocument(item.CheckpointReference, item.CheckpointSha256!, token))
+                            ?? throw new WorkJournalException("Failed item checkpoint is missing.");
+                        if (checkpoint.ExecutionId != state.ExecutionId || checkpoint.RevisionId != state.RevisionId || checkpoint.PipelineSnapshotRef != work.Stage.ManifestReference)
+                            throw new WorkJournalException("Failed item checkpoint has the wrong parent identity.");
+                        var failedStep = Step(checkpoint, message) ?? throw new WorkJournalException("Failed item step is missing.");
+                        foreach (var diagnostic in failedStep.Diagnostics.Take(Math.Max(0, 64 - step.Diagnostics.Count)))
+                        { diagnostic.ItemOrdinal = ordinal; step.Diagnostics.Add(diagnostic); }
+                    }
+                    step.Status = item.Status == "Failed" ? ExecutionStatus.Failed : ExecutionStatus.AwaitingReview;
+                    step.OutcomeUncertain |= item.Uncertain;
+                    step.Errors = [$"Item {ordinal}: {item.Diagnostic ?? "Distributed item failed."}"];
+                    step.CompletedAt = Now;
+                }
+                else await PublishItem(message, work, item, token);
+            }
+            catch (Exception) when (token.IsCancellationRequested) { throw; }
+            catch (Exception error) { work.RecoveryIssue = $"Item {ordinal} recovery requires attention ({error.GetType().Name})."; }
+        }
+        work.ItemCursor = end == work.Stage.ItemCount ? 0 : end;
+        if (step.Status is ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) return;
+        try
+        {
+            var aggregate = new WorkStageResults(journal, documents);
+            if (await aggregate.AdvanceAsync(work, step, message.Type, message.StepName, count, token))
+            {
+                step.Status = ExecutionStatus.Completed; step.CompletedAt = Now;
+                if (step is SourceStepState source) { source.FanOutCount = work.Stage.ItemCount; source.FanOutCompleted = work.Stage.ItemCount; }
+                if (step is OutputStepState output) { output.ItemCount = work.Stage.ItemCount; output.DeliveredCount = work.DeliveredCount; }
+            }
+        }
+        catch (FanOutLimitException error)
+        {
+            step.Status = ExecutionStatus.Failed; step.Errors = [error.Message]; step.CompletedAt = Now;
+        }
     }
 }

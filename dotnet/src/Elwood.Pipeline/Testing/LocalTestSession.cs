@@ -18,6 +18,8 @@ public sealed class MockFixtures
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed class HttpFixture
 {
+    /// <summary>Optional exact ordinal fixtures. When supplied, absent ordinals fail closed.</summary>
+    public Dictionary<int, HttpFixture>? Items { get; set; }
     public JsonObject? Metadata { get; set; }
     public bool Retryable { get; set; } = true;
     public bool OutcomeUncertain { get; set; }
@@ -33,6 +35,7 @@ public sealed class HttpFixture
 
 public sealed class ConnectorCall : HttpCallDetails
 {
+    public int? ItemOrdinal { get; set; }
     public string Step { get; set; } = "";
     public string Kind { get; set; } = "";
     public int? DestinationIndex { get; set; }
@@ -105,7 +108,11 @@ public sealed class LocalTestSession
         foreach (var (name, fixtures) in mocks.Outputs)
             if (fixtures is null || fixtures.Count != template.Outputs[name].Count)
                 throw new ArgumentException($"Output '{name}' requires {template.Outputs[name].Count} mock fixture(s), in destination order.");
-        foreach (var fixture in mocks.Sources.Values.Concat(mocks.Outputs.Values.SelectMany(f => f)))
+        var roots = mocks.Sources.Values.Concat(mocks.Outputs.Values.SelectMany(f => f)).ToArray();
+        foreach (var fixture in roots)
+            if (fixture?.Items is { } items && (items.Count > 100000 || items.Any(p => p.Key is < 0 or >= 100000 || p.Value is null || p.Value.Items is not null)))
+                throw new ArgumentException("Item fixtures require ordinals 0–99999 and cannot contain nested items.");
+        foreach (var fixture in roots.Concat(roots.Where(f => f?.Items is not null).SelectMany(f => f.Items!.Values)))
         {
             if (fixture is null || fixture.StatusCode is < 100 or > 599 || fixture.Headers is null)
                 throw new ArgumentException("Each HTTP fixture needs a statusCode from 100 to 599 and a headers object.");
@@ -122,9 +129,9 @@ public sealed class LocalTestSession
         mode = Mode, input = JsonNode.Parse(input), mocks = Mocks, calls = Calls,
     }, JsonOptions);
 
-    public async Task<SourceFetchResult> FetchAsync(string name, PullSourceConfig config, Func<Task<SourceFetchResult>> real)
+    public async Task<SourceFetchResult> FetchAsync(string name, PullSourceConfig config, Func<Task<SourceFetchResult>> real, int? ordinal = null)
     {
-        var call = new ConnectorCall { Step = name, Kind = "source", BodyLimit = BodyLimit, RequestBody = config.Http?.BodyContent };
+        var call = new ConnectorCall { Step = name, Kind = "source", ItemOrdinal = ordinal, BodyLimit = BodyLimit, RequestBody = config.Http?.BodyContent };
         Calls.Add(call);
         call.StartedAt = DateTimeOffset.UtcNow;
         var timer = System.Diagnostics.Stopwatch.StartNew();
@@ -135,6 +142,7 @@ public sealed class LocalTestSession
             if (Mode == "mock")
             {
                 var fixture = Mocks!.Sources.GetValueOrDefault(name) ?? throw new InvalidOperationException($"Missing mock for source '{name}'.");
+                fixture = ForItem(fixture, ordinal);
                 var copy = JsonSerializer.Deserialize<PullSourceConfig>(JsonSerializer.Serialize(config))!;
                 // Host addresses and credentials are irrelevant to a terminal mock handler.
                 if (copy.Http is null)
@@ -165,9 +173,9 @@ public sealed class LocalTestSession
     }
 
     public async Task<DeliveryResult> DeliverAsync(string name, int index, string type, object config,
-        string content, string contentType, Func<Task<DeliveryResult>> real)
+        string content, string contentType, Func<Task<DeliveryResult>> real, int? ordinal = null)
     {
-        var call = new ConnectorCall { Step = name, Kind = "output", DestinationIndex = index, BodyLimit = BodyLimit, RequestBody = content };
+        var call = new ConnectorCall { Step = name, Kind = "output", DestinationIndex = index, ItemOrdinal = ordinal, BodyLimit = BodyLimit, RequestBody = content };
         Calls.Add(call);
         call.StartedAt = DateTimeOffset.UtcNow;
         var timer = System.Diagnostics.Stopwatch.StartNew();
@@ -179,9 +187,10 @@ public sealed class LocalTestSession
             {
                 if (!Mocks!.Outputs.TryGetValue(name, out var fixtures) || index >= fixtures.Count)
                     throw new InvalidOperationException($"Missing mock for output '{name}' destination {index}.");
+                var selected = ForItem(fixtures[index], ordinal);
                 if (type is not ("http" or "restEndpoint"))
                 {
-                    var fixture = fixtures[index];
+                    var fixture = selected;
                     call.Connector = type; call.Operation = type == "sql" ? "storedProcedure" : "upload";
                     AssertFixture(fixture, content, call);
                     var response = FixtureBody(fixture);
@@ -192,7 +201,7 @@ public sealed class LocalTestSession
                 var copy = JsonSerializer.Deserialize<HttpDestinationConfig>(JsonSerializer.Serialize(config))!;
                 copy.User = null; copy.Password = null; copy.Oauth2 = null;
                 copy.Url = "https://mock.invalid/"; copy.Headers = null;
-                using var client = new HttpClient(new FixtureHandler(fixtures[index], call));
+                using var client = new HttpClient(new FixtureHandler(selected, call));
                 result = await new HttpDestinationConnector(client).DeliverAsync(type, copy, content, contentType);
             }
             else result = await real();
@@ -203,6 +212,10 @@ public sealed class LocalTestSession
         catch (Exception ex) { call.Error ??= ex.Message; throw; }
         finally { call.DurationMs ??= timer.Elapsed.TotalMilliseconds; }
     }
+
+    private static HttpFixture ForItem(HttpFixture fixture, int? ordinal) => fixture.Items is null ? fixture
+        : ordinal is { } index && fixture.Items.TryGetValue(index, out var item) ? item
+        : throw new InvalidOperationException($"Missing mock for item ordinal {ordinal?.ToString() ?? "(whole step)"}.");
 
     private static JsonNode? ActualBody(string value) { try { return JsonNode.Parse(value); } catch (JsonException) { return JsonValue.Create(value); } }
     private static string FixtureBody(HttpFixture fixture) => fixture.ContentType.Contains("json", StringComparison.OrdinalIgnoreCase)

@@ -12,7 +12,7 @@ Check a box only when its stated behavior is implemented and verified. An unchec
 - [x] M4 — Durable local execution, retries, recovery and internal retention.
 - [x] M5 — Representative connectors and controlled integration verification.
 - [ ] M6 — Code and installer verified; `v0.7.26` published. Fresh bootstrap, custom host role, readiness, scheduled retention and hosted queue/replay pass. Scheduled complete-day telemetry sizing and lab cleanup remain active. [Campaign and installer evidence](m6-release-evidence.md).
-- [ ] M7 — **Active, resumed 12 October at the owner's request.** Durable item journals, concurrency permits, Redis reconciliation, item execution, experimental parent scheduling/recovery and whole-step real/mock parity pass CI. Next: explicit YAML fan-out and its testing (7.4). Inspection/retention, host activation and consumer release remain open. [Contract and work breakdown](distributed-work-items.md).
+- [ ] M7 — **Active, resumed 12 October at the owner's request.** Durable journals, coordination and parent scheduling pass CI. Explicit YAML fan-out, bounded aggregation and local real/mock testing (7.4) are implemented and pass local component/API checks. Next: the [inspection/recovery design](item-inspection-recovery-design.md), retention and quotas (7.5). Host activation and consumer release remain open. [Contract and work breakdown](distributed-work-items.md).
 - [ ] Adoption — Eagle SAP and Deldo consumer installation and real-world acceptance; Eagle's concurrent work-item flow also depends on M7.
 
 M1–M5 completion describes their implemented scope, not production/cloud readiness. The first and second independent-review follow-ups are part of that baseline. DSL behavior is outside the M6 implementation scope.
@@ -184,8 +184,8 @@ Depends on the preceding implementation packages.
 - [x] 7.1 — Implement the coordination contract and experimental Redis adapter; verify atomic item ownership, retries and bounded inspection against real Redis.
 - [x] 7.2 — Implement durable manifests, checkpoints, concurrency permits and Redis-loss reconciliation; verify storage fencing and interrupted-write recovery. Load/provider-failover certification remains 7.7.
 - [ ] 7.3 — Finish runtime integration. Item execution, parent coordination, bounded stage discovery, queue dispatch, whole-step result publication and synchronous real/mock parity pass CI. Host registration remains blocked on 7.5; expanded-item parity is part of 7.4.
-- [ ] 7.4 — Add explicit YAML fan-out, bounded scheduling and deterministic source/output aggregation without changing existing definitions.
-- [ ] 7.5 — Add paginated item inspection, operator recovery, finite physical retention, quotas and backpressure.
+- [x] 7.4 — Explicit YAML fan-out, bounded scheduling and ordered source/output aggregation preserve existing definitions; local real/mock tests share item semantics and accept ordinal fixtures. The sample, concurrency/retry/recovery tests and API contracts pass. See [verification evidence and limits](distributed-work-items.md#explicit-fan-out-and-local-parity-74).
+- [ ] 7.5 — Implement the [item inspection/recovery design](item-inspection-recovery-design.md): paginated item inspection, operator recovery, finite physical retention, quotas and backpressure. Design and acceptance checklist drafted on 12 October; endpoints and portal controls remain to build.
 - [ ] 7.6 — Add the shared immutable pipeline/route cache with deployment invalidation and correct cold-cache behavior.
 - [ ] 7.7 — Verify thousands of items across independent workers, duplicate delivery, restart/failover, uncertain writes and retention; measure provider capacity and cost.
 - [ ] 7.8 — Publish the distributed profile's packages, infrastructure/configuration, installation smoke tests, tutorials and versioned Eagle/Deldo handoffs.

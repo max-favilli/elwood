@@ -165,7 +165,7 @@ public static class RuntimeEndpoints
             var content = body.Content ?? draft.Content;
             SafePath.Content(content);
             var parsed = new PipelineParser().ParseContent(content, id);
-            var errors = RuntimeErrors(parsed);
+            var errors = RuntimeErrors(parsed, localTest: true);
             if (errors.Count > 0) return Results.BadRequest(new { errors });
             return Results.Ok(new { revisionId = parsed.RevisionId, mocks = LocalTestSession.Template(parsed) });
         }).WithMetadata(new ManagementPermission("test", true));
@@ -192,7 +192,7 @@ public static class RuntimeEndpoints
             var content = body.Content ?? draft.Content;
             SafePath.Content(content);
             var parsed = new PipelineParser().ParseContent(content, body.PipelineId);
-            var errors = RuntimeErrors(parsed);
+            var errors = RuntimeErrors(parsed, localTest: true);
             if (errors.Count > 0) return Results.BadRequest(new { errors });
             var testSession = new LocalTestSession(body.TestMode, body.Mocks, parsed,
                 context.RequestServices.GetRequiredService<IConfiguration>().GetValue("Elwood:Inspection:TestBodyLimitBytes", 64 * 1024));
@@ -337,9 +337,9 @@ public static class RuntimeEndpoints
         documentStore: context.RequestServices.GetRequiredService<IDocumentStore>(),
         sourceConnectors: context.RequestServices.GetRequiredService<RuntimeConnectors>().Sources(id, isTest), destinationConnectors: context.RequestServices.GetRequiredService<RuntimeConnectors>().Destinations(id, isTest),
         logger: context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger<SyncExecutor>());
-    static List<string> RuntimeErrors(ParsedPipeline parsed)
+    static List<string> RuntimeErrors(ParsedPipeline parsed, bool localTest = false)
     {
-        var errors = DeploymentValidation.Errors(parsed);
+        var errors = DeploymentValidation.Errors(parsed, fanOut: localTest);
         if (parsed.Config.Sources.Any(s => s.From?.FileShare is not null) || parsed.Config.Outputs.Any(o => o.Destinations?.FileShare?.Count > 0))
             errors.Add("Host filesystem connectors are disabled in the management runtime. Use the trusted CLI for local files.");
         return errors;

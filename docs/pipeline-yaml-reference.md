@@ -14,7 +14,7 @@ Pipeline `ttlSeconds` defaults to `2592000` (30 days), valid range `1`–`315360
 
 This reference includes planned capabilities. The runtime validates configuration instead of silently ignoring unsupported behavior. Unknown keys and unimplemented connector types are errors. Per-source/output retry policy, terminal retention and sync failure responses are implemented in M4; see [durable processing](durable-processing.md) for the supported schema and hosting boundaries. The documented destination aliases `restEndpoint` and `azureFileShare` map to `http` and `fileShare`; specifying both names for the same destination type is an error.
 
-The current executors reject `join` and `outputId`, whose behavior is not implemented. Runtime source fan-out via `path` is also rejected; it remains available in the file-input CLI executor. Concurrency values remain scheduling hints; the reference durable runtime serializes steps within each execution and processes different executions concurrently. Runtime HTTP/Blob delivery supports JSON and raw string text/XML; SQL destinations accept JSON. CSV/binary/Parquet output serialization is not implemented; the default file destination supports literal local paths, not Azure connection strings or computed filenames. The filesystem Runtime API registers HTTP, SQL Server procedures and Azure Blob connectors, plus external RabbitMQ and Event Grid ingress. See [M5 connector contracts](connectors.md) for exact fields, defaults, access grants, limits and receipts. SFTP/Azure File Share, Service Bus ingress/delivery and schedules are not enabled in this host; Service Bus/email destination keys are not part of the current schema.
+The current executors reject `join` and `outputId`, whose behavior is not implemented. Production hosts still reject source `path` fan-out and output `fanOut` pending M7.5 activation. M7.4 supports both in explicit local real/mock tests and the experimental distributed scheduler; see the [fan-out sample and exact contract](examples/distributed-fanout/README.md). The file-input CLI retains its existing source fan-out behavior and rejects output `fanOut`. The ordinary durable profile serializes steps within an execution; its concurrency fields do not enable distributed work. Runtime HTTP/Blob delivery supports JSON and raw string text/XML; SQL destinations accept JSON. CSV/binary/Parquet output serialization is not implemented; the default file destination supports literal local paths, not Azure connection strings or computed filenames. The filesystem Runtime API registers HTTP, SQL Server procedures and Azure Blob connectors, plus external RabbitMQ and Event Grid ingress. See [M5 connector contracts](connectors.md) for exact fields, defaults, access grants, limits and receipts. SFTP/Azure File Share, Service Bus ingress/delivery and schedules are not enabled in this host; Service Bus/email destination keys are not part of the current schema.
 
 Script references are resolved for source maps/paths, HTTP request bodies, SQL parameter values, output paths/maps/IDs, response status codes and destination filenames. Resolving a script does not make an unsupported configuration executable. Evaluation errors and missing scripts fail their step; warnings retain the step's successful status when there is no error and are stored with the step's diagnostics.
 
@@ -258,8 +258,9 @@ sources:
 | `contentType` | string | no | Payload format. Default: `json` |
 | `map` | string | no | `.elwood` script or inline expression |
 | `depends` | string or string[] | no | Source(s) that must complete before this one runs |
-| `path` | string | no | Offline CLI source fan-out only; Runtime API and native hosts reject source `path` until distributed fan-out is implemented |
-| `concurrency` | int | no | Offline CLI maximum parallel slices with `path`; default `1`. Does not enable runtime fan-out |
+| `path` | string | no | Source fan-out selector; available in offline CLI, local real/mock tests and experimental distributed scheduling. Production deployment remains gated on M7.5 |
+| `concurrency` | int | no | Default `1`; distributed stage-wide owner limit with `path` (1–1000). Local real/mock tests execute items sequentially |
+| `maxItems` | int | no | Distributed/local fan-out manifest limit, checked before calls; default 10000, maximum 100000 |
 | `from` | object | for pull | Pull source configuration |
 | `rabbitmq` | object | for live queue | External RabbitMQ subscription; async mode. See [connectors](connectors.md#external-rabbitmq-ingress). |
 | `eventGrid` | object | no | Opt in to Event Grid schema validation, batch splitting and deduplication on async HTTP. See [connectors](connectors.md#event-grid-webhook-ingress). |
@@ -307,7 +308,7 @@ Sources in the same stage (same dependency level) run concurrently. The IDM is o
 
 ### Source Fan-Out (path)
 
-**Offline CLI only.** The Runtime API and native hosts reject source `path` fan-out, including local draft tests. The following describes the CLI's `$slice` behavior; it is not a deployable runtime example. M7 must implement distributed work-item coordination before the runtime accepts it.
+**Production deployment remains disabled until M7.5.** Source `path` now works in local draft tests and the experimental distributed scheduler. Its selector runs once against the assembled IDM and must return an array. `$slice` is the selected element, `$index` its zero-based ordinal, `$idm` the frozen stage dependencies, and `$` in a source map is the fetched response. Results form an ordered array under the source name. Local tests run sequentially; the distributed stage honors `concurrency`. The offline CLI retains its older source fan-out contract. See the [tested M7.4 sample](examples/distributed-fanout/README.md) for the shared runtime/local contract and limits.
 
 When a source has `path`, the IDM is sliced and the source is processed **once per slice**:
 
@@ -401,6 +402,7 @@ outputs:
 | `map` | string | no | Transformation: `.elwood` script or inline expression |
 | `contentType` | string | no | Output format. Default: `json` |
 | `concurrency` | int | no | Legacy field; does not enable per-item output processing or parallel delivery |
+| `fanOut` | object | no | Explicit item expansion in local tests/experimental distributed profile: `path` selects an array, `concurrency` defaults to 1 (maximum 1000), `maxItems` defaults to 10000 (maximum 100000). Existing output `path` and `map` then run per element; `response: true` cannot fan out |
 | `destinations` | object | no | Where to deliver (see Destinations) |
 | `response` | bool | no | Sync mode only — marks this output as the HTTP response returned to the caller. Exactly one output must set this when `mode: sync`. Forbidden in async mode. See [Execution Mode](#execution-mode). |
 

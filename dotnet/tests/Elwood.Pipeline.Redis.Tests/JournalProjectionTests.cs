@@ -121,6 +121,8 @@ public sealed class JournalProjectionTests(RedisFixture fixture) : IClassFixture
         await fixture.First.GetDatabase().KeyDeleteAsync(Enumerable.Range(0, 300).Select(i => Key(stage, i)).ToArray());
         for (var start = 0; start < stage.ItemCount; start += 128) await Journal.ReconcileAsync(stage, Projection, start);
         Assert.All(await Projection.ReadPageAsync(stage, 256), i => Assert.Equal("Completed", i!.Status));
+        Assert.Null(await Journal.TryAggregateAsync(stage, "verify-page-1"));
+        Assert.Null(await Journal.TryAggregateAsync(stage, "verify-page-2"));
         await using var aggregation = await Journal.TryAggregateAsync(stage, "aggregate");
         Assert.NotNull(aggregation);
         var values = new List<string>();

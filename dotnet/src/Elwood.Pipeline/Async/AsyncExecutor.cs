@@ -31,6 +31,7 @@ public sealed class AsyncExecutor
     private readonly ContentFingerprintStore? _fingerprints;
     private readonly ExecutionConcurrencyGate? _concurrency;
     private readonly DistributedStepScheduler? _distributed;
+    private readonly LocalFanOutExecutor? _localFanOut;
     private DateTime Now => _time.GetUtcNow().UtcDateTime;
 
     public AsyncExecutor(IStateStore stateStore, IDocumentStore documentStore, IStepQueue stepQueue,
@@ -44,6 +45,7 @@ public sealed class AsyncExecutor
         _fingerprints = fingerprints;
         _concurrency = concurrency;
         _distributed = distributedWork;
+        if (testSession is not null) _localFanOut = new(documentStore, secretProvider, sourceConnectors, destinationConnectors, engine, testSession);
         _operations = new(documentStore, secretProvider, sourceConnectors, destinationConnectors, engine, testSession) { InspectContent = InspectContent };
     }
 
@@ -97,7 +99,7 @@ public sealed class AsyncExecutor
             Yaml = pipeline.Config, Scripts = new(pipeline.Scripts), TriggerMetadata = triggerMetadata is null ? null : ExecutionOperations.Json(triggerMetadata),
         }));
         List<List<string>> stages = [];
-        var errors = pipeline.Errors.Concat(PipelineParser.ValidateExecutionConfig(pipeline.Config)).ToList();
+        var errors = pipeline.Errors.Concat(PipelineParser.ValidateExecutionConfig(pipeline.Config, fanOut: state.WorkProfile is not null || _localFanOut is not null)).ToList();
         if (state.WorkProfile is not null && state.Sources.Count + state.Outputs.Count > DistributedStepScheduler.MaximumSteps)
             errors.Add("The distributed profile supports at most 256 source/output definitions per execution.");
         try { stages = DependencyResolver.ResolveStages(pipeline.Config.Sources).Select(stage => stage.Select(s => s.Name).ToList()).ToList(); }
@@ -191,12 +193,16 @@ public sealed class AsyncExecutor
             {
                 var stageIndex = stages.FindIndex(stage => stage.Contains(message.StepName));
                 idm = await _operations.Assemble(state, stages.Take(stageIndex).SelectMany(s => s));
-                await _operations.Source(state, pipeline, pipeline.Yaml.Sources.Single(s => s.Name == message.StepName), idm, attempt, claim, cancellationToken);
+                if (_localFanOut is not null && FanOutPlan.Config(pipeline, message.Type, message.StepName) is not null)
+                    await _localFanOut.ExecuteAsync(state, pipeline, message, idm, step, claim, cancellationToken);
+                else await _operations.Source(state, pipeline, pipeline.Yaml.Sources.Single(s => s.Name == message.StepName), idm, attempt, claim, cancellationToken);
             }
             else
             {
                 idm = await _operations.Read(state.IdmRef, "IDM");
-                await _operations.Output(state, pipeline, pipeline.Yaml.Outputs.Single(o => o.Name == message.StepName), idm, attempt, claim, cancellationToken);
+                if (_localFanOut is not null && FanOutPlan.Config(pipeline, message.Type, message.StepName) is not null)
+                    await _localFanOut.ExecuteAsync(state, pipeline, message, idm, step, claim, cancellationToken);
+                else await _operations.Output(state, pipeline, pipeline.Yaml.Outputs.Single(o => o.Name == message.StepName), idm, attempt, claim, cancellationToken);
             }
             attempt.Status = "Completed"; attempt.CompletedAt = Now;
             attempt.Diagnostics = [.. step.Diagnostics]; step.Status = ExecutionStatus.Completed; step.CompletedAt = Now;
@@ -221,6 +227,14 @@ public sealed class AsyncExecutor
                 Terminal(state, ExecutionStatus.AwaitingReview); state.ResponseStatusCode = 409;
             }
             await Save(state, claim);
+        }
+        catch (LocalItemFailureException error)
+        {
+            step.Status = error.Review ? ExecutionStatus.AwaitingReview : ExecutionStatus.Failed;
+            step.OutcomeUncertain = error.Uncertain; step.Errors = [error.Message]; step.CompletedAt = Now;
+            attempt.Status = error.Uncertain ? "Uncertain" : "Failed"; attempt.CompletedAt = Now;
+            attempt.Error = error.Message; attempt.Diagnostics = [.. step.Diagnostics];
+            state.Errors = [error.Message]; Terminal(state, step.Status); await Save(state, claim);
         }
         catch (ExecutionOwnershipLostException) { throw; }
         catch (Exception) when (step.Work is not null) { throw; } // Admission/reply loss is recovered from the persisted work identity.

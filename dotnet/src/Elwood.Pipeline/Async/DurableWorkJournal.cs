@@ -17,7 +17,7 @@ public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore d
     private const int PageSize = 128;
     private sealed record Input(string Reference, string Sha256);
     internal sealed record Header(WorkStage Stage, string[] Pages, bool Ready, string? AggregationToken = null,
-        string? ResultReference = null, string? ResultSha256 = null);
+        string? ResultReference = null, string? ResultSha256 = null, int VerifiedItems = 0);
     private sealed record Slot(string Generation, int? Ordinal = null);
     private static string Root(WorkStage stage) => $"{SafePath.Id(stage.ExecutionId)}/{SafePath.Id(stage.StageId)}";
     private static string HeaderKey(WorkStage stage) => Root(stage) + "/header";
@@ -254,8 +254,15 @@ public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore d
         {
             var header = Decode<Header>(await claim.ReadAsync(token));
             if (header.ResultReference is not null) return null;
-            for (var start = 0; start < stage.ItemCount; start += PageSize)
-                if ((await ReadPageAsync(stage, start, PageSize, token)).Any(i => i.Status != "Completed")) return null;
+            // Completed items are immutable. Persist a checked prefix so aggregation
+            // admission never rescans thousands of records under one header lease.
+            if (header.VerifiedItems < 0 || header.VerifiedItems > stage.ItemCount)
+                throw new WorkJournalException("Invalid aggregation progress.");
+            var page = await ReadPageAsync(stage, header.VerifiedItems, PageSize, token);
+            var verified = header.VerifiedItems + page.TakeWhile(i => i.Status == "Completed").Count();
+            header = header with { VerifiedItems = verified };
+            await claim.SaveAsync(Encode(header), token);
+            if (verified < stage.ItemCount) return null;
             header = header with { AggregationToken = requestId };
             await claim.SaveAsync(Encode(header), token);
             var result = new DurableWorkAggregation(this, stage, claim, header);

@@ -300,6 +300,46 @@ outputs:
       assert.equal((await post('/api/executions', { ...mockBody, mocks })).status, 400);
     }
     assert.equal((await post('/api/executions', { ...mockBody, testMode: 'real' })).status, 400);
+    // M7.4: local expansion is available before production host activation.
+    const expanded = { yaml: `name: expanded
+mode: async
+sources:
+  - { name: input, trigger: http }
+  - name: crm
+    trigger: pull
+    depends: input
+    path: '$idm.items'
+    concurrency: 2
+    from:
+      http: { url: 'https://must-not-call.invalid', method: POST, body: '$slice' }
+    map: '{ ordinal: $index, value: $.value }'
+outputs:
+  - name: target
+    fanOut: { path: '$idm.crm', concurrency: 2 }
+    map: '$.value'
+    destinations:
+      http: [{ url: 'https://must-not-call.invalid' }]
+`, scripts: {} };
+    const expandedTemplate = await post('/api/pipelines/orders/test-template', { content: expanded });
+    assert.equal(expandedTemplate.status, 200);
+    const expandedMocks = (await expandedTemplate.json()).mocks;
+    expandedMocks.sources.crm.items = {
+      0: { body: { value: 10 }, expectBody: 1 },
+      1: { body: { value: 20 }, expectBody: 2 },
+    };
+    expandedMocks.outputs.target[0].items = { 0: { expectBody: 10 }, 1: { expectBody: 20 } };
+    const expandedRun = await post('/api/executions', { pipelineId: 'orders', content: expanded,
+      payload: { items: [1, 2] }, testMode: 'mock', mocks: expandedMocks });
+    assert.equal(expandedRun.status, 200);
+    const expandedResult = await expandedRun.json();
+    assert.equal(expandedResult.success, true, JSON.stringify(expandedResult.errors));
+    const expandedState = await (await fetch(`${base}/api/executions/${expandedResult.executionId}`, { headers: { Authorization: `Bearer ${admin}` } })).json();
+    assert.equal(expandedState.sources.crm.fanOutCompleted, 2);
+    assert.equal(expandedState.outputs.target.deliveredCount, 2);
+    const unsupportedDeployment = await (await post('/api/pipelines/orders/validate', { content: expanded })).json();
+    assert.equal(unsupportedDeployment.valid, false);
+    assert.ok(unsupportedDeployment.errors.some(e => e.includes('fan-out') || e.includes('fanOut')));
+
     const failingMocks = structuredClone(template.mocks);
     failingMocks.outputs.target[0].statusCode = 503;
     const failed = await (await post('/api/executions', { ...mockBody, mocks: failingMocks })).json();

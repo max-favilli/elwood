@@ -81,7 +81,7 @@ public sealed class PipelineParser
     private static IEnumerable<string> References(PipelineConfig config)
     {
         var references = config.Sources.SelectMany(s => new[] { s.Map, s.Path, s.From?.Http?.Body }.Concat((s.From?.Sql?.Parameters ?? []).Values.Select(p => p?.Value)))
-            .Concat(config.Outputs.SelectMany(o => new[] { o.Path, o.OutputId, o.Map, o.ResponseStatusCode }
+            .Concat(config.Outputs.SelectMany(o => new[] { o.Path, o.OutputId, o.Map, o.ResponseStatusCode, o.FanOut?.Path }
                 .Concat((o.Destinations?.FileShare ?? []).Select(f => f.Filename))
                 .Concat((o.Destinations?.Sftp ?? []).Select(f => f.Filename))
                 .Concat((o.Destinations?.BlobStorage ?? []).Select(f => f.Filename))));
@@ -125,7 +125,7 @@ public sealed class PipelineParser
     }
 
     /// <summary>Reject configured behavior the current executor cannot honor.</summary>
-    public static List<string> ValidateExecutionConfig(PipelineConfig config, bool fileInputs = false)
+    public static List<string> ValidateExecutionConfig(PipelineConfig config, bool fileInputs = false, bool fanOut = false)
     {
         var errors = new List<string>();
         if (config.Deduplication is { } dedup)
@@ -164,8 +164,16 @@ public sealed class PipelineParser
                 errors.Add($"Source '{source.Name}': HTTP maxBytes must be between 1 and 134217728.");
             ValidateRetry(source.Retry, source.Name, errors);
             if (string.IsNullOrWhiteSpace(source.Name)) errors.Add("Every source needs a non-empty name.");
-            if (!fileInputs && !string.IsNullOrWhiteSpace(source.Path))
+            if (!fileInputs && !fanOut && !string.IsNullOrWhiteSpace(source.Path))
                 errors.Add($"Source '{source.Name}': path fan-out is supported only by the file-input executor today.");
+            if (source.Path is not null && fanOut)
+            {
+                ValidateFanOut(source.Path, source.Concurrency, source.MaxItems, source.Name, errors);
+                if (source.Trigger != "pull" || source.From is null)
+                    errors.Add($"Source '{source.Name}': fan-out requires a pull connector.");
+                if (config.Deduplication is { Mode: "skip" } primary && primary.Source == source.Name)
+                    errors.Add($"Source '{source.Name}': the deduplication source cannot fan out.");
+            }
             if (!fileInputs && source.Trigger is not ("http" or "http-request" or "queue" or "pull"))
                 errors.Add($"Source '{source.Name}': trigger '{source.Trigger}' is not supported by this executor.");
         }
@@ -173,6 +181,13 @@ public sealed class PipelineParser
             errors.Add($"Duplicate output name: '{duplicate.Key}'.");
         foreach (var output in config.Outputs)
         {
+            if (output.FanOut is { } expansion)
+            {
+                ValidateFanOut(expansion.Path, expansion.Concurrency, expansion.MaxItems, output.Name, errors);
+                if (!fanOut || fileInputs) errors.Add($"Output '{output.Name}': fanOut requires the distributed profile or a local real/mock test.");
+                if (output.Response) errors.Add($"Output '{output.Name}': an HTTP response cannot fan out.");
+                if (output.Concurrency != 1) errors.Add($"Output '{output.Name}': use fanOut.concurrency for expanded deliveries.");
+            }
             ValidateRetry(output.Retry, output.Name, errors);
             if (string.IsNullOrWhiteSpace(output.Name)) errors.Add("Every output needs a non-empty name.");
             if (output.OutputId is not null) errors.Add($"Output '{output.Name}': outputId is not implemented.");
@@ -188,6 +203,12 @@ public sealed class PipelineParser
         }
         errors.AddRange(ConnectorValidation.Validate(config));
         return errors;
+    }
+
+    private static void ValidateFanOut(string path, int concurrency, int maxItems, string name, List<string> errors)
+    {
+        if (string.IsNullOrWhiteSpace(path) || concurrency is < 1 or > 1000 || maxItems is < 1 or > 100000)
+            errors.Add($"Step '{name}': fan-out requires a path, concurrency 1–1000 and maxItems 1–100000.");
     }
 
     private static void ValidateRetry(RetryPolicy? retry, string name, List<string> errors)

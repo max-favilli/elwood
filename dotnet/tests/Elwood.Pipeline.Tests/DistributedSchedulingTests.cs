@@ -12,7 +12,7 @@ using Elwood.Pipeline.Testing;
 
 namespace Elwood.Pipeline.Tests;
 
-public sealed class DistributedSchedulingTests : IDisposable
+public sealed partial class DistributedSchedulingTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "elwood-scheduling-" + Guid.NewGuid().ToString("N"));
     private FileSystemStateStore States => new(Path.Combine(_root, "states"));
@@ -21,12 +21,12 @@ public sealed class DistributedSchedulingTests : IDisposable
     private readonly Queue _queue = new();
     private readonly Clock _clock = new();
     private DurableWorkJournal Journal => new(Store, Documents, _clock);
-    private AsyncExecutor Runner(ISourceConnector source, IWorkJournalStore? journalStore = null, IRecoverableStateStore? states = null)
+    private AsyncExecutor Runner(ISourceConnector source, IWorkJournalStore? journalStore = null, IRecoverableStateStore? states = null, IEnumerable<IDestinationConnector>? destinations = null, Func<Elwood.Core.ElwoodEngine>? engineFactory = null)
     {
         states ??= States; var docs = Documents;
         var journal = new DurableWorkJournal(journalStore ?? Store, docs, _clock);
-        var items = new WorkItemStepExecutor(journal, docs, sourceConnectors: [source]);
-        return new(states, docs, _queue, sourceConnectors: [source], timeProvider: _clock,
+        var items = new WorkItemStepExecutor(journal, docs, sourceConnectors: [source], destinationConnectors: destinations, engineFactory: engineFactory);
+        return new(states, docs, _queue, sourceConnectors: [source], destinationConnectors: destinations, timeProvider: _clock,
             distributedWork: new(states, docs, _queue, journal, items));
     }
     private static ParsedPipeline Pipeline(bool two = true, string map = "{ left: $ }", string retry = "") =>
@@ -58,7 +58,8 @@ public sealed class DistributedSchedulingTests : IDisposable
     {
         for (var round = 0; round < 15; round++)
         {
-            foreach (var message in _queue.Drain()) await runner.ExecuteStepAsync(message);
+            foreach (var message in _queue.Drain().DistinctBy(m => (m.ExecutionId, m.Type, m.StepName, m.WorkGeneration, m.WorkOrdinal)))
+                await runner.ExecuteStepAsync(message);
             await runner.RecoverAsync();
             if ((await States.ListRecoverableAsync()).Count == 0) return;
         }
@@ -89,10 +90,14 @@ public sealed class DistributedSchedulingTests : IDisposable
             var active = (await States.GetExecutionAsync(id))!;
             Assert.Empty(active.Sources["left"].Attempts); // Per-item checkpoint writes do not rewrite the parent.
         }
-        finally { release.TrySetResult(); }
-        await workers; await Drain(runner);
+        catch (TimeoutException error)
+        {
+            throw new InvalidOperationException(JsonSerializer.Serialize(await States.GetExecutionAsync(id)), error);
+        }
+        finally { release.TrySetResult(); await workers; }
+        await Drain(runner);
         var state = (await States.GetExecutionAsync(id))!;
-        Assert.Equal(ExecutionStatus.Completed, state.Status); Assert.Equal(2, calls);
+        Assert.True(state.Status == ExecutionStatus.Completed, JsonSerializer.Serialize(state)); Assert.Equal(2, calls);
         using var result = JsonDocument.Parse((await Documents.GetAsync(state.Outputs["result"].DocumentRef!))!);
         Assert.Equal(1, result.RootElement.GetProperty("left").GetInt32());
         Assert.Equal(2, result.RootElement.GetProperty("right").GetInt32());

@@ -1,0 +1,18 @@
+{
+  "sources": {
+    "products": {
+      "items": {
+        "0": { "body": { "name": "Product A" } },
+        "1": { "body": { "name": "Product B" } }
+      }
+    }
+  },
+  "outputs": {
+    "delivery": [{
+      "items": {
+        "0": { "expectBody": { "productId": "A", "name": "Product A" } },
+        "1": { "expectBody": { "productId": "B", "name": "Product B" } }
+      }
+    }]
+  }
+}
