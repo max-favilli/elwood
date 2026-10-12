@@ -31,6 +31,12 @@ outputs:
       assert.equal(response.status, expected, `Unexpected HTTP ${response.status} from ${new URL(response.url).pathname}`);
       return response.json();
     }
+    async function status(response, expected) {
+      // Drain every response before the next request so Undici can release its
+      // connection, including authentication failures and empty responses.
+      await response.arrayBuffer();
+      assert.equal(response.status, expected, `Unexpected HTTP ${response.status} from ${new URL(response.url).pathname}`);
+    }
     async function completed(executionId) {
       const deadline = Date.now() + 120_000;
       while (Date.now() < deadline) {
@@ -41,14 +47,14 @@ outputs:
       }
       assert.fail('Hosted queue execution did not complete within two minutes.');
     }
-    assert.equal((await request('/api/session', { authenticated: false })).status, 401);
-    assert.equal((await request('/api/readiness', { authenticated: false })).status, Number(process.env.ELWOOD_M6_EXPECT_READINESS ?? 200));
+    await status(await request('/api/session', { authenticated: false }), 401);
+    await status(await request('/api/readiness', { authenticated: false }), Number(process.env.ELWOOD_M6_EXPECT_READINESS ?? 200));
     assert.equal((await json(await request('/api/session'), 200)).name, process.env.ELWOOD_M6_OPERATOR ?? 'operator');
     let revision;
     try {
       const draft = await json(await request(`/api/pipelines/${id}`, { method: 'POST', body: content(1) }), 201);
       revision = draft.draftRevisionId;
-      assert.equal((await request(`/api/v1/trigger/${id}`, { method: 'POST', body: { value: 41 }, authenticated: false })).status, 404);
+      await status(await request(`/api/v1/trigger/${id}`, { method: 'POST', body: { value: 41 }, authenticated: false }), 404);
       const localTest = await json(await request('/api/executions', { method: 'POST', body: {
         pipelineId: id, payload: { value: 41 }, testMode: 'mock', mocks: {},
       } }), 200);
@@ -70,7 +76,7 @@ outputs:
       console.log('Hosted evidence:', JSON.stringify({ pipelineId: id, originalExecution: first.executionId, replayExecution: replayed.executionId,
         input: 41, output: 42, duplicateAcceptedOnce: true, originalRevisionPreserved: true }));
     } finally {
-      if (revision) assert.equal((await request(`/api/pipelines/${id}`, { method: 'DELETE', headers: { 'If-Match': `"${revision}"` } })).status, 204);
+      if (revision) await status(await request(`/api/pipelines/${id}`, { method: 'DELETE', headers: { 'If-Match': `"${revision}"` } }), 204);
       // Execution data has a five-minute TTL and is removed by the independent retention timer.
       // Retired definition IDs remain in the disposable preview catalog until lab teardown.
     }

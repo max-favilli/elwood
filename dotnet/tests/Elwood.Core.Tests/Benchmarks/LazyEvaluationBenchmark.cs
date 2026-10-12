@@ -105,14 +105,16 @@ public class LazyEvaluationBenchmark
     {
         var input = GenerateLargeArray(100_000);
 
+        var visited = 0;
+        _engine.RegisterMethod("observe", (target, _, _) => { visited++; return target; });
         var sw = Stopwatch.StartNew();
-        var result = _engine.Evaluate("$.items[*] | take 1", input);
+        var result = _engine.Evaluate("$.items[*] | select i => i.observe() | take 1", input);
         sw.Stop();
 
         Assert.True(result.Success);
         Assert.Equal(1, result.Value!.GetArrayLength());
-        Assert.True(sw.ElapsedMilliseconds < 50,
-            $"take(1) on 100K items took {sw.ElapsedMilliseconds}ms — expected < 50ms");
+        // Wall time depends on shared-runner load; the evaluated item count proves laziness.
+        Assert.Equal(1, visited);
 
         var line = $"take(1) on 100K: {sw.ElapsedMilliseconds}ms (short-circuit proof)";
         Log("LazyShortCircuit", line);
