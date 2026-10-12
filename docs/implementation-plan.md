@@ -1,8 +1,10 @@
 # Elwood integration platform implementation plan
 
-Current task-by-task progress is tracked in the [master checklist and WBS](master-checklist.md). This document preserves design rationale and historical verification evidence.
+Current task-by-task progress is tracked in the [master checklist and WBS](master-checklist.md). This document defines the delivery sequence and design rationale, with dated historical verification evidence below.
 
-Milestones 1–5 are implemented and the three M5 verification gaps were closed on 7 October 2026. The independent review findings have been addressed in separate follow-up packages; see the review closeout below. Review those commits before M6 native cloud installations. The first adoption tests after M6 will be the Eagle SAP integration and the pet project’s Deldo integration. Follow the confirmed [product direction](product-direction.md); M5 completion is not a production-readiness claim.
+**Current status — 12 October 2026: the full plan is not complete.** M1–M5 are implemented. M6's Azure runtime, installer and review fixes are verified, and `v0.7.26` is published; the complete-day telemetry measurement, temporary-lab deletion and final reported cost remain open. M7 is active: coordination and durable journals pass CI, and the isolated item runner is implemented, but distributed execution is not enabled in a host. Eagle and Deldo consumer installation and real-world acceptance remain open; Eagle's concurrent work-item requirements depend on M7. Follow the confirmed [product direction](product-direction.md).
+
+The dated implementation notes below record what was true at each checkpoint. Their earlier statements about unimplemented features, pending tests or unpushed commits are historical; use the current status and master checklist for remaining work.
 
 This plan covers the backend and the sibling `elwood-portal` repository. Each milestone ends with a demonstrable behavior and focused automated checks. Milestones describe proposed delivery order; they do not expand the agreed product scope.
 
@@ -26,8 +28,30 @@ The portal still pins DSL 0.7.21. Its dependency, examples, editor language supp
 | 4 Durable processing and recovery | Durable acceptance, queue recovery, per-step retry policies, resume/replay, retention | Show attempts, failures and recovery actions | Accepted work survives interruption; duplicate messages do not launch overlapping attempts unchecked |
 | 5 Representative connectors | HTTP authentication, SQL stored-procedure sources and destinations, external RabbitMQ triggers, required SAP interface support, Blob reads/writes and Event Grid ingress | Configure connections; mock and inspect HTTP, SQL, Blob and message interactions | Reproduce both the original order/product integrations and Deldo Blob → SQL + Blob imports against controlled systems, including recovery |
 | 6 Native cloud installations | Provider-specific hosting, queue/state/document adapters and infrastructure, enforced internal/output blob retention, including a small Azure installation without mandatory Redis | Connect authoring and deployment to the hosted runtime | Install, recover and operate native deployments; prove default 30-day storage cleanup and measure the small Azure profile against the pet project's total budget |
+| 7 Distributed work items and Redis | Independent concurrent stages/items, durable checkpoints and Redis reconciliation, explicit fan-out, aggregation, bounded recovery/retention and a consumer deployment profile | Paginated item inspection, item recovery and real/mock testing of distributed definitions | Run the Eagle-style workload across independent workers; verify restart/failover, uncertain writes, finite retention and a versioned consumer installation |
 
 Milestone 2 owns management authentication/authorization, path containment and scoped secret access. These are completion requirements before the portal and API enter shared team use or an externally reachable installation. Add automated API/browser coverage and CI throughout the sequence, rather than postponing verification to the cloud milestone.
+
+## Milestone 7 — Distributed work items and Redis
+
+M7 covers the Eagle requirement clarified during M6: one integration may fan out thousands of work items, with concurrent sources and frequent shared status updates. M6's bounded Azure profile serializes steps within each execution. Its completion does not satisfy this additional concurrency requirement. The distributed profile is explicit; existing deployments keep their current execution semantics.
+
+Redis provides shared coordination and cached status. Durable manifests, checkpoints and storage-enforced ownership remain authoritative for recovery when Redis loses data. Pipeline revisions stay pinned; uncertain external writes follow the pipeline's automatic/manual retry policy. Source fan-out preserves item identity, while output fan-out is explicit and does not change the existing meaning of output `path`. No DSL behavior changes are required.
+
+| Package | Current state | Remaining delivery |
+|---|---|---|
+| 7.1 Coordination contract and Redis adapter | Complete as an experimental component; real Redis protocol tests pass | Production activation depends on the following packages |
+| 7.2 Durable manifests, checkpoints and reconciliation | Complete as a component; local and Redis/Azurite CI checks pass | Provider failover/load certification remains 7.7 |
+| 7.3 Runtime integration | In progress; isolated item runner passes CI | Parent execution coordination, persistent stage discovery, queue dispatch, aggregate publication, local real/mock parity and host registration |
+| 7.4 Explicit YAML fan-out | Open | Validated source/output fan-out, bounded scheduling and deterministic aggregation, preserving existing definitions |
+| 7.5 Inspection, recovery and retention | Open | Paginated item history, operator actions, finite physical cleanup, quotas and backpressure |
+| 7.6 Shared pipeline/route cache | Open | Immutable bundle distribution, deployment invalidation and correct cold-cache behavior |
+| 7.7 Failure and capacity verification | Open | Thousands of items across independent workers, duplicate delivery, restart/failover, uncertain writes, retention and measured provider costs |
+| 7.8 Consumer release | Open | Redis infrastructure/configuration, versioned packages, installation smoke tests, tutorials and Eagle/Deldo handoffs |
+
+**M7 is complete only when the full distributed profile can be installed and exercised through the runtime and portal with verified recovery, retention and operating limits.** Passing component tests is insufficient. The current item runner is not registered in the API or Functions host. Detailed contracts, checks and evidence are in [distributed-work-items.md](distributed-work-items.md); the [master checklist](master-checklist.md#m7--distributed-work-items-and-redis) tracks delivery.
+
+The Elwood session owns reusable code, installation assets, documentation and releases. The Eagle and Deldo sessions own permanent provisioning, cost approval and their real integration acceptance tests. M6's scheduled measurement/cleanup can finish independently while M7 implementation proceeds.
 
 ## First work package
 

@@ -13,7 +13,7 @@ Check a box only when its stated behavior is implemented and verified. An unchec
 - [x] M5 — Representative connectors and controlled integration verification.
 - [ ] M6 — Code and installer verified; `v0.7.26` published. Fresh bootstrap, custom host role, readiness, scheduled retention and hosted queue/replay pass. Scheduled complete-day telemetry sizing and lab cleanup remain active. [Campaign and installer evidence](m6-release-evidence.md).
 - [ ] M7 — **Active, resumed 12 October at the owner's request.** Durable item journals, concurrency permits, Redis reconciliation and the isolated item runner pass CI; host scheduling, YAML fan-out, inspection/retention and consumer release packaging remain open. [Contract and work breakdown](distributed-work-items.md).
-- [ ] Adoption — Eagle SAP and Deldo real-world acceptance tests after M6.
+- [ ] Adoption — Eagle SAP and Deldo consumer installation and real-world acceptance; Eagle's concurrent work-item flow also depends on M7.
 
 M1–M5 completion describes their implemented scope, not production/cloud readiness. The first and second independent-review follow-ups are part of that baseline. DSL behavior is outside the M6 implementation scope.
 
@@ -177,7 +177,22 @@ Depends on the preceding implementation packages.
 - [x] Independently review the completed M6 changes and resolve release-blocking findings.
 - [x] Record hosted behavior, security, recovery, retention, internal independent review and teardown evidence; close the bounded native Azure milestone. External review and real adoption remain below.
 
-## Adoption after M6
+## M7 — Distributed work items and Redis
+
+**Active, incomplete.** This milestone covers the Eagle concurrency/Redis requirement beyond M6's bounded Azure profile. See the [implementation plan](implementation-plan.md#milestone-7--distributed-work-items-and-redis) for scope and completion criteria, and [distributed-work-items.md](distributed-work-items.md) for detailed contracts and regression evidence. The new item runner is not enabled in the API or Functions host.
+
+- [x] 7.1 — Implement the coordination contract and experimental Redis adapter; verify atomic item ownership, retries and bounded inspection against real Redis.
+- [x] 7.2 — Implement durable manifests, checkpoints, concurrency permits and Redis-loss reconciliation; verify storage fencing and interrupted-write recovery. Load/provider-failover certification remains 7.7.
+- [ ] 7.3 — Finish runtime integration. Isolated item execution is implemented and tested; parent coordination, stage discovery, queue dispatch, aggregate publication, local real/mock parity and host registration remain.
+- [ ] 7.4 — Add explicit YAML fan-out, bounded scheduling and deterministic source/output aggregation without changing existing definitions.
+- [ ] 7.5 — Add paginated item inspection, operator recovery, finite physical retention, quotas and backpressure.
+- [ ] 7.6 — Add the shared immutable pipeline/route cache with deployment invalidation and correct cold-cache behavior.
+- [ ] 7.7 — Verify thousands of items across independent workers, duplicate delivery, restart/failover, uncertain writes and retention; measure provider capacity and cost.
+- [ ] 7.8 — Publish the distributed profile's packages, infrastructure/configuration, installation smoke tests, tutorials and versioned Eagle/Deldo handoffs.
+
+Existing test passes establish the completed components only. Check M7 complete after the installed runtime and portal meet its end-to-end completion criteria; permanent consumer provisioning and real integration acceptance follow in their project sessions.
+
+## Review follow-ups and adoption
 
 ### Third review — 12 October 2026
 
