@@ -1,6 +1,6 @@
 # M6 verification and external review handoff
 
-This document preserves the historical native Azure campaign within guarded-profile limits. Its baselines were backend `655c359`, portal `b6af335`; subsequent capacity and review evidence is explicitly separated below. The fourth-review section records the fresh installer deployment, real bootstrap and custom host-role verification. A complete-day telemetry measurement remains pending. Both campaigns use temporary `elwood-m6-rg`, West Europe, within the owner's cumulative €10 allowance. No workplace production system was used.
+This document preserves the historical native Azure campaign within guarded-profile limits. Its baselines were backend `655c359`, portal `b6af335`; subsequent capacity and review evidence is explicitly separated below. The fourth-review section records the fresh installer deployment, real bootstrap and custom host-role verification. The 13 October closeout below records the complete-day telemetry measurement and its limitations. Both campaigns use temporary `elwood-m6-rg`, West Europe, within the owner's cumulative €10 allowance. No workplace production system was used.
 
 Follow-up: [content suppression](content-deduplication.md) and the [large-file capacity profile](capacity-profile.md) are now implemented and separately verified on Azure. The evidence below remains the original guarded-profile campaign; the follow-up document records its additional tests, revised cost model and remaining permanent-hosting approval.
 
@@ -133,3 +133,58 @@ This is not the requested full-day measurement or a Cost Management charge. Perf
 The existing local follow-up `complete-elwood-telemetry-measurement` was verified active and changed from a 25-hour interval to **13:45 Europe/Rome daily**, making its next intended run **13 October 2026 at 11:45 UTC**. **11:15 UTC is the measurement-window end, not the cleanup start**; the extra 30 minutes allow ingestion delay. The follow-up will collect the fixed 24-hour window, preserve evidence locally, delete only the approved disposable group, record `az group exists=false` with timestamp, and query Cost Management for the final reported campaign figure. Delayed billing must be labelled and followed up without retaining or recreating resources. It pauses after closeout is complete.
 
 This is a local scheduled task, not an Azure-side deletion guarantee: the PC and app must remain running, Azure authentication must remain valid, and unattended permissions must permit the operations. See [scheduled-task requirements](https://learn.chatgpt.com/docs/automations?surface=app). The owner was informed of this dependency. If the local follow-up cannot run, the owner must arrange manual deletion of `elwood-m6-rg` after the measurement; cleanup remains unverified until an actual `az group exists` result is recorded. M6 stays unchecked until full-day telemetry, the performance-counter decision, deletion confirmation and cost evidence are recorded. The optional redundant release-step condition is left unchanged.
+
+## Full-day telemetry and disposable-lab closeout — 13 October 2026
+
+The scheduled follow-up ran after the ingestion allowance. Queries used the exact half-open UTC window **`2026-10-12T11:15:00Z <= TimeGenerated < 2026-10-13T11:15:00Z`**. Collection began at **11:52:10 UTC on 13 October**, more than 37 minutes after the window ended. The last recorded ingestion timestamp among the four populated application telemetry tables was **11:15:39.2177093 UTC**. No telemetry collection configuration was changed during the baseline. ARM still reported `maximumInstanceCount: 3`, 4,096 MiB workers and no always-ready allocation.
+
+These are actual sums of `_BilledSize`, not portal charts or an extrapolation of the reviewer's preliminary three-hour sample. An all-table `search *` cross-check found the two additional nonbillable tables below; a second query checked `_IsBillable` explicitly. AppRequests and AppExceptions were absent from the window, rather than assigned an estimated volume.
+
+| Type | Records observed | `_BilledSize` bytes | Billable bytes |
+| --- | ---: | ---: | ---: |
+| AppPerformanceCounters | 15,693 | 11,990,272 | 11,990,272 |
+| AppTraces | 7,589 | 10,004,548 | 10,004,548 |
+| AppMetrics | 8,384 | 6,470,492 | 6,470,492 |
+| AppDependencies | 1,711 | 1,618,606 | 1,618,606 |
+| AppRequests | Absent | — | — |
+| AppExceptions | Absent | — | — |
+| Usage | 101 | 42,212 | 0 |
+| AppSystemEvents | 1 | 4,419 | 0 |
+| **Total observed** | **33,479** | **30,130,549** | **30,083,918** |
+
+Total billable telemetry was **30.083918 MB = 28.690260 MiB = 0.030083918 decimal GB**. Total `_BilledSize`, including the nonbillable records, was **30.130549 MB**. These bytes are not a Cost Management charge. All 1,711 dependencies were **InProc / Invoke**, SDK `azurefunctions-netiso: 2.51.0+7933fccdc110be8c4808cc8d3e8ae22142`; none were SDK HTTP/storage dependency records. No failed dependency record was observed. Automatic SDK dependency tracking remains disabled, although SDK error messages can still appear in AppTraces.
+
+**Heartbeat and quota limitations.** There were **268** `ELWOOD_RETENTION_HEALTHY` traces, against 288 nominal five-minute slots. **17 gaps between consecutive heartbeats exceeded 330 seconds**; the maximum was **1,200.3991091 seconds (20 minutes)**, from **13 October 05:40:00.4192278 to 06:00:00.8183369 UTC**. There were no `ELWOOD_RETENTION_UNHEALTHY` traces in the measured window. Host logs contained **276 successful ExecutionRetention completions**, eight without a corresponding worker health trace, and 13 `IsPastDue` trigger-detail records. In the longest gap, the host recorded successful retention at 05:45:00.4157264 and 05:56:17.7883012; the latter was a past-due invocation for 05:50. Thus the heartbeat gap does not establish that cleanup stopped for 20 minutes. It does establish that this installation did **not** demonstrate uninterrupted five-minute health telemetry. Delayed scheduling and missing worker traces are observed; their underlying cause is not established.
+
+The workspace reported `dailyQuotaGb: 0.1` and `dataIngestionStatus: RespectQuota`; its returned `quotaNextResetTime` was a stale **12 October 20:00 UTC** and is not treated as proof of the next reset. The window's quota/data-collection Operation query returned no records. There is no evidence here of quota exhaustion causing the gaps. A final live probe at **11:54:44 UTC** returned readiness **200**; retention returned **200**, `healthy=true`, `overdueObjects=0`, no failures, and `lastSweepAt=11:50:00.4518314+00:00`. The heartbeat-based alert can therefore also have false positives from delayed/missing telemetry, independently of workspace capping. Consumer acceptance must investigate that delivery gap and compare alerts with authenticated retention status before relying on unattended notifications.
+
+**Performance-counter and cap decision:** keep `EnablePerformanceCounterCollectionModule` at its existing enabled default. Counters account for **39.86%** of this day's billable bytes, but retaining resource diagnostics is useful while investigating host/timer behavior. Removing every observed counter would save at most **11.99 MB/day (0.360 decimal GB per 30 days at this rate)**; that is an upper bound, not a measured result of disabling the worker module, which need not control every host counter. For this baseline, removing those diagnostics solely for ingestion savings is not worthwhile. No collection setting was changed, so no changed-setting/live redeployment verification is claimed.
+
+Retain the provisional **0.1 GB/day** cap. Using a conservative decimal 100 MB comparison, it is **3.32 times** the measured daily billable volume, leaving **69.92 MB/day** above this baseline. This is a maintenance-only sizing observation on the disposable installer, with no representative supplier traffic. It is not a validated cap for Eagle, Deldo, concurrent workloads or failure bursts. Consumers must repeat the measurement with their workload and approve monitoring costs; a cap is neither a spending guarantee nor reliable protection for health-trace delivery.
+
+Raw queries/results, the full AppTraces window, hourly volumes, system-event details, workspace/quota state, group tags/inventory, scale configuration, live probes and costs were preserved before deletion under ignored **`.private/fourth-review/closeout-*`** files. `closeout-manifest.json` records SHA-256 hashes of the then-current evidence files. No credentials or raw private telemetry are committed. One initial wildcard `union *` query failed with `SemanticError: Failed to resolve ... TimeGenerated`; explicit tables and the independent `search *` query succeeded.
+
+**Cleanup completed.** Immediately before deletion, the exact group in subscription `79522cd2-4487-4289-b0b8-42ee8aa5d649` had tags `project=elwood`, `purpose=fourth-review`, `temporary=true`. Its eight resources were the review identity, storage account, Flex plan, Functions app, Log Analytics workspace, Application Insights component, retention alert and Application Insights Smart Detection action group. Every inventory ID was inside that group; none was a protected resource. The approved `az group delete --name elwood-m6-rg --subscription 79522cd2-4487-4289-b0b8-42ee8aa5d649 --yes --no-wait` request was accepted at **11:56:15.7928677 UTC**. The first existence check at 11:57:19 still returned true. At **11:59:42.8503076 UTC**, the actual command returned:
+
+```text
+az group exists --name elwood-m6-rg --subscription 79522cd2-4487-4289-b0b8-42ee8aa5d649 -o json
+false
+```
+
+Lookup of the exact custom role **`7c0fbb87-0bb2-5b7c-a7db-2818a22d3848`** returned `[]`, confirmed by a second lookup. It did not remain behind, so no separate role deletion was needed. No resources were retained for billing and no consumer infrastructure was created.
+
+**Final reported campaign cost at cleanup:** **€0.10725716091221846** (approximately **€0.1073**), as of **13 October 2026 11:59:49.7272193 UTC**, from an unpaginated Cost Management `ActualCost`/`PreTaxCost`, month-to-date query with the exact `ResourceGroupName=elwood-m6-rg` filter. This includes earlier campaigns under the same group name and returned usage dates through 13 October. The query immediately before deletion returned the same total. It remains well below the cumulative €10 allowance.
+
+| Service | Reported EUR, rounded |
+| --- | ---: |
+| Azure Monitor | 0.02989420 |
+| Storage | 0.02809272 |
+| Azure App Service | 0.02694135 |
+| SQL Database | 0.01180629 |
+| Container Registry | 0.01050677 |
+| Service Bus | 0.00001584 |
+| Bandwidth, Event Grid, Functions, Log Analytics | 0.00000000 each |
+
+These are **reported charges, not a settled final invoice**. Same-day records can be incomplete or revised; reported zeros do not establish free ongoing hosting. A separate billing-only follow-up, **`reconcile-elwood-lab-billing`**, is active daily at **13:45 Europe/Rome**, beginning 14 October. It will query only the deleted group's costs, preserve dated results, update this evidence, and pause after at least 48 hours since deletion and two unchanged consecutive daily observations including 13 October usage. Even then the figure will be labelled stable reported cost, not settled billing. It must not recreate any infrastructure.
+
+The measurement, explicit counter/cap decision, verified deletion and final reported cleanup cost complete the M6 installer/release closeout. The original **`complete-elwood-telemetry-measurement`** automation is now **PAUSED**; only the separate billing follow-up remains active. Billing reconciliation and the explicitly recorded consumer observability/notification acceptance remain separate follow-ups. No runtime configuration or M7 feature work was changed during this closeout.
