@@ -188,3 +188,31 @@ Lookup of the exact custom role **`7c0fbb87-0bb2-5b7c-a7db-2818a22d3848`** retur
 These are **reported charges, not a settled final invoice**. Same-day records can be incomplete or revised; reported zeros do not establish free ongoing hosting. A separate billing-only follow-up, **`reconcile-elwood-lab-billing`**, is active daily at **13:45 Europe/Rome**, beginning 14 October. It will query only the deleted group's costs, preserve dated results, update this evidence, and pause after at least 48 hours since deletion and two unchanged consecutive daily observations including 13 October usage. Even then the figure will be labelled stable reported cost, not settled billing. It must not recreate any infrastructure.
 
 The measurement, explicit counter/cap decision, verified deletion and final reported cleanup cost complete the M6 installer/release closeout. The original **`complete-elwood-telemetry-measurement`** automation is now **PAUSED**; only the separate billing follow-up remains active. Billing reconciliation and the explicitly recorded consumer observability/notification acceptance remain separate follow-ups. No runtime configuration or M7 feature work was changed during this closeout.
+
+## Delayed billing observation — 14 October 2026
+
+At **11:46:41.2254545 UTC**, the same subscription-scoped, month-to-date `ActualCost`/`PreTaxCost` query with the exact **`ResourceGroupName=elwood-m6-rg`** filter returned **€0.1348144609504452** (approximately **€0.1348**). This is **€0.027557300038226734 more** than the 13 October cleanup observation. The entire change is on **13 October usage rows**, split between Azure Monitor and Storage. Earlier usage dates and the other service totals are unchanged. The result contained 20 rows, no continuation page, and EUR only.
+
+| Usage date | Previous reported EUR | Current reported EUR | Change EUR |
+| --- | ---: | ---: | ---: |
+| 7 October | 0.00002011 | 0.00002011 | 0.00000000 |
+| 8 October | 0.05285937 | 0.05285937 | 0.00000000 |
+| 12 October | 0.04033190 | 0.04033190 | 0.00000000 |
+| 13 October | 0.01404578 | 0.04160308 | +0.02755730 |
+| **Campaign total** | **0.10725716** | **0.13481446** | **+0.02755730** |
+
+| Service | Current reported EUR | Change since cleanup EUR |
+| --- | ---: | ---: |
+| Azure Monitor | 0.04438299 | +0.01448878 |
+| Storage | 0.04116123 | +0.01306852 |
+| Azure App Service | 0.02694135 | 0.00000000 |
+| SQL Database | 0.01180629 | 0.00000000 |
+| Container Registry | 0.01050677 | 0.00000000 |
+| Service Bus | 0.00001584 | 0.00000000 |
+| Bandwidth, Event Grid, Functions, Log Analytics | 0.00000000 each | 0.00000000 each |
+
+Table amounts are rounded to eight decimal places; raw response and comparison retain the returned values. The query, response and daily/service comparison are preserved under ignored **`.private/fourth-review/billing-20261014T114636Z-{query,result,summary}.json`**. An initial request returned **HTTP 429 / Too many requests**; its query/failure observation is preserved separately as `billing-20261014T114504Z-*`. The retry after backoff succeeded. Azure authentication was valid; no login was initiated.
+
+The reported increase is consistent with delayed reporting for the measurement/deletion day, and remains well within the **€10 allowance**. It is not a settled invoice or evidence of new provisioning. No resources were created, recreated or changed, and no M7 work was performed. The latest returned usage date remains 13 October; the absence of later rows does not prove billing is final.
+
+**Reconciliation remains open:** only **23.78 hours** had elapsed since verified deletion, and the total changed. Neither the 48-hour minimum nor the unchanged-consecutive-daily-observations criterion is satisfied. The billing-only automation remains active; no infrastructure is retained while awaiting later charges.
