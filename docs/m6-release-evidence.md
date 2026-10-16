@@ -216,3 +216,19 @@ Table amounts are rounded to eight decimal places; raw response and comparison r
 The reported increase is consistent with delayed reporting for the measurement/deletion day, and remains well within the **€10 allowance**. It is not a settled invoice or evidence of new provisioning. No resources were created, recreated or changed, and no M7 work was performed. The latest returned usage date remains 13 October; the absence of later rows does not prove billing is final.
 
 **Reconciliation remains open:** only **23.78 hours** had elapsed since verified deletion, and the total changed. Neither the 48-hour minimum nor the unchanged-consecutive-daily-observations criterion is satisfied. The billing-only automation remains active; no infrastructure is retained while awaiting later charges.
+
+## Billing reconciliation complete — 16 October 2026
+
+The **stable reported campaign total is €0.1348144609504452** (approximately **€0.1348**), as of **16 October 2026 at 11:49:29.3156898 UTC**. The subscription-scoped `ActualCost`/`PreTaxCost`, month-to-date query retained the exact **`ResourceGroupName=elwood-m6-rg`** filter. Each successful daily result contained 20 rows, EUR only, no continuation page, and usage through 13 October.
+
+| Observation, UTC | Reported total EUR | Change from previous observation EUR | Hours since verified deletion |
+| --- | ---: | ---: | ---: |
+| 14 October 11:46:41.2254545 | 0.1348144609504452 | +0.027557300038226734 | 23.78 |
+| 15 October 11:45:25.4945693 | 0.1348144609504452 | 0 | 47.76 |
+| 16 October 11:49:29.3156898 | 0.1348144609504452 | 0 | 71.83 |
+
+Every daily and service total in the 14 October tables above remained unchanged in both subsequent observations; the comparison is not limited to the campaign sum. The 15 October observation was preserved privately because it was unchanged and still below the 48-hour minimum. The 16 October check satisfies both closure requirements: **more than 48 hours since deletion and two consecutive unchanged daily comparisons**, including the deletion day's usage. The total is well below the approved €10 allowance.
+
+The dated query, raw result and comparison files are preserved under ignored `.private/fourth-review/`, with prefixes **`billing-20261015T114518Z-`** and **`billing-20261016T114923Z-`**. Today's `decision.json` records the three observation timestamps, unchanged daily/service breakdowns and closure checks. The first 16 October request returned HTTP 429; its query and stderr are preserved under `billing-20261016T114803Z-*`. Retrying after backoff succeeded; no login was initiated.
+
+The **`reconcile-elwood-lab-billing` automation is PAUSED** and its checklist item is complete. This is a **stable reported total, not a settled invoice**; later billing adjustments remain possible. No infrastructure was retained, created or recreated during reconciliation, and no M7 work was performed. The previously documented observability/consumer acceptance follow-up remains open independently.
