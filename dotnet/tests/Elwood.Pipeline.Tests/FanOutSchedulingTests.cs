@@ -115,6 +115,38 @@ public sealed partial class DistributedSchedulingTests
         Assert.Equal("[]", await Documents.GetAsync(state.Outputs["result"].DocumentRef!));
     }
 
+    [Fact]
+    public async Task Operator_selected_retry_resumes_original_revision_without_repeating_sibling_or_receipted_destinations()
+    {
+        var deliveries = new ConcurrentDictionary<string, int>();
+        var source = new Source((config, _) => Task.FromResult(new SourceFetchResult($"{{\"value\":{config.Http!.BodyContent}}}")));
+        var destination = new Destination((url, _) =>
+        {
+            var n = deliveries.AddOrUpdate(url, 1, (_, count) => count + 1);
+            return url.EndsWith("second/1") && n == 1 ? DeliveryResult.Fail("manual retry needed", 503) : DeliveryResult.Ok(receipt: "{}");
+        });
+        var pipeline = Expanded(); pipeline.Config.Outputs[0].Retry = new() { Mode = "manual" };
+        var runner = Runner(source, destinations: [destination]);
+        var (id, hints) = await PrepareExpanded(runner, pipeline, 3);
+        foreach (var hint in hints) await runner.ExecuteStepAsync(hint);
+        for (var n = 0; n < 10; n++)
+        {
+            foreach (var hint in _queue.Drain()) await runner.ExecuteStepAsync(hint);
+            await runner.RecoverAsync();
+        }
+        var state = (await States.GetExecutionAsync(id))!;
+        Assert.Equal(ExecutionStatus.AwaitingReview, state.Status);
+        var stage = state.Outputs["result"].Work!.Stage;
+        var result = await new WorkItemRecovery(States, Journal, Documents).RetryAsync(id, stage.StageId,
+            new("operator-retry", stage.Generation, [new(1, 1, true)]));
+        Assert.Equal("accepted", Assert.Single(result.Items).Status);
+        await Drain(runner);
+        state = (await States.GetExecutionAsync(id))!;
+        Assert.Equal(ExecutionStatus.Completed, state.Status); Assert.Equal(stage.RevisionId, state.RevisionId);
+        Assert.Equal(6, deliveries.Count);
+        Assert.All(deliveries, entry => Assert.Equal(entry.Key.EndsWith("second/1") ? 2 : 1, entry.Value));
+    }
+
     [Theory]
     [InlineData("null", 10)]
     [InlineData("42", 10)]

@@ -14,6 +14,7 @@ public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore d
 {
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     internal readonly TimeProvider Time = timeProvider ?? TimeProvider.System;
+    internal IWorkJournalStore Store => store;
     private const int PageSize = 128;
     private sealed record Input(string Reference, string Sha256);
     internal sealed record Header(WorkStage Stage, string[] Pages, bool Ready, string? AggregationToken = null,
@@ -26,8 +27,12 @@ public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore d
     private static string PageKey(WorkStage stage, int page) => Root(stage) + "/manifest/" + page;
     internal static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     internal static string Encode<T>(T value) => JsonSerializer.Serialize(value, Json);
-    internal static T Decode<T>(string? value) => value is null ? throw new WorkJournalException("Required durable work record is missing.")
-        : JsonSerializer.Deserialize<T>(value, Json) ?? throw new WorkJournalException("Invalid durable work record.");
+    internal static T Decode<T>(string? value)
+    {
+        if (value is null) throw new WorkJournalException("Required durable work record is missing.");
+        try { return JsonSerializer.Deserialize<T>(value, Json) ?? throw new WorkJournalException("Invalid durable work record."); }
+        catch (JsonException) { throw new WorkJournalException("Durable work record contains invalid JSON."); }
+    }
 
     /// <summary>
     /// Admission only. Every item and permit exists before Ready is committed. A

@@ -169,6 +169,67 @@ public sealed class FunctionsHttpTests
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
+    [Fact]
+    public async Task ItemRoutesAuthorizeParentBeforeJournalAccessAndRejectInvalidPagingAndRecoveryScope()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "elwood-item-http-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var settings = Settings(); settings["Elwood:Management:Tokens:0:Permissions:4"] = "recover";
+            var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+            var states = new InMemoryStateStore(); var documents = new InMemoryDocumentStore();
+            var journal = new DurableWorkJournal(new FileWorkJournalStore(root), documents);
+            var deadline = DateTimeOffset.UtcNow.AddHours(1);
+            var stage = new WorkStage("run", "source", "generation", "revision", "context", 1, 1, deadline, deadline.AddDays(30));
+            await journal.AdmitAsync(stage, [await documents.StoreAsync("input", "{\"Slice\":\"{}\"}")]);
+            await using (var item = await journal.TryStartAsync(stage, 0, "worker", "attempt")) await item!.FailAsync(false, "failed");
+            var state = new Elwood.Pipeline.State.ExecutionState { ExecutionId = "run", PipelineId = "orders", RevisionId = "revision",
+                Durable = true, WorkProfile = DistributedStepScheduler.Profile, LifetimeExpiresAt = deadline.UtcDateTime,
+                Status = Elwood.Pipeline.State.ExecutionStatus.Failed,
+                Sources = new() { ["source"] = new() { Work = new() { Stage = stage, Admitted = true, InputsReference = "input", InputsSha256 = "hash" } } } };
+            await states.SaveExecutionAsync(state);
+            await states.SaveExecutionAsync(new() { ExecutionId = "denied", PipelineId = "another-pipeline" });
+            var services = new ServiceCollection().AddLogging().AddSingleton<IConfiguration>(config)
+                .AddSingleton<TokenCredential>(new DenyNetworkCredential()).AddSingleton<IHostApplicationLifetime>(new Lifetime());
+            services.AddAzureDurableRuntime(config);
+            services.AddSingleton<IStateStore>(states).AddSingleton<IDocumentStore>(documents).AddSingleton(journal)
+                .AddSingleton(new WorkItemRecovery(states, journal, documents));
+            await using var provider = services.BuildServiceProvider();
+            var dispatcher = provider.GetRequiredService<RuntimeHttpDispatcher>();
+            async Task<DefaultHttpContext> Send(string path, object? body = null, string? query = null, bool authenticated = true)
+            {
+                var context = new DefaultHttpContext { RequestServices = provider };
+                context.Request.Method = body is null ? "GET" : "POST"; context.Request.Path = path; context.Request.Scheme = "https";
+                if (query is not null) context.Request.QueryString = new QueryString(query);
+                context.Connection.RemoteIpAddress = IPAddress.Loopback;
+                if (authenticated) context.Request.Headers.Authorization = "Bearer " + Token;
+                context.Response.Body = new MemoryStream();
+                if (body is not null)
+                {
+                    var bytes = JsonSerializer.SerializeToUtf8Bytes(body); context.Request.Body = new MemoryStream(bytes);
+                    context.Request.ContentLength = bytes.Length; context.Request.ContentType = "application/json";
+                    context.Features.Set<IHttpRequestBodyDetectionFeature>(new BodyFeature());
+                }
+                await dispatcher.DispatchAsync(context); return context;
+            }
+            const string route = "/api/executions/run/work-stages/source";
+            Assert.Equal(401, (await Send(route + "/items", authenticated: false)).Response.StatusCode);
+            Assert.Equal(200, (await Send("/api/executions/run/work-stages")).Response.StatusCode);
+            Assert.Equal(404, (await Send("/api/executions/denied/work-stages/source/items")).Response.StatusCode);
+            Assert.Equal(404, (await Send("/api/executions/absent/work-stages/source/items")).Response.StatusCode);
+            Assert.Equal(404, (await Send("/api/executions/denied/work-stages/source/retry", new WorkRetryRequest("r", "generation", [new(0, 1)]))).Response.StatusCode);
+            Assert.Equal(400, (await Send(route + "/items", query: "?limit=101")).Response.StatusCode);
+            Assert.Equal(400, (await Send(route + "/items", query: "?cursor=invalid")).Response.StatusCode);
+            Assert.Equal(404, (await Send(route + "/items/3")).Response.StatusCode);
+            var result = await Send(route + "/retry", new WorkRetryRequest("retry", "generation", [new(0, 1)]));
+            Assert.Equal(200, result.Response.StatusCode); result.Response.Body.Position = 0;
+            using var json = await JsonDocument.ParseAsync(result.Response.Body);
+            Assert.Equal("accepted", json.RootElement.GetProperty("items")[0].GetProperty("status").GetString());
+            Assert.Equal(409, (await Send(route + "/retry", new WorkRetryRequest("retry", "generation", [new(0, 2)]))).Response.StatusCode);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
     private sealed class DenyNetworkCredential : TokenCredential
     {
         public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken) => throw new InvalidOperationException("Network access is forbidden in this test.");

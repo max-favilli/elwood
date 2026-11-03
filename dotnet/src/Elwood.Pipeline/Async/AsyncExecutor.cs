@@ -363,6 +363,7 @@ public sealed class AsyncExecutor
         var state = await _states.GetExecutionAsync(id);
         if (state is null || state.Deleting || state.Status is not (ExecutionStatus.Running or ExecutionStatus.Retrying)) return;
         RequireDistributed(state);
+        if (_distributed is not null) await _distributed.RecoverCommandAsync(state, claim, token);
         if (await StopExpiredLifetime(state, claim)) return;
         await _distributed!.RefreshAsync(state, claim, token);
         if (state.Status is ExecutionStatus.Running or ExecutionStatus.Retrying) await Advance(state, await Load(state), claim);
@@ -383,6 +384,25 @@ public sealed class AsyncExecutor
             await claim.ValidateAsync(cancellationToken);
             var state = await _states.GetExecutionAsync(snapshot.ExecutionId);
             if (state is null || state.Deleting || state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview or ExecutionStatus.Skipped) continue;
+            try
+            {
+                if (_distributed is not null) await _distributed.RecoverCommandAsync(state, claim, cancellationToken);
+            }
+            catch (Exception error) when (!cancellationToken.IsCancellationRequested && !claim.OwnershipLost.IsCancellationRequested)
+            {
+                // Preserve the durable command for the next tick without starving
+                // other executions or converting a storage fault into a retry decision.
+                var work = WorkItemManagement.Steps(state).Select(s => s.Step.Work)
+                    .FirstOrDefault(w => w?.Stage.StageId == state.PendingWorkRetry?.StageId);
+                if (work is not null)
+                {
+                    work.RecoveryIssue = "Item retry command requires attention (" + error.GetType().Name + ").";
+                    try { await claim.ValidateAsync(cancellationToken); await claim.SaveAsync(state); }
+                    catch (Exception) when (!cancellationToken.IsCancellationRequested && !claim.OwnershipLost.IsCancellationRequested) { }
+                }
+                continue;
+            }
+            if (state.Status is ExecutionStatus.Completed or ExecutionStatus.Failed or ExecutionStatus.AwaitingReview or ExecutionStatus.Skipped) continue;
             if (await StopExpiredLifetime(state, claim)) continue;
             if (state.ExecutionDeadlineAt is not null)
             {

@@ -55,6 +55,13 @@ public sealed class RuntimeHttpBoundary(ILogger<RuntimeHttpBoundary> logger)
             };
             await context.Response.WriteAsJsonAsync(new { error = ex.Message });
         }
+        catch (WorkJournalException ex)
+        {
+            logger.LogError(ex, "Item journal unavailable for {Method} {Path}", context.Request.Method, context.Request.Path);
+            context.Response.StatusCode = 503;
+            context.Response.Headers.RetryAfter = "5";
+            await context.Response.WriteAsJsonAsync(new { error = "Item journal is unavailable or inconsistent. Retry later or inspect runtime health." });
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             logger.LogError(ex, "Storage operation failed for {Method} {Path}", context.Request.Method, context.Request.Path);

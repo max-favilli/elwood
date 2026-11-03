@@ -1,6 +1,6 @@
 # Item inspection and recovery — M7.5 design
 
-Status: proposed implementation contract, 12 October 2026. The owner asked to design and plan these controls while M7.4 is implemented. The endpoints and portal screens described here are **not implemented**. They are required, together with finite physical retention and admission limits, before enabling the distributed profile in API/Functions hosts.
+Status: **implementation in progress, 3 November 2026**. The read/selected-retry API and portal controls below are implemented and tested with an explicitly configured journal/scheduler. They are **not registered for production use** in API/Functions yet. Physical retention, admission quotas, distributed replay and installed-host verification remain required before enabling the distributed profile. The original design was agreed on 12 October; the current implementation and limits are recorded below.
 
 ## Operator workflow
 
@@ -12,9 +12,9 @@ Operators can select current failed/review items and choose **Retry selected ite
 
 Ordinary retries continue the same execution and original revision. A replay is a separate execution with explicit scope and duplicate-write acknowledgement; it does not reset the original journal. Revision changes belong to replay, never a retry. M7.5 must define the user-facing replay options alongside the existing whole-execution replay controls before connecting those controls to distributed executions.
 
-## Management contract to implement
+## Management contract
 
-The following are proposed routes. Final request/response schemas and API contract tests belong in the M7.5 implementation commit.
+The following routes are implemented in the shared HTTP dispatcher. They authorize the parent execution before journal access. A host without a journal returns 409; retry additionally requires explicit `WorkItemRecovery` registration so it cannot accept a command that its recovery worker cannot reconcile. Existing API/Functions deployments continue using their current execution profile.
 
 | Route | Contract |
 |---|---|
@@ -42,14 +42,44 @@ Reserve finite item, document-byte and attempt capacity before accepting work. R
 
 ## Implementation and verification checklist
 
-- [ ] Define typed API DTOs, cursor encoding, authorization checks and journal-backed paged inspection.
-- [ ] Persist idempotent retry commands; integrate parent reopening, child eligibility and interrupted-command recovery.
-- [ ] Build the portal item table, detail drawer, filters and separate uncertain-write confirmation.
+- [x] Define typed API DTOs, cursor encoding, authorization checks and journal-backed paged inspection.
+- [x] Persist idempotent retry commands; integrate parent reopening, child eligibility and interrupted-command recovery.
+- [x] Build the portal item table, detail drawer, filters and separate uncertain-write confirmation.
 - [ ] Implement quota reservation, deletion intents, bounded journal/document cleanup and retention health.
-- [ ] Verify selected retries leave successful items/destinations unchanged; include concurrent retries and lost responses.
-- [ ] Verify denied reads/retries, forged cursors/references, stale generations and expired/deleting parents.
-- [ ] Verify successful warnings, failed maps, corrupt items and large histories without unbounded API responses.
+- [x] Verify selected retries leave successful items/destinations unchanged; include concurrent retries and lost responses.
+- [ ] Complete hostile-input/installed-host verification. Parent-scope denials, malformed/filter-mismatched cursors, stale attempts and expired/deleting parents have regression coverage; no endpoint accepts a caller-supplied document reference.
+- [x] Verify successful warnings, failed maps, corrupt items and large histories without unbounded API responses.
 - [ ] Verify cleanup during active attempts/recovery, interruption and restart, cold Redis, and output-blob obligations.
 - [ ] Register the distributed host profile only when the above gates pass; retain existing profile behavior and install-time opt-in.
 
 The first portal implementation can use these code-oriented controls. A graphical pipeline designer is outside this milestone. Cross-process throughput, managed Redis failover and measured hosting costs remain M7.7; consumer infrastructure and versioned tutorials remain M7.8.
+
+## First implementation package — 3 November 2026
+
+Item pages scan at most the requested 1–100 ordinals. Filtering is applied to that bounded scan, so an empty result can still have `nextCursor`. Cursors bind the execution, stage, generation and filter; attempt cursors additionally bind the observed item version. They are continuation positions, not authorization capabilities. The API always checks parent permissions independently.
+
+Stage summaries currently report manifest size, aggregated prefix, revision, deadline/expiry and recovery issue. They do **not** claim current whole-stage status counts. Item pages include observation time and scanned count. Redis-backed status summaries and retention/capacity health are still part of the remaining gate.
+
+Item details return at most 20 attempts (default 10), 64 diagnostics per record and 16 connector calls per attempt, with a 192 KiB attempt-page budget. Oversized call captures are explicitly marked omitted. Checkpoints over 4 MiB are not materialized by preview-capable stores: the response identifies the retained attempt count and `historyOmitted`, rather than claiming there were no calls. Input/output/receipt previews share a 256 KiB budget, 64 KiB per document. Credential headers/query fields use the existing captured-call redaction; payload bodies remain the original business data under pipeline-scoped read permission.
+
+The first selected-retry implementation accepts new commands only after the parent has settled as Failed/AwaitingReview. This avoids pausing unrelated running items while a recovery command owns the parent. A repeat of an existing request ID can still retrieve its decision after execution resumes. Retrying failures while siblings are actively running is not offered.
+
+Retry request example:
+
+```json
+{
+  "requestId": "operator-generated-stable-id",
+  "generation": "stage-generation-from-inspection",
+  "items": [
+    { "ordinal": 12, "expectedAttempt": 2, "acknowledgeUncertain": true }
+  ]
+}
+```
+
+The parent claim first saves `PendingWorkRetry` and moves the execution to the recoverable index. Each accepted child transition retains its checkpoint, receipts and completed destinations. Decisions are saved incrementally; a transport fault leaves the command pending. The scheduler reconciles that command before dispatch. A durable receipt under `{execution}/recovery/{requestId}` records the final per-item decisions; repeating an ID returns those decisions, while a changed payload conflicts. Commands are limited to 100 explicit items and 1,000 commands per execution; these bounds do **not** replace the still-required storage quota/physical retention implementation.
+
+An expanded stage now waits for its admitted sibling work to settle before publishing failure. This lets a selected retry finish while other items retain their terminal failures. Ordinary retry keeps the original execution and revision. Distributed replay remains unavailable and the portal explains this instead of offering the legacy whole-execution actions.
+
+Regression evidence covers lost child/receipt replies, interrupted-command recovery, concurrent competing commands, uncertainty acknowledgements, stale attempts, successful warnings, corrupt/oversized history, HTTP authorization/paging and a real item-executor retry preserving sibling deliveries and an already delivered destination. The portal tests cover selection eligibility, separate acknowledgement, a stable request after a lost reply, empty-page continuation, lazy inspection and stopping terminal polling. No cloud resources or pilot integrations were deployed for this package.
+
+Local verification: **316 Pipeline tests**, **15 Hosting tests**, and **30 focused journal/recovery regressions** after the final corruption/health-reporting adjustment. The Pipeline package builds for .NET 8 and .NET 10. Portal: **120 Node tests**, **21 component tests**, TypeScript and the standard production build pass; lint has no errors and its three pre-existing dependency warnings. Compatible Next.js/DOMPurify/follow-redirects patches remove the reported production advisories (`npm audit --omit=dev`: zero). The full development dependency audit still has 16 moderate/two high findings. No new live Azure/Redis throughput or browser walkthrough is claimed; CI results are separate from these local checks.

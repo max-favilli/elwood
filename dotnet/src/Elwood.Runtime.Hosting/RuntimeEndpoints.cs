@@ -18,6 +18,7 @@ public static class RuntimeEndpoints
 {
     public static void Register(RuntimeRouteCollection routes)
     {
+        WorkItemEndpoints.Register(routes);
         routes.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow })).WithMetadata(new PublicEndpoint());
         routes.MapGet("/api/readiness", async (HttpContext context, IConfiguration configuration) =>
         {

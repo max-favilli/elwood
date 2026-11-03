@@ -40,6 +40,8 @@ public sealed class ExecutionState
     /// <summary>Explicit experimental dispatch profile; never inferred from a queue message.</summary>
     public string? WorkProfile { get; set; }
     public int WorkRecoveryCursor { get; set; }
+    public Async.WorkRetryCommand? PendingWorkRetry { get; set; }
+    public int WorkRetryCommands { get; set; }
     public string? TriggerRef { get; set; }
     public string? TriggerSourceName { get; set; }
     public string? ReplayOf { get; set; }
@@ -109,6 +111,9 @@ public sealed class DistributedStepState
     public bool Expanded { get; init; }
     public int ItemCursor { get; set; }
     public int PermitCursor { get; set; }
+    public bool ScanHasActive { get; set; }
+    public bool ScanHasFailure { get; set; }
+    public bool ScanHasReview { get; set; }
     public int AggregatedItems { get; set; }
     public int AggregateBytes { get; set; }
     public int DeliveredCount { get; set; }

@@ -17,6 +17,11 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
     internal const int MaximumSteps = 256;
     private const int PageSize = 64;
     private DateTime Now => journal.Time.GetUtcNow().UtcDateTime;
+    internal async Task RecoverCommandAsync(ExecutionState state, IExecutionClaim claim, CancellationToken token)
+    {
+        if (state.PendingWorkRetry is not null)
+            await new WorkItemRecovery(states, journal, documents).ReconcileAsync(state, claim, token);
+    }
     internal static bool Eligible(PipelineContentDto pipeline, StepMessage message) => message.Type switch
     {
         StepType.Source => pipeline.Yaml.Sources.Single(s => s.Name == message.StepName) is { Trigger: "pull", From: not null }
@@ -27,7 +32,7 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
     private static StepState? Step(ExecutionState state, StepMessage message) => message.Type == StepType.Source
         ? state.Sources.GetValueOrDefault(message.StepName) : message.Type == StepType.Output ? state.Outputs.GetValueOrDefault(message.StepName) : null;
     private bool Active(ExecutionState state) => state.WorkProfile == Profile && state.Durable && !state.IsTest &&
-        !state.Deleting && !state.SupersededByForcedReplay && !state.RecoveryCapacityExhausted &&
+        !state.Deleting && !state.SupersededByForcedReplay && !state.RecoveryCapacityExhausted && state.PendingWorkRetry is null &&
         state.Status is ExecutionStatus.Running or ExecutionStatus.Retrying && state.LifetimeExpiresAt > Now;
 
     internal async Task AdmitAsync(ExecutionState state, PipelineContentDto pipeline, StepMessage message, IElwoodValue idm,
@@ -195,7 +200,8 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
         state.WorkRecoveryCursor = (start + visited) % steps.Length;
         var failed = state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values)
             .Where(s => s.Status is ExecutionStatus.Failed or ExecutionStatus.AwaitingReview).ToArray();
-        if (failed.Length != 0)
+        if (failed.Length != 0 && !state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values)
+            .Any(s => s.Work is not null && s.Status is ExecutionStatus.Running or ExecutionStatus.Retrying))
         {
             await CaptureUncertaintyAsync(state, token);
             state.Status = failed.Any(s => s.Status == ExecutionStatus.AwaitingReview) ||
@@ -252,6 +258,8 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
         await journal.RecoverAsync(work.Stage, work.PermitCursor, count, token);
         work.PermitCursor = (work.PermitCursor + count) % work.Stage.MaxConcurrency;
         var end = Math.Min(work.Stage.ItemCount, work.ItemCursor + count);
+        if (work.ItemCursor == 0)
+        { work.ScanHasActive = false; work.ScanHasFailure = false; work.ScanHasReview = false; }
         work.RecoveryIssue = null;
         for (var ordinal = work.ItemCursor; ordinal < end; ordinal++)
         {
@@ -271,18 +279,27 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
                         foreach (var diagnostic in failedStep.Diagnostics.Take(Math.Max(0, 64 - step.Diagnostics.Count)))
                         { diagnostic.ItemOrdinal = ordinal; step.Diagnostics.Add(diagnostic); }
                     }
-                    step.Status = item.Status == "Failed" ? ExecutionStatus.Failed : ExecutionStatus.AwaitingReview;
+                    work.ScanHasFailure = true; work.ScanHasReview |= item.Status == "AwaitingReview";
                     step.OutcomeUncertain |= item.Uncertain;
                     step.Errors = [$"Item {ordinal}: {item.Diagnostic ?? "Distributed item failed."}"];
-                    step.CompletedAt = Now;
                 }
-                else await PublishItem(message, work, item, token);
+                else
+                {
+                    work.ScanHasActive |= item.Status is "Pending" or "Running" or "Retrying";
+                    await PublishItem(message, work, item, token);
+                }
             }
             catch (Exception) when (token.IsCancellationRequested) { throw; }
-            catch (Exception error) { work.RecoveryIssue = $"Item {ordinal} recovery requires attention ({error.GetType().Name})."; }
+            catch (Exception error) { work.ScanHasActive = true; work.RecoveryIssue = $"Item {ordinal} recovery requires attention ({error.GetType().Name})."; }
         }
         work.ItemCursor = end == work.Stage.ItemCount ? 0 : end;
-        if (step.Status is ExecutionStatus.Failed or ExecutionStatus.AwaitingReview) return;
+        if (work.ScanHasFailure)
+        {
+            step.Status = end == work.Stage.ItemCount && !work.ScanHasActive
+                ? work.ScanHasReview ? ExecutionStatus.AwaitingReview : ExecutionStatus.Failed : ExecutionStatus.Running;
+            if (step.Status != ExecutionStatus.Running) step.CompletedAt = Now;
+            return;
+        }
         try
         {
             var aggregate = new WorkStageResults(journal, documents);
