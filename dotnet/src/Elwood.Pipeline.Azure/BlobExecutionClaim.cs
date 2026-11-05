@@ -112,26 +112,50 @@ public sealed class BlobExecutionClaim : IExecutionClaim
 
     // The same lease fence protects compact work-item journal records. Callers own
     // schema/size validation; the lease identity always remains private to this claim.
-    internal async Task SaveContentAsync(BinaryData content, IDictionary<string, string>? metadata = null, CancellationToken cancellationToken = default)
+    internal async Task<BlobContentInfo> SaveContentAsync(BinaryData content, IDictionary<string, string>? metadata = null, CancellationToken cancellationToken = default)
     {
         ThrowIfLost();
         using var request = CancellationTokenSource.CreateLinkedTokenSource(_lostToken, cancellationToken);
         request.CancelAfter(_requestBudget);
         try
         {
-            await _blob.UploadAsync(content, new BlobUploadOptions
+            // Lease + ETag prevents an SDK retry after a lost success from creating
+            // another version against the same reserved physical capacity.
+            var before = await _blob.GetPropertiesAsync(cancellationToken: request.Token);
+            var result = await _blob.UploadAsync(content, new BlobUploadOptions
             {
-                Conditions = new BlobRequestConditions { LeaseId = _lease.LeaseId },
+                Conditions = new BlobRequestConditions { LeaseId = _lease.LeaseId, IfMatch = before.Value.ETag },
                 Metadata = metadata,
                 HttpHeaders = new BlobHttpHeaders { ContentType = "application/json" }
             }, request.Token);
             ThrowIfLost();
+            return result.Value;
         }
         catch (Exception ex)
         {
             Lose();
             throw new ExecutionOwnershipLostException(ExecutionId, ex);
         }
+    }
+
+    /// <summary>Reuse two precharged maintenance versions instead of charging each cleanup cursor update.</summary>
+    internal async Task SaveMaintenanceContentAsync(BinaryData content, string reservationId, IDictionary<string, string>? metadata = null,
+        CancellationToken token = default)
+    {
+        await ValidateAsync(token);
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(token, OwnershipLost);
+        budget.CancelAfter(TimeSpan.FromSeconds(30));
+        var current = (await _blob.GetPropertiesAsync(cancellationToken: budget.Token)).Value;
+        // Exact linked version, not a growing inventory scan on every cleanup page.
+        // The pointer commits atomically with its successor under this same lease.
+        if (current.Metadata.TryGetValue("elwood_cleanup_previous", out var previous) && previous != current.VersionId)
+            await _blob.WithVersion(previous).DeleteIfExistsAsync(cancellationToken: budget.Token);
+        var headers = metadata is null ? new Dictionary<string, string>() : new Dictionary<string, string>(metadata);
+        headers.Remove("elwood_cleanup_previous");
+        if (current.Metadata.TryGetValue(BlobOutputRetention.OwnerMetadata, out var owner) && owner == reservationId && current.VersionId is not null)
+            headers["elwood_cleanup_previous"] = current.VersionId;
+        headers[BlobOutputRetention.OwnerMetadata] = reservationId;
+        await SaveContentAsync(content, headers, budget.Token);
     }
 
     public async Task DeleteAsync()

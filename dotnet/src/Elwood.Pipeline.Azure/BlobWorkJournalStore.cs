@@ -8,28 +8,105 @@ namespace Elwood.Pipeline.Azure;
 
 /// <summary>
 /// Experimental durable work journal, fenced by renewable service leases.
-/// Not registered in a host until work-item retention/admission accounting exists.
+/// Host registration awaits installed-profile retention/admission verification.
 /// A separate namespace prevents accidental use of the legacy Redis state adapter.
 /// </summary>
-public sealed class BlobWorkJournalStore(BlobContainerClient container, string storageNamespace = "elwood") : IWorkJournalMaintenanceStore
+public sealed class BlobWorkJournalStore(BlobContainerClient container, string storageNamespace = "elwood",
+    BlobRetentionLedger? retention = null, TimeProvider? timeProvider = null) : IWorkJournalMaintenanceStore, IWorkJournalAdmissionStore
 {
+    private DateTimeOffset Now => (timeProvider ?? TimeProvider.System).GetUtcNow();
     private readonly string _prefix = SafePath.Id(storageNamespace) + "/work-journal/";
     private BlobClient Blob(string key)
     { SafePath.Relative(key); return container.GetBlobClient(_prefix + key + ".json"); }
 
-    public async Task<bool> CreateAsync(string key, string content, CancellationToken cancellationToken = default)
+    public Task<bool> CreateAsync(string key, string content, CancellationToken cancellationToken = default)
+        => Create(null, key, content, cancellationToken);
+    public Task<bool> CreateForStageAsync(WorkStage stage, string key, string content, CancellationToken token = default)
+    {
+        if (!key.StartsWith(SafePath.Id(stage.ExecutionId) + "/" + SafePath.Id(stage.StageId) + "/", StringComparison.Ordinal))
+            throw new ArgumentException("Journal key differs from its stage.");
+        return Create(stage, key, content, token);
+    }
+    private async Task<bool> Create(WorkStage? stage, string key, string content, CancellationToken cancellationToken)
     {
         FileWorkJournalStore.CheckSize(content);
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(TimeSpan.FromSeconds(30));
+        cancellationToken = budget.Token;
+        await VerifyOpen(key, cancellationToken, stage);
+        // Avoid charging a known no-op. If the create races another writer its
+        // reservation remains discoverable until the uncertain-write grace ends.
         try
         {
-            await Blob(key).UploadAsync(BinaryData.FromString(content), new BlobUploadOptions
+            var existing = (await Blob(key).GetPropertiesAsync(cancellationToken: cancellationToken)).Value;
+            if (retention is not null)
+            {
+                if (!existing.Metadata.TryGetValue(BlobOutputRetention.OwnerMetadata, out var id))
+                    throw new InvalidOperationException("Existing journal record is unaccounted; migrate explicitly before admission.");
+                var owned = await retention.FindEntryAsync(id, cancellationToken);
+                if (owned is not { Kind: "journal" } || owned.BlobUri != Blob(key).Uri.ToString())
+                    throw new InvalidOperationException("Existing journal record has no matching cleanup obligation.");
+                // Resume admission after an uncertain create without leaving a
+                // legitimate Pending item on the one-day orphan deadline.
+                if (owned.ETag is null)
+                    await retention.ConfirmUploadAsync(id, existing.ETag.ToString(), existing.VersionId,
+                        (await Reservation(key, cancellationToken))!.Work!.ExpiresAt, cancellationToken);
+            }
+            return false;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404) { }
+        var entry = await Register(key, content, cancellationToken);
+        try
+        {
+            await VerifyOpen(key, cancellationToken, stage);
+            var result = await Blob(key).UploadAsync(BinaryData.FromString(content), new BlobUploadOptions
             {
                 Conditions = new BlobRequestConditions { IfNoneMatch = ETag.All },
+                Metadata = entry is null ? null : new Dictionary<string, string> { [BlobOutputRetention.OwnerMetadata] = entry.Id },
                 HttpHeaders = new BlobHttpHeaders { ContentType = "application/json" }
             }, cancellationToken);
+            await Confirm(key, entry, result.Value, cancellationToken);
             return true;
         }
         catch (RequestFailedException ex) when (ex.Status == 412 || ex.Status == 409 && ex.ErrorCode == "BlobAlreadyExists") { return false; }
+    }
+
+    private async Task<BlobRetentionEntry?> Reservation(string key, CancellationToken token)
+    {
+        if (retention is null) return null;
+        SafePath.Relative(key);
+        var parts = key.Split('/');
+        if (parts.Length < 3) throw new ArgumentException("Journal keys require execution/stage/record.");
+        var entry = await retention.FindWorkAsync(parts[0], parts[1] == "recovery" ? null : parts[1], token);
+        return entry is { Work: not null } ? entry : throw new InvalidOperationException("Journal capacity reservation is missing.");
+    }
+
+    private async Task VerifyOpen(string key, CancellationToken token, WorkStage? stage = null)
+    {
+        if (await Reservation(key, token) is { } entry && (entry.AdmissionClosed || entry.Work!.Deadline <= Now ||
+            stage is not null && (entry.Generation != stage.Generation || entry.Work.RevisionId != stage.RevisionId ||
+                entry.Work.ItemCount != stage.ItemCount || entry.Work.Deadline != stage.Deadline)))
+            throw new InvalidOperationException("Journal admission is closed; no write was dispatched.");
+    }
+
+    private async Task<BlobRetentionEntry?> Register(string key, string content, CancellationToken token)
+    {
+        if (retention is null) return null;
+        await VerifyOpen(key, token);
+        var entry = new BlobRetentionEntry { BlobUri = Blob(key).Uri.ToString(), Kind = "journal", ExecutionId = key.Split('/')[0],
+            RegisteredAt = Now, ExpiresAt = Now.AddDays(1), Bytes = System.Text.Encoding.UTF8.GetByteCount(content) };
+        await retention.RegisterAsync(entry, token);
+        return entry;
+    }
+
+    private async Task Confirm(string key, BlobRetentionEntry? entry, BlobContentInfo result, CancellationToken token)
+    {
+        if (entry is null) return;
+        var reservation = await Reservation(key, token);
+        // A lost owner may finish uploading after the parent's final sweep. Keep
+        // its independent obligation short and never extend a closed execution.
+        var expiry = reservation!.AdmissionClosed ? Now : reservation.Work!.ExpiresAt;
+        await retention!.ConfirmUploadAsync(entry.Id, result.ETag.ToString(), result.VersionId, expiry, token);
     }
 
     public async Task<string?> ReadAsync(string key, CancellationToken cancellationToken = default)
@@ -125,7 +202,7 @@ public sealed class BlobWorkJournalStore(BlobContainerClient container, string s
         return new(0, 0, false, null);
     }
 
-    private sealed class Claim(BlobWorkJournalStore store, string key, BlobExecutionClaim lease) : IWorkJournalClaim
+    private sealed class Claim(BlobWorkJournalStore store, string key, BlobExecutionClaim lease) : IWorkJournalDeletionClaim
     {
         public CancellationToken OwnershipLost => lease.OwnershipLost;
         public Task ValidateAsync(CancellationToken cancellationToken = default) => lease.ValidateAsync(cancellationToken);
@@ -134,10 +211,29 @@ public sealed class BlobWorkJournalStore(BlobContainerClient container, string s
             await lease.ValidateAsync(cancellationToken);
             return await store.ReadAsync(key, cancellationToken) ?? throw new WorkJournalException("Claimed journal record is missing.");
         }
-        public Task SaveAsync(string content, CancellationToken cancellationToken = default)
+        public async Task SaveAsync(string content, CancellationToken cancellationToken = default)
         {
             FileWorkJournalStore.CheckSize(content);
-            return lease.SaveContentAsync(BinaryData.FromString(content), cancellationToken: cancellationToken);
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, OwnershipLost);
+            budget.CancelAfter(TimeSpan.FromSeconds(30));
+            await lease.ValidateAsync(budget.Token);
+            var entry = await store.Register(key, content, budget.Token);
+            await store.VerifyOpen(key, budget.Token);
+            var result = await lease.SaveContentAsync(BinaryData.FromString(content), entry is null ? null :
+                new Dictionary<string, string> { [BlobOutputRetention.OwnerMetadata] = entry.Id }, budget.Token);
+            await store.Confirm(key, entry, result, budget.Token);
+        }
+        public async Task SaveDeletionAsync(string content, CancellationToken token = default)
+        {
+            FileWorkJournalStore.CheckSize(content);
+            if (!key.EndsWith("/header", StringComparison.Ordinal)) throw new InvalidOperationException("Only header deletion may use maintenance capacity.");
+            var previous = System.Text.Json.Nodes.JsonNode.Parse(await ReadAsync(token))!;
+            previous["deleting"] = true;
+            if (!System.Text.Json.Nodes.JsonNode.DeepEquals(previous, System.Text.Json.Nodes.JsonNode.Parse(content)))
+                throw new InvalidOperationException("Maintenance may only set the header deletion marker.");
+            if (await store.Reservation(key, token) is { } reservation)
+                await lease.SaveMaintenanceContentAsync(BinaryData.FromString(content), reservation.OwnershipId, token: token);
+            else await lease.SaveContentAsync(BinaryData.FromString(content), cancellationToken: token);
         }
         public ValueTask DisposeAsync() => lease.DisposeAsync();
     }

@@ -62,6 +62,12 @@ public sealed class BlobClaimFailureTests
         public int Renews;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            if (request.Method == HttpMethod.Head)
+            {
+                var properties = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([]) };
+                properties.Headers.ETag = new("\"1\""); properties.Content.Headers.LastModified = DateTimeOffset.UtcNow;
+                properties.Headers.Add("x-ms-blob-type", "BlockBlob"); return properties;
+            }
             var action = request.Headers.TryGetValues("x-ms-lease-action", out var values) ? values.Single() : "write";
             if (action == "renew" && (Interlocked.Increment(ref Renews) <= failures || failures is null))
             {

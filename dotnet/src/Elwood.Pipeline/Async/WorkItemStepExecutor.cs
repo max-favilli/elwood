@@ -31,6 +31,7 @@ public sealed class WorkItemStepExecutor(
     private sealed record Input(PreparedWorkStep Context, string Slice);
     private static readonly JsonNodeValueFactory Factory = JsonNodeValueFactory.Instance;
     private DateTime Now => journal.Time.GetUtcNow().UtcDateTime;
+    internal static string StageId(StepType type, string stepName) => type.ToString().ToLowerInvariant() + "-" + DurableWorkJournal.Hash(stepName)[..24];
 
     /// <summary>Freeze the original bundle and assembled dependencies once for every item in this stage.</summary>
     public async Task<PreparedWorkStep> PrepareAsync(string executionId, ParsedPipeline pipeline, StepType type, string stepName, string idm, bool bindSlice = true)
@@ -47,7 +48,7 @@ public sealed class WorkItemStepExecutor(
         }
         else if (type != StepType.Output || pipeline.Config.Outputs.Single(o => o.Name == stepName).Response)
             throw new ArgumentException("Distributed delivery must not be an HTTP response output.");
-        var stageId = type.ToString().ToLowerInvariant() + "-" + DurableWorkJournal.Hash(stepName)[..24];
+        var stageId = StageId(type, stepName);
         var snapshot = new PipelineContentDto { PipelineId = pipeline.PipelineId, RevisionId = pipeline.RevisionId,
             Content = pipeline.Content, Yaml = pipeline.Config, Scripts = new(pipeline.Scripts) };
         var context = JsonSerializer.Serialize(new Context(executionId, stageId, type, stepName, snapshot, idm, bindSlice));

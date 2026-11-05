@@ -45,6 +45,13 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
             var parsed = new ParsedPipeline(pipeline.Yaml, ".", pipeline.Scripts, [])
                 { PipelineId = pipeline.PipelineId, RevisionId = pipeline.RevisionId, Content = pipeline.Content };
             var plan = FanOutPlan.Select(pipeline, message.Type, message.StepName, idm, step.Diagnostics);
+            var deadline = new DateTimeOffset(DateTime.SpecifyKind(state.LifetimeExpiresAt!.Value, DateTimeKind.Utc));
+            var expiry = deadline.AddSeconds(RetentionPolicy.Effective(state.RetentionSeconds));
+            var generation = journal.Capacity is null ? Guid.NewGuid().ToString("N") : await journal.Capacity.ReserveAsync(new(
+                state.ExecutionId, WorkItemStepExecutor.StageId(message.Type, message.StepName), pipeline.RevisionId!,
+                DurableWorkJournal.Hash(JsonSerializer.Serialize(new { pipeline, idm = ExecutionOperations.Json(idm), plan.Inputs })),
+                plan.Inputs.Count, plan.Concurrency, deadline, expiry), token);
+            await claim.ValidateAsync(token);
             var prepared = await runner.PrepareAsync(state.ExecutionId, parsed, message.Type, message.StepName, ExecutionOperations.Json(idm), bindSlice: plan.Expanded);
             var references = new List<string>();
             foreach (var input in plan.Inputs)
@@ -54,11 +61,10 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
             }
             var inputs = JsonSerializer.Serialize(references);
             var reference = await documents.StoreAsync($"exec/{state.ExecutionId}/work-manifest/{Guid.NewGuid():N}", inputs);
-            var deadline = new DateTimeOffset(DateTime.SpecifyKind(state.LifetimeExpiresAt!.Value, DateTimeKind.Utc));
             step.Work = new()
             {
-                Stage = new(state.ExecutionId, prepared.StageId, Guid.NewGuid().ToString("N"), prepared.RevisionId,
-                    prepared.ContextReference, plan.Inputs.Count, plan.Concurrency, deadline, deadline.AddSeconds(RetentionPolicy.Effective(state.RetentionSeconds))),
+                Stage = new(state.ExecutionId, prepared.StageId, generation, prepared.RevisionId,
+                    prepared.ContextReference, plan.Inputs.Count, plan.Concurrency, deadline, expiry),
                 InputsReference = reference, InputsSha256 = DurableWorkJournal.Hash(inputs), Expanded = plan.Expanded
             };
             step.Status = ExecutionStatus.Running; step.StartedAt ??= Now;

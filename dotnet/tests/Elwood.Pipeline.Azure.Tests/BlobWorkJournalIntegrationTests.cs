@@ -9,6 +9,45 @@ namespace Elwood.Pipeline.Azure.Tests;
 public sealed class BlobWorkJournalIntegrationTests(AzuriteFixture fixture) : IClassFixture<AzuriteFixture>
 {
     [Fact]
+    public async Task Independent_workers_share_atomic_capacity_and_cleanup_can_use_reserved_space_when_full()
+    {
+        var container = fixture.ServiceClient.GetBlobContainerClient("journal-budget-" + Guid.NewGuid().ToString("N"));
+        await container.CreateAsync();
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var ledger = new AzureBlobRetentionLedger(container.GetBlobClient("ledger.json"), maxObjects: 16, maxWorkItems: 2, maxWorkAttempts: 2);
+            await ledger.InitializeAsync();
+            await ledger.RegisterAsync(new() { Id = "execution-execution", Kind = "execution", ExecutionId = "execution",
+                BlobUri = container.GetBlobClient("state.json").Uri.ToString(), Bytes = 12 * 1024 * 1024, ObjectSlots = 3,
+                RegisteredAt = now, ExpiresAt = now.AddDays(30) });
+            var request = new WorkCapacityRequest("execution", "stage", "revision", new string('a', 64), 1, 1, now.AddHours(1), now.AddDays(30));
+            var one = new BlobWorkCapacity(ledger, container, attemptsPerItem: 2);
+            var otherLedger = new AzureBlobRetentionLedger(container.GetBlobClient("ledger.json"), maxObjects: 16, maxWorkItems: 2, maxWorkAttempts: 2);
+            var two = new BlobWorkCapacity(otherLedger, container, attemptsPerItem: 2);
+            var generations = await Task.WhenAll(one.ReserveAsync(request), two.ReserveAsync(request));
+            Assert.Single(generations.Distinct());
+            await Assert.ThrowsAsync<InvalidOperationException>(() => two.ReserveAsync(request with { StageId = "over-attempt-budget" }));
+            var stage = new WorkStage("execution", "stage", generations[0], "revision", "manifest", 1, 1, request.Deadline, request.ExpiresAt);
+            var documents = new InMemoryDocumentStore(); var store = new BlobWorkJournalStore(container, retention: ledger);
+            var journal = new DurableWorkJournal(store, documents, capacity: one);
+            await journal.AdmitAsync(stage, [await documents.StoreAsync("input", "{}")]);
+            await Task.WhenAll(one.ReserveAttemptAsync(stage), two.ReserveAttemptAsync(stage));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => one.ReserveAttemptAsync(stage));
+            while ((await ledger.ReadAsync()).Entries.Values.Sum(e => e.ObjectSlots) < 16)
+                await ledger.RegisterAsync(new() { BlobUri = container.GetBlobClient("unused").Uri.ToString(), Bytes = 1, RegisteredAt = now, ExpiresAt = now.AddDays(30) });
+            await one.CloseAsync("execution");
+            await using var header = (IWorkJournalDeletionClaim)(await store.TryClaimAsync("execution/stage/header"))!;
+            var content = System.Text.Json.Nodes.JsonNode.Parse(await header.ReadAsync())!; content["deleting"] = true;
+            await header.SaveDeletionAsync(content.ToJsonString());
+            Assert.Contains("true", await header.ReadAsync());
+            Assert.Equal(2, (await otherLedger.CapacityAsync()).UsedWorkAttempts);
+            Assert.Equal(0, (await otherLedger.CapacityAsync()).AvailableObjects);
+        }
+        finally { await container.DeleteIfExistsAsync(); }
+    }
+
+    [Fact]
     public async Task Cleanup_pages_respect_real_blob_leases_and_remove_only_the_expired_stage()
     {
         var container = fixture.ServiceClient.GetBlobContainerClient("journal-gc-" + Guid.NewGuid().ToString("N"));

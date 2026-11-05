@@ -192,8 +192,12 @@ Depends on the preceding implementation packages.
   - [ ] 7.5d — Close physical retention with admission/accounting verification. The [5 November implementation package](item-inspection-recovery-design.md#bounded-physical-cleanup-package--5-november-2026) adds parent/stage deletion intent, claim drain, bounded restartable journal/document/version/receipt/projection cleanup and independent output obligations. Production registration remains gated on 7.5e/g.
     - [x] Implement and locally verify deletion fences, active-owner drain, restartable parent progress and bounded provider cleanup.
     - [x] Preserve business-output cleanup obligations; use a fresh scoped local document layout instead of ambiguous flattened paths.
-    - [ ] Verify late journal admission/uploads after ownership loss against pre-reserved capacity and independent cleanup obligations; reserve cleanup checkpoint capacity before accepting work.
-  - [ ] 7.5e — Reserve finite item/document/attempt capacity before admission and partial uploads; expose quota pressure and retention health, including cold Redis behavior.
+    - [x] Verify late journal admission/uploads after ownership loss against pre-reserved capacity and independent cleanup obligations; reserve cleanup checkpoint capacity before accepting work. Azure SDK transport regressions cover upload completion after parent deletion, lost replies and cleanup at full quota.
+  - [ ] 7.5e — Close quota/health verification in the installed distributed profile, including cold Redis behavior.
+    - [x] Reserve stage item/attempt allowances before context/input/manifest uploads; make repeated admission idempotent and keep closure atomic with the parent reservation.
+    - [x] Charge document and journal UTF-8 bytes/objects before each upload; preserve uncertain/late-write obligations and finite maintenance capacity.
+    - [x] Expose reserved/used work capacity and remaining storage allowances in retention health; reject new work when the configured retention health guard fails. Accounting survives process restart independently of Redis.
+    - [ ] Bind and exercise the complete quota/health/retention configuration in the opted-in API/Functions installation alongside 7.5g. The filesystem journal remains a development/test adapter without installation-wide accounting.
   - [ ] 7.5f — Define and implement distributed replay scope/acknowledgement; add authoritative bounded stage status summaries and installed-host controls.
   - [ ] 7.5g — Verify cleanup/recovery races and installation opt-in, then register the distributed services in API/Functions and close 7.3/7.5.
 - [ ] 7.6 — Add the shared immutable pipeline/route cache with deployment invalidation and correct cold-cache behavior.

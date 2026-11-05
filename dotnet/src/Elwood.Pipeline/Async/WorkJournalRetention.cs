@@ -41,7 +41,8 @@ public sealed partial class DurableWorkJournal
         if (!header.Deleting)
         {
             header = header with { Deleting = true };
-            await claim.SaveAsync(Encode(header), token);
+            if (claim is IWorkJournalDeletionClaim reserved) await reserved.SaveDeletionAsync(Encode(header), token);
+            else await claim.SaveAsync(Encode(header), token);
         }
         // Re-scan even a previously drained stage: a late upload/version must not
         // become invisible merely because the prior pass reached the end.

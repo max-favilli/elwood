@@ -11,6 +11,9 @@ internal sealed class ReviewBlobService : HttpMessageHandler
 {
     private readonly Dictionary<string, (byte[] Bytes, int Version)> _blobs = [];
     private readonly Dictionary<(string Path, string Version), byte[]> _versions = [];
+    private readonly Dictionary<(string Path, int Version), Dictionary<string, string>> _metadata = [];
+    public Func<HttpRequestMessage, CancellationToken, Task>? BeforeUpload;
+    public string? LoseUploadReplyFor;
     private readonly bool _versioning;
     private int _version;
     private readonly Dictionary<string, string> _leases = [];
@@ -29,6 +32,8 @@ internal sealed class ReviewBlobService : HttpMessageHandler
     {
         var path = request.RequestUri!.AbsolutePath;
         var content = request.Content is null ? null : await request.Content.ReadAsByteArrayAsync(token);
+        if (request.Method == HttpMethod.Put && !request.RequestUri.Query.Contains("comp=lease") && BeforeUpload is not null)
+            await BeforeUpload(request, token);
         lock (_blobs)
         {
             var query = request.RequestUri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
@@ -59,10 +64,15 @@ internal sealed class ReviewBlobService : HttpMessageHandler
                 if (request.Headers.IfNoneMatch.Any(t => t.Tag == etag))
                 { NotModified++; return new(HttpStatusCode.NotModified); }
                 Downloads++;
-                return Success(HttpStatusCode.OK, entry.Bytes, etag);
+                var read = Success(HttpStatusCode.OK, entry.Bytes, etag);
+                foreach (var pair in _metadata.GetValueOrDefault((path, entry.Version)) ?? []) read.Headers.Add("x-ms-meta-" + pair.Key, pair.Value);
+                if (_versioning) read.Headers.Add("x-ms-version-id", entry.Version.ToString("D10"));
+                return read;
             }
             if (request.Method == HttpMethod.Delete)
             {
+                if (request.Headers.IfMatch.Any(t => !exists || t.Tag != etag) && !query.ContainsKey("versionid"))
+                    return Error(HttpStatusCode.PreconditionFailed, "ConditionNotMet");
                 if (query.TryGetValue("versionid", out var version))
                 {
                     if (!_versions.Remove((path, version))) return Error(HttpStatusCode.NotFound, "BlobNotFound");
@@ -82,8 +92,13 @@ internal sealed class ReviewBlobService : HttpMessageHandler
             if (_leases.TryGetValue(path, out var requiredLease) ? writeLease != requiredLease : writeLease is not null)
                 return Error(HttpStatusCode.PreconditionFailed, "LeaseIdMismatchWithBlobOperation");
             Writes++; _blobs[path] = (content!, ++_version);
+            _metadata[(path, _version)] = request.Headers.Where(h => h.Key.StartsWith("x-ms-meta-", StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(h => h.Key[10..], h => h.Value.Single(), StringComparer.OrdinalIgnoreCase);
             if (_versioning) _versions[(path, _version.ToString("D10"))] = content!;
-            return Success(HttpStatusCode.Created, [], $"\"{_version}\"");
+            if (LoseUploadReplyFor == path) { LoseUploadReplyFor = null; return Error(HttpStatusCode.ServiceUnavailable, "ServerBusy"); }
+            var created = Success(HttpStatusCode.Created, [], $"\"{_version}\"");
+            if (_versioning) created.Headers.Add("x-ms-version-id", _version.ToString("D10"));
+            return created;
         }
     }
 
@@ -105,7 +120,10 @@ internal sealed class ReviewBlobService : HttpMessageHandler
             new XElement("Blobs", page.Select(v => new XElement("Blob", new XElement("Name", v.Path[9..]),
                 _versioning ? new XElement("VersionId", v.Version) : null,
                 _versioning ? new XElement("IsCurrentVersion", _blobs.TryGetValue(v.Path, out var current) && current.Version.ToString("D10") == v.Version ? "true" : "false") : null,
-                new XElement("Properties", new XElement("Last-Modified", DateTimeOffset.UtcNow.ToString("R")), new XElement("Etag", "\"1\""),
+                new XElement("Metadata", (_metadata.GetValueOrDefault((v.Path, _versioning ? int.Parse(v.Version) : _blobs[v.Path].Version)) ?? [])
+                    .Select(p => new XElement(p.Key, p.Value))),
+                new XElement("Properties", new XElement("Last-Modified", DateTimeOffset.UtcNow.ToString("R")),
+                    new XElement("Etag", $"\"{(_versioning ? int.Parse(v.Version) : _blobs[v.Path].Version)}\""),
                     new XElement("Content-Length", v.Bytes.Length), new XElement("BlobType", "BlockBlob"))))), new XElement("NextMarker", next));
         return new(HttpStatusCode.OK) { Content = new StringContent(xml.ToString(), Encoding.UTF8, "application/xml") };
     }

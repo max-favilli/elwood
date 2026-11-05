@@ -247,7 +247,20 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
             if (bytes > 4 * 1024 * 1024 - 1024) throw new InvalidOperationException("Execution checkpoint exceeds its size limit.");
             await lease.ValidateAsync();
             var previous = await owner.Read(ExecutionId, OwnershipLost);
-            if (previous.State?.Deleting == true && state.Deleting) return;
+            if (previous.State?.Deleting == true)
+            {
+                if (!state.Deleting) throw new InvalidOperationException("Deletion intent cannot be reversed.");
+                if (previous.State.WorkProfile != DistributedStepScheduler.Profile) return;
+                // Once tombstoned only cleanup progress may change. Reuse the
+                // already indexed checkpoint and bounded reserved version slots.
+                var retained = previous.State;
+                retained.WorkCleanup = state.WorkCleanup;
+                if (owner._retention is not null) await owner._retention.ReserveEmergencyCheckpointAsync(ExecutionId, true, OwnershipLost);
+                await lease.SaveMaintenanceContentAsync(BinaryData.FromString(JsonSerializer.Serialize(retained, JsonOptions)),
+                    "execution-" + ExecutionId, previous.Metadata, OwnershipLost);
+                await owner.DeleteRow(intent);
+                return;
+            }
             if (previous.State?.RecoveryCapacityExhausted == true && !state.Deleting)
             {
                 if (Terminal(state)) return; // An uncertain response cannot append another emergency version.
@@ -287,7 +300,10 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
             }
             await owner._table.AddEntityAsync(new TableEntity(owner.Partition(kind), key) { ["execution"] = ExecutionId }, OwnershipLost);
             if (previous.State is null) await owner.AddHistory(state, OwnershipLost);
-            await lease.SaveAsync(state, metadata);
+            if (state.Deleting)
+                await lease.SaveMaintenanceContentAsync(BinaryData.FromString(JsonSerializer.Serialize(state, JsonOptions)),
+                    "execution-" + ExecutionId, metadata, OwnershipLost);
+            else await lease.SaveAsync(state, metadata);
             // Only this prior unique checkpoint's markers are removed. A new owner's
             // markers cannot be selected through a mutable "current owner" mapping.
             if (previous.Metadata.TryGetValue("workkind", out var priorKind) && previous.Metadata.TryGetValue("workkey", out var priorKey))

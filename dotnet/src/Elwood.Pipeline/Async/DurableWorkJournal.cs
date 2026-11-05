@@ -10,8 +10,10 @@ namespace Elwood.Pipeline.Async;
 /// Redis is a reconstructible projection. A permit remains attached to its previous
 /// item until recovery can claim that item, even if Redis has lost every key.
 /// </summary>
-public sealed partial class DurableWorkJournal(IWorkJournalStore store, IDocumentStore documents, TimeProvider? timeProvider = null)
+public sealed partial class DurableWorkJournal(IWorkJournalStore store, IDocumentStore documents, TimeProvider? timeProvider = null,
+    IWorkCapacity? capacity = null)
 {
+    internal IWorkCapacity? Capacity => capacity;
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     internal readonly TimeProvider Time = timeProvider ?? TimeProvider.System;
     internal IWorkJournalStore Store => store;
@@ -47,6 +49,7 @@ public sealed partial class DurableWorkJournal(IWorkJournalStore store, IDocumen
         if (stage.Deadline > Time.GetUtcNow().AddDays(7)) throw new ArgumentException("An execution deadline is at most seven days away.");
         ArgumentNullException.ThrowIfNull(inputReferences);
         if (inputReferences.Count != stage.ItemCount) throw new ArgumentException("Manifest count differs from stage definition.");
+        if (capacity is not null) await capacity.VerifyAsync(stage, token);
         var references = inputReferences.ToArray();
         foreach (var reference in references) Reference(reference);
         var inputs = new Input[references.Length];
@@ -54,7 +57,7 @@ public sealed partial class DurableWorkJournal(IWorkJournalStore store, IDocumen
             async (i, ct) => inputs[i] = new(references[i], await DocumentHash(references[i], ct)));
         var pages = inputs.Chunk(PageSize).Select(Encode).ToArray();
         var expected = new Header(stage, pages.Select(Hash).ToArray(), false);
-        await store.CreateAsync(HeaderKey(stage), Encode(expected), token);
+        await Create(stage, HeaderKey(stage), Encode(expected), token);
         await using var claim = await store.TryClaimAsync(HeaderKey(stage), token)
             ?? throw new WorkJournalException("Stage admission is already in progress.");
         var header = Decode<Header>(await claim.ReadAsync(token));
@@ -66,20 +69,22 @@ public sealed partial class DurableWorkJournal(IWorkJournalStore store, IDocumen
         // Interrupted initialization is resumed under the header claim. No item is
         // eligible until the final marker exists; mismatches fail closed.
         for (var page = 0; page < pages.Length; page++)
-            await CreateExact(PageKey(stage, page), pages[page], token);
+            await CreateExact(stage, PageKey(stage, page), pages[page], token);
         await Parallel.ForEachAsync(Enumerable.Range(0, inputs.Length), new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = token },
-            async (i, ct) => await CreateExact(ItemKey(stage, i), Encode(new WorkJournalItem
+            async (i, ct) => await CreateExact(stage, ItemKey(stage, i), Encode(new WorkJournalItem
             { Generation = stage.Generation, Ordinal = i, InputReference = inputs[i].Reference, InputSha256 = inputs[i].Sha256 }), ct));
         for (var slot = 0; slot < stage.MaxConcurrency; slot++)
-            await CreateExact(SlotKey(stage, slot), Encode(new Slot(stage.Generation)), token);
+            await CreateExact(stage, SlotKey(stage, slot), Encode(new Slot(stage.Generation)), token);
         await claim.ValidateAsync(token);
         if (Time.GetUtcNow() >= stage.Deadline) throw new WorkJournalException("Stage admission deadline has elapsed.");
         await claim.SaveAsync(Encode(expected with { Ready = true }), token);
     }
 
-    private async Task CreateExact(string key, string content, CancellationToken token)
+    private Task<bool> Create(WorkStage stage, string key, string content, CancellationToken token) => store is IWorkJournalAdmissionStore admission
+        ? admission.CreateForStageAsync(stage, key, content, token) : store.CreateAsync(key, content, token);
+    private async Task CreateExact(WorkStage stage, string key, string content, CancellationToken token)
     {
-        if (!await store.CreateAsync(key, content, token) && await store.ReadAsync(key, token) != content)
+        if (!await Create(stage, key, content, token) && await store.ReadAsync(key, token) != content)
             throw new WorkJournalException("Interrupted stage admission contains conflicting records.");
     }
 
@@ -144,6 +149,9 @@ public sealed partial class DurableWorkJournal(IWorkJournalStore store, IDocumen
                 var item = await Item(stage, header, ordinal, token);
                 if (item.Status is not ("Pending" or "Retrying") || item.NotBefore > Time.GetUtcNow()) return null;
                 if (item.Attempt >= 100) throw new WorkJournalException("Item attempt limit reached.");
+                // Charge before any durable Running transition or external call. An
+                // uncertain reservation is deliberately not refunded on retry.
+                if (capacity is not null) await capacity.ReserveAttemptAsync(stage, token);
                 // Permit identity precedes item ownership and every possible external call.
                 // If either reply is lost, the next permit owner must recover this item.
                 await permit.SaveAsync(Encode(new Slot(stage.Generation, ordinal)), token);

@@ -32,6 +32,9 @@ public sealed class WorkExecutionRetention(DurableWorkJournal journal, IBoundedE
         if (journal.Store is not IWorkJournalMaintenanceStore maintenance)
             throw new WorkJournalException("Journal store does not support execution cleanup.");
         await claim.ValidateAsync(token);
+        // This independent fence also covers partial admission before the parent
+        // acquired its manifest. It survives deletion of the parent and journal.
+        if (journal.Capacity is not null) await journal.Capacity.CloseAsync(state.ExecutionId, token);
         var progress = state.WorkCleanup ??= new();
         var stages = state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values)
             .Where(s => s.Work is not null).Select(s => s.Work!).OrderBy(w => w.Stage.StageId, StringComparer.Ordinal).ToArray();
@@ -85,6 +88,8 @@ public sealed class WorkExecutionRetention(DurableWorkJournal journal, IBoundedE
             default: throw new WorkJournalException("Unknown distributed cleanup phase.");
         }
         await claim.ValidateAsync(token);
+        if (progress.Phase == "complete" && journal.Capacity is not null)
+            await journal.Capacity.CompleteCleanupAsync(state.ExecutionId, token);
         await claim.SaveAsync(state);
         return progress.Phase == "complete";
     }

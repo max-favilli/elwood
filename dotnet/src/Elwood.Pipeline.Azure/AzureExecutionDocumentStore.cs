@@ -49,14 +49,8 @@ public sealed class AzureExecutionDocumentStore(BlobContainerClient container, s
             Conditions = new BlobRequestConditions { IfNoneMatch = ETag.All },
             HttpHeaders = new BlobHttpHeaders { ContentType = "application/json; charset=utf-8" }
         }, timeout.Token);
-        if (retention is not null) await retention.UpdateAsync(entry.Id, stored =>
-        {
-            stored.ETag = result.Value.ETag.ToString(); stored.VersionId = result.Value.VersionId;
-            // Only confirmed documents may be retained for long-running executions.
-            // Normal execution expiry deletes them sooner; unconfirmed late uploads
-            // remain independently discoverable for at most one day.
-            stored.ExpiresAt = now.AddDays(372);
-        }, timeout.Token);
+        if (retention is not null) await retention.ConfirmUploadAsync(entry.Id, result.Value.ETag.ToString(), result.Value.VersionId,
+            now.AddDays(372), timeout.Token);
         return reference;
     }
 

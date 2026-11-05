@@ -53,8 +53,13 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
             .OrderBy(e => e.LastAttemptAt).ThenBy(e => e.ExpiresAt).Take(100))
         {
             token.ThrowIfCancellationRequested();
+            // Parent pruning owns current journal records and its deletion header.
+            // Independent obligations take over only after that parent reservation
+            // is gone; otherwise an expiry sweep could strand resumable cleanup.
+            var parentRetained = entry.ExecutionId is not null && state.Entries.ContainsKey("execution-" + entry.ExecutionId);
             try
             {
+                if (entry.Kind == "work" && parentRetained) { await ledger.RecordSweepAttemptAsync(entry.Id, entry.Generation, entry.Error, token); continue; }
                 using var budget = CancellationTokenSource.CreateLinkedTokenSource(token); budget.CancelAfter(TimeSpan.FromSeconds(30));
                 var blob = resolve(new Uri(entry.BlobUri));
                 var container = blob.GetParentBlobContainerClient();
@@ -73,7 +78,8 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
                     }
                     catch (RequestFailedException ex) when (ex.Status is 404 or 412) { } // Replacement is never deleted.
                 }
-                if (current is not null && entry.Kind == "checkpoint") continue; // Only execution pruning may remove authoritative current state.
+                if (current is not null && (entry.Kind == "checkpoint" || entry.Kind == "journal" && parentRetained))
+                { await ledger.MarkCheckedAsync(entry.Id, token); continue; }
                 if (current is not null)
                 {
                     try { await blob.DeleteIfExistsAsync(DeleteSnapshotsOption.None, new BlobRequestConditions { IfMatch = current.Properties.ETag!.Value }, budget.Token); }
@@ -93,14 +99,22 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
                 // Keep uncertain-write registrations for a day beyond their possible
                 // request lifetime. Native lifecycle is a second backstop for late uploads.
                 if (entry.ETag is not null || entry.RegisteredAt.AddDays(1) <= Now)
-                { await ledger.RemovedAsync(entry.Id, token); removed++; }
+                {
+                    if (entry.Kind == "work") { if (await ledger.RemovedIfGenerationAsync(entry.Id, entry.Generation, token)) removed++; }
+                    else { await ledger.RemovedAsync(entry.Id, token); removed++; }
+                }
+                else if (entry.Kind == "work") await ledger.RecordSweepAttemptAsync(entry.Id, entry.Generation, null, token);
                 else await ledger.UpdateAsync(entry.Id, e => { e.LastAttemptAt = Now; e.Error = null; }, token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 var error = ex is RequestFailedException azure ? $"Azure HTTP {azure.Status} ({azure.ErrorCode})" : ex.GetType().Name;
-                try { await ledger.UpdateAsync(entry.Id, e => { e.LastAttemptAt = Now; e.Error = error; }, token); }
+                try
+                {
+                    if (entry.Kind == "work") await ledger.RecordSweepAttemptAsync(entry.Id, entry.Generation, error, token);
+                    else await ledger.UpdateAsync(entry.Id, e => { e.LastAttemptAt = Now; e.Error = error; }, token);
+                }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
                 catch (Exception recordingError) { sweepFailure = "Retention error recording failed: " + recordingError.GetType().Name; }
             }
@@ -111,14 +125,14 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
     }
 
     private static bool Owned(BlobItem item, BlobRetentionEntry entry) => item.Metadata is not null &&
-        item.Metadata.TryGetValue(OwnerMetadata, out var value) && value == entry.Id &&
+        item.Metadata.TryGetValue(OwnerMetadata, out var value) && value == entry.OwnershipId &&
         (entry.ETag is null or "leased" || item.Snapshot is not null || entry.VersionId is not null && item.VersionId == entry.VersionId ||
             item.Properties.ETag?.ToString().Trim('"') == entry.ETag.Trim('"'));
 
     public async Task<BlobRetentionHealth> HealthAsync(CancellationToken token = default)
     {
-        BlobRetentionSnapshot state;
-        try { state = await ledger.ReadAsync(token); }
+        BlobRetentionSnapshot state; BlobCapacityHealth capacity;
+        try { state = await ledger.ReadAsync(token); capacity = await ledger.CapacityAsync(token); }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
@@ -129,10 +143,10 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
             state.Entries.Values.Sum(e => e.ObjectSlots), state.Entries.Values.Sum(e => e.Bytes), overdue.Length,
             overdue.Select(e => (DateTimeOffset?)e.ExpiresAt).Min(),
             state.Entries.Values.Where(e => e.Error is not null).Select(e => new BlobRetentionFailure(e.Id, e.Error!, e.LastAttemptAt))
-                .Concat(_sweepFailure is null ? [] : new[] { new BlobRetentionFailure("sweep", _sweepFailure, Now) }).Take(20).ToArray());
+                .Concat(_sweepFailure is null ? [] : new[] { new BlobRetentionFailure("sweep", _sweepFailure, Now) }).Take(20).ToArray(), capacity);
     }
 }
 
 public sealed record BlobRetentionHealth(bool Healthy, DateTimeOffset? LastSweepAt, int RegisteredObjects, long RegisteredBytes,
-    int OverdueObjects, DateTimeOffset? OldestExpiry, BlobRetentionFailure[] Failures);
+    int OverdueObjects, DateTimeOffset? OldestExpiry, BlobRetentionFailure[] Failures, BlobCapacityHealth? Capacity = null);
 public sealed record BlobRetentionFailure(string Id, string Error, DateTimeOffset? LastAttemptAt);
