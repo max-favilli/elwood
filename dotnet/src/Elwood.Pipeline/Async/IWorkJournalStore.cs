@@ -1,3 +1,5 @@
+using Elwood.Pipeline.Storage;
+
 namespace Elwood.Pipeline.Async;
 
 /// <summary>
@@ -21,12 +23,30 @@ public interface IWorkJournalClaim : IAsyncDisposable
 }
 
 /// <summary>
+/// Physical journal maintenance, separate from ordinary read/write permissions.
+/// A page includes current records and old versions/snapshots. It never removes a
+/// record owned by a live claim. Callers must first durably close stage admission.
+/// </summary>
+public interface IWorkJournalMaintenanceStore : IWorkJournalStore
+{
+    Task<StorageCleanupPage> DeleteStagePageAsync(string executionId, string stageId,
+        int maximumRecords = 128, string? cursor = null, CancellationToken cancellationToken = default);
+    Task<StorageCleanupPage> DeleteExecutionPageAsync(string executionId,
+        int maximumRecords = 128, string? cursor = null, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
 /// Disposable projection, never permission to dispatch an external call. Readers
 /// must treat a missing entry as unknown. Reconciliation republishes durable pages.
 /// </summary>
 public interface IWorkJournalProjection
 {
     Task PublishAsync(WorkStage stage, WorkJournalItem item, CancellationToken cancellationToken = default);
+}
+
+public interface IWorkJournalProjectionRetention : IWorkJournalProjection
+{
+    Task RemovePageAsync(WorkStage stage, int start, int count = 128, CancellationToken cancellationToken = default);
 }
 
 public sealed record WorkJournalItem

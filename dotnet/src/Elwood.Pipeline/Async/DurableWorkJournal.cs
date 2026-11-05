@@ -10,7 +10,7 @@ namespace Elwood.Pipeline.Async;
 /// Redis is a reconstructible projection. A permit remains attached to its previous
 /// item until recovery can claim that item, even if Redis has lost every key.
 /// </summary>
-public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore documents, TimeProvider? timeProvider = null)
+public sealed partial class DurableWorkJournal(IWorkJournalStore store, IDocumentStore documents, TimeProvider? timeProvider = null)
 {
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     internal readonly TimeProvider Time = timeProvider ?? TimeProvider.System;
@@ -18,7 +18,8 @@ public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore d
     private const int PageSize = 128;
     private sealed record Input(string Reference, string Sha256);
     internal sealed record Header(WorkStage Stage, string[] Pages, bool Ready, string? AggregationToken = null,
-        string? ResultReference = null, string? ResultSha256 = null, int VerifiedItems = 0);
+        string? ResultReference = null, string? ResultSha256 = null, int VerifiedItems = 0,
+        bool Deleting = false);
     private sealed record Slot(string Generation, int? Ordinal = null);
     private static string Root(WorkStage stage) => $"{SafePath.Id(stage.ExecutionId)}/{SafePath.Id(stage.StageId)}";
     private static string HeaderKey(WorkStage stage) => Root(stage) + "/header";
@@ -42,6 +43,7 @@ public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore d
     public async Task AdmitAsync(WorkStage stage, IReadOnlyList<string> inputReferences, CancellationToken token = default)
     {
         ValidateStage(stage);
+        if (Time.GetUtcNow() >= stage.Deadline) throw new WorkJournalException("Stage admission deadline has elapsed.");
         if (stage.Deadline > Time.GetUtcNow().AddDays(7)) throw new ArgumentException("An execution deadline is at most seven days away.");
         ArgumentNullException.ThrowIfNull(inputReferences);
         if (inputReferences.Count != stage.ItemCount) throw new ArgumentException("Manifest count differs from stage definition.");
@@ -56,6 +58,7 @@ public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore d
         await using var claim = await store.TryClaimAsync(HeaderKey(stage), token)
             ?? throw new WorkJournalException("Stage admission is already in progress.");
         var header = Decode<Header>(await claim.ReadAsync(token));
+        if (header.Deleting) throw new WorkJournalException("Stage deletion has started; admission is closed.");
         if (header.Stage != stage || header.Pages is null || !header.Pages.SequenceEqual(expected.Pages))
             throw new WorkJournalException("Stage definition or immutable manifest conflicts with existing admission.");
         if (header.Ready) return;
@@ -84,6 +87,7 @@ public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore d
     {
         ValidateStage(stage);
         var header = Decode<Header>(await store.ReadAsync(HeaderKey(stage), token));
+        if (header.Deleting) throw new WorkJournalException("Stage deletion has started; work and recovery are closed.");
         if (header.Stage != stage || !header.Ready || header.Pages is null || header.Pages.Length != (stage.ItemCount + PageSize - 1) / PageSize)
             throw new WorkJournalException("Stage is not admitted or its definition differs from the durable manifest.");
         if (Time.GetUtcNow() >= stage.ExpiresAt) throw new WorkJournalException("Stage history has expired.");
@@ -133,6 +137,10 @@ public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore d
                     if (await store.ReadAsync(ItemKey(stage, ordinal), token) is null) throw new WorkJournalException("Admitted item is missing.");
                     return null;
                 }
+                // Deletion may have started after the initial readiness read. The
+                // claims now held make cleanup wait, and this recheck prevents dispatch.
+                await Ready(stage, token);
+                if (Time.GetUtcNow() >= stage.Deadline) throw new WorkJournalException("Stage execution deadline has elapsed.");
                 var item = await Item(stage, header, ordinal, token);
                 if (item.Status is not ("Pending" or "Retrying") || item.NotBefore > Time.GetUtcNow()) return null;
                 if (item.Attempt >= 100) throw new WorkJournalException("Item attempt limit reached.");
@@ -213,6 +221,7 @@ public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore d
         if (observed.RetryRequest == requestId && observed.RetryOfAttempt == expectedAttempt) return false;
         await using var claim = await store.TryClaimAsync(ItemKey(stage, ordinal), token)
             ?? throw new WorkJournalException("Item is busy or missing.");
+        await Ready(stage, token);
         var item = await Item(stage, header, ordinal, token);
         if (item.RetryRequest == requestId && item.RetryOfAttempt == expectedAttempt) return false;
         if (item.Attempt != expectedAttempt || item.Status is not ("Failed" or "AwaitingReview"))
@@ -258,6 +267,7 @@ public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore d
         try
         {
             var header = Decode<Header>(await claim.ReadAsync(token));
+            if (header.Deleting) throw new WorkJournalException("Stage deletion has started; aggregation is closed.");
             if (header.ResultReference is not null) return null;
             // Completed items are immutable. Persist a checked prefix so aggregation
             // admission never rescans thousands of records under one header lease.
@@ -406,6 +416,7 @@ public sealed class DurableWorkJournal(IWorkJournalStore store, IDocumentStore d
             if (_disposed || _lostToken.IsCancellationRequested || _journal.Time.GetUtcNow() >= Stage.Deadline)
                 throw new WorkJournalException("Durable work ownership or execution budget has ended.");
             await _permit.ValidateAsync(token); await _claim.ValidateAsync(token);
+            await _journal.Ready(Stage, token);
         }
         public Task<string> ReadInputAsync(CancellationToken token = default) => _journal.ReadDocument(State.InputReference, State.InputSha256, token);
         public Task<string?> ReadCheckpointAsync(CancellationToken token = default) => State.CheckpointReference is null

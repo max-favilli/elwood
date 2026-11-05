@@ -9,6 +9,39 @@ namespace Elwood.Pipeline.Azure.Tests;
 public sealed class BlobWorkJournalIntegrationTests(AzuriteFixture fixture) : IClassFixture<AzuriteFixture>
 {
     [Fact]
+    public async Task Cleanup_pages_respect_real_blob_leases_and_remove_only_the_expired_stage()
+    {
+        var container = fixture.ServiceClient.GetBlobContainerClient("journal-gc-" + Guid.NewGuid().ToString("N"));
+        await container.CreateAsync();
+        try
+        {
+            var store = new BlobWorkJournalStore(container, "test");
+            for (var i = 0; i < 5; i++) await store.CreateAsync("execution/stage/items/" + i, "{}");
+            await store.CreateAsync("execution/stage/header", "tombstone");
+            await store.CreateAsync("execution/stage-other/items/0", "keep");
+            var owner = await store.TryClaimAsync("execution/stage/items/0");
+            var busy = false; string? cursor = null;
+            do
+            {
+                var page = await store.DeleteStagePageAsync("execution", "stage", 2, cursor);
+                Assert.InRange(page.Examined, 0, 2); busy |= page.Busy; cursor = page.NextCursor;
+            } while (cursor is not null);
+            Assert.True(busy);
+            Assert.Equal("{}", await owner!.ReadAsync());
+            await owner.DisposeAsync();
+            do
+            {
+                var page = await store.DeleteStagePageAsync("execution", "stage", 2, cursor);
+                Assert.False(page.Busy); cursor = page.NextCursor;
+            } while (cursor is not null);
+            Assert.Null(await store.ReadAsync("execution/stage/items/0"));
+            Assert.Equal("tombstone", await store.ReadAsync("execution/stage/header"));
+            Assert.Equal("keep", await store.ReadAsync("execution/stage-other/items/0"));
+        }
+        finally { await container.DeleteIfExistsAsync(); }
+    }
+
+    [Fact]
     public async Task Service_leases_fence_item_checkpoints_and_hold_capacity_until_old_item_is_recovered()
     {
         var container = fixture.ServiceClient.GetBlobContainerClient("journal-" + Guid.NewGuid().ToString("N"));

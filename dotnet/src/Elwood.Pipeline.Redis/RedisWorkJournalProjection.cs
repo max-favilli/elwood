@@ -12,7 +12,7 @@ namespace Elwood.Pipeline.Redis;
 /// no claim API: only a durable journal session grants connector-dispatch permission.
 /// One item update never rewrites a shared execution document or resets its expiry.
 /// </summary>
-public sealed class RedisWorkJournalProjection : IWorkJournalProjection
+public sealed class RedisWorkJournalProjection : IWorkJournalProjectionRetention
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly IDatabase _database;
@@ -23,6 +23,9 @@ public sealed class RedisWorkJournalProjection : IWorkJournalProjection
         local nowMs = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
         if expires <= nowMs then
             return redis.error_reply('ELWOOD_JOURNAL_EXPIRED')
+        end
+        if redis.call('EXISTS', KEYS[2]) == 1 then
+            return redis.error_reply('ELWOOD_JOURNAL_DELETING')
         end
         local candidate = cjson.decode(ARGV[1])
         local previous = redis.call('GET', KEYS[1])
@@ -42,6 +45,20 @@ public sealed class RedisWorkJournalProjection : IWorkJournalProjection
         redis.call('PEXPIREAT', KEYS[1], string.format('%.0f', expires))
         return 1
         """;
+    private const string Remove = """
+        local now = redis.call('TIME')
+        local expires = tonumber(ARGV[1])
+        local nowMs = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
+        -- Close this generation atomically with deletion. Delayed projection
+        -- publishes may not recreate keys while the original TTL is still valid.
+        if expires > nowMs then
+            redis.call('SET', KEYS[1], '1', 'EX', string.format('%.0f', math.ceil((expires - nowMs) / 1000)))
+            redis.call('PEXPIREAT', KEYS[1], string.format('%.0f', expires))
+        end
+        local removed = 0
+        for i = 2, #KEYS do removed = removed + redis.call('DEL', KEYS[i]) end
+        return removed
+        """;
     private sealed record Envelope(string Definition, WorkJournalItem Item);
 
     public RedisWorkJournalProjection(IConnectionMultiplexer connection, string storageNamespace, int database = -1)
@@ -56,6 +73,7 @@ public sealed class RedisWorkJournalProjection : IWorkJournalProjection
         var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(stage.ExecutionId + "/" + stage.StageId)));
         return $"{_prefix}:{{{identity}}}:{stage.Generation}:{ordinal}";
     }
+    private RedisKey ClosedKey(WorkStage stage) => Key(stage, 0).ToString() + ":closed";
 
     public async Task PublishAsync(WorkStage stage, WorkJournalItem item, CancellationToken cancellationToken = default)
     {
@@ -64,7 +82,7 @@ public sealed class RedisWorkJournalProjection : IWorkJournalProjection
         var content = JsonSerializer.Serialize(new Envelope(Definition(stage), item), Json);
         if (Encoding.UTF8.GetByteCount(content) > 16384) throw new ArgumentException("Projection item exceeds 16 KiB.");
         cancellationToken.ThrowIfCancellationRequested();
-        try { await _database.ScriptEvaluateAsync(Publish, [key], [content, stage.ExpiresAt.ToUnixTimeMilliseconds()]).WaitAsync(cancellationToken); }
+        try { await _database.ScriptEvaluateAsync(Publish, [key, ClosedKey(stage)], [content, stage.ExpiresAt.ToUnixTimeMilliseconds()]).WaitAsync(cancellationToken); }
         catch (RedisConnectionException error) { throw new WorkCoordinationOutcomeUncertainException("journal-publish", error); }
         catch (RedisTimeoutException error) { throw new WorkCoordinationOutcomeUncertainException("journal-publish", error); }
     }
@@ -86,5 +104,16 @@ public sealed class RedisWorkJournalProjection : IWorkJournalProjection
             result.Add(envelope.Item);
         }
         return result;
+    }
+
+    public async Task RemovePageAsync(WorkStage stage, int start, int count = 128, CancellationToken cancellationToken = default)
+    {
+        if (start < 0 || start > stage.ItemCount || count is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(start));
+        var keys = Enumerable.Range(start, Math.Min(count, stage.ItemCount - start)).Select(i => Key(stage, i)).ToArray();
+        if (keys.Length == 0) return;
+        cancellationToken.ThrowIfCancellationRequested();
+        try { await _database.ScriptEvaluateAsync(Remove, [ClosedKey(stage), .. keys], [stage.ExpiresAt.ToUnixTimeMilliseconds()]).WaitAsync(cancellationToken); }
+        catch (RedisConnectionException error) { throw new WorkCoordinationOutcomeUncertainException("journal-cleanup", error); }
+        catch (RedisTimeoutException error) { throw new WorkCoordinationOutcomeUncertainException("journal-cleanup", error); }
     }
 }

@@ -238,21 +238,38 @@ public sealed class FileSystemStateStore : IRecoverableStateStore, IArtifactMain
     }
 }
 
-public sealed class FileSystemDocumentStore : IExecutionDocumentStore, IArtifactMaintenance, IDocumentPreviewStore
+public sealed class FileSystemDocumentStore : IBoundedExecutionDocumentStore, IArtifactMaintenance, IDocumentPreviewStore
 {
     private readonly string _baseDir;
+    private readonly bool _scopedDirectories;
 
-    public FileSystemDocumentStore(string baseDir)
+    public FileSystemDocumentStore(string baseDir, bool scopedDirectories = false)
     {
         _baseDir = Path.GetFullPath(baseDir);
+        _scopedDirectories = scopedDirectories;
         SafePath.Within(_baseDir, "check");
         Directory.CreateDirectory(baseDir);
+        if (_scopedDirectories && Directory.EnumerateFiles(_baseDir).Any())
+            throw new InvalidOperationException("Execution-scoped documents require a fresh directory, not an existing flattened document store.");
+    }
+
+    private string DocumentPath(string key)
+    {
+        SafePath.Relative(key.Replace(":", "_"));
+        if (_scopedDirectories)
+        {
+            var parts = key.Split('/');
+            if (parts.Length < 3 || parts[0] != "exec") throw new ArgumentException("Scoped documents require an execution-owned reference.");
+            SafePath.Id(parts[1]);
+        }
+        return SafePath.Within(_baseDir, _scopedDirectories ? key.Replace(":", "_") : key.Replace(":", "_").Replace("/", "_"));
     }
 
     public async Task<string> StoreAsync(string key, string content)
     {
         SafePath.Relative(key.Replace(":", "_"));
-        var path = SafePath.Within(_baseDir, key.Replace(":", "_").Replace("/", "_"));
+        var path = DocumentPath(key);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
@@ -270,8 +287,9 @@ public sealed class FileSystemDocumentStore : IExecutionDocumentStore, IArtifact
     public async Task<string?> GetAsync(string key)
     {
         SafePath.Relative(key.Replace(":", "_"));
-        var path = SafePath.Within(_baseDir, key.Replace(":", "_").Replace("/", "_"));
-        return await AtomicExecutionFile.ReadAsync(path);
+        var path = DocumentPath(key);
+        try { return await AtomicExecutionFile.ReadAsync(path); }
+        catch (DirectoryNotFoundException) { return null; }
     }
 
     public Task CleanupArtifactsAsync() { AtomicExecutionFile.Cleanup(_baseDir); return Task.CompletedTask; }
@@ -279,7 +297,7 @@ public sealed class FileSystemDocumentStore : IExecutionDocumentStore, IArtifact
     public async Task<DocumentPreview> PreviewAsync(string key, int maximumBytes)
     {
         SafePath.Relative(key.Replace(":", "_"));
-        var path = SafePath.Within(_baseDir, key.Replace(":", "_").Replace("/", "_"));
+        var path = DocumentPath(key);
         try
         {
             await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -288,12 +306,13 @@ public sealed class FileSystemDocumentStore : IExecutionDocumentStore, IArtifact
             return new(true, await reader.ReadToEndAsync(), stream.Length, false);
         }
         catch (FileNotFoundException) { return new(false, null, 0, false); }
+        catch (DirectoryNotFoundException) { return new(false, null, 0, false); }
     }
 
     public Task DeleteAsync(string key)
     {
         SafePath.Relative(key.Replace(":", "_"));
-        var path = SafePath.Within(_baseDir, key.Replace(":", "_").Replace("/", "_"));
+        var path = DocumentPath(key);
         if (File.Exists(path)) File.Delete(path);
         return Task.CompletedTask;
     }
@@ -301,16 +320,62 @@ public sealed class FileSystemDocumentStore : IExecutionDocumentStore, IArtifact
     public Task<bool> ExistsAsync(string key)
     {
         SafePath.Relative(key.Replace(":", "_"));
-        var path = SafePath.Within(_baseDir, key.Replace(":", "_").Replace("/", "_"));
+        var path = DocumentPath(key);
         return Task.FromResult(File.Exists(path));
     }
 
-    public Task DeleteExecutionAsync(string executionId)
+    public async Task DeleteExecutionAsync(string executionId)
     {
+        if (_scopedDirectories)
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+            while (true)
+            {
+                var page = await DeleteExecutionPageAsync(executionId, cancellationToken: timeout.Token);
+                if (page.NextCursor is null && !page.Busy) break;
+                if (page.Busy) await Task.Delay(25, timeout.Token);
+            }
+            return;
+        }
         var prefix = "exec_" + SafePath.Id(executionId) + "_";
         foreach (var file in Directory.EnumerateFiles(_baseDir, prefix + "*"))
             File.Delete(SafePath.Within(_baseDir, Path.GetFileName(file)));
-        return Task.CompletedTask;
+    }
+
+    public Task<StorageCleanupPage> DeleteExecutionPageAsync(string executionId,
+        int maximumRecords = 128, string? cursor = null, CancellationToken cancellationToken = default)
+    {
+        // The old flattened layout cannot distinguish exec/a_b from exec/a/b.
+        // Distributed installation must explicitly select a fresh scoped directory.
+        if (!_scopedDirectories) throw new InvalidOperationException("Bounded work retention requires execution-scoped document directories.");
+        if (maximumRecords is < 1 or > 256 || cursor is not (null or "remaining")) throw new ArgumentException("Invalid document cleanup page.");
+        var root = SafePath.Within(_baseDir, "exec/" + SafePath.Id(executionId));
+        if (!Directory.Exists(root)) return Task.FromResult(new StorageCleanupPage(0, 0, false, null));
+        var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Take(maximumRecords).ToArray();
+        var examined = 0; var deleted = 0; var busy = false;
+        foreach (var path in files)
+        {
+            cancellationToken.ThrowIfCancellationRequested(); examined++;
+            var contained = SafePath.Within(_baseDir, Path.GetRelativePath(_baseDir, path).Replace('\\', '/'));
+            try
+            {
+                using var held = new FileStream(contained, FileMode.Open, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+                deleted++;
+            }
+            catch (FileNotFoundException) { }
+            catch (IOException ex) when ((ex.HResult & 0xffff) is 11 or 32 or 33 or 35) { busy = true; }
+        }
+        if (files.Length > 0) return Task.FromResult(new StorageCleanupPage(examined, deleted, busy, "remaining"));
+        var directories = Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories)
+            .Where(path => !Directory.EnumerateFileSystemEntries(path).Any()).Take(maximumRecords).ToArray();
+        foreach (var path in directories)
+        {
+            cancellationToken.ThrowIfCancellationRequested(); examined++;
+            Directory.Delete(SafePath.Within(_baseDir, Path.GetRelativePath(_baseDir, path).Replace('\\', '/'))); deleted++;
+        }
+        if (directories.Length > 0) return Task.FromResult(new StorageCleanupPage(examined, deleted, false, "remaining"));
+        Directory.Delete(root);
+        return Task.FromResult(new StorageCleanupPage(0, 0, false, null));
     }
 }
 

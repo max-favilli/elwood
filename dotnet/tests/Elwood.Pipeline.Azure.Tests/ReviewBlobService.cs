@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Xml.Linq;
 using Azure.Core.Pipeline;
 using Azure.Storage.Blobs;
 
@@ -9,14 +10,17 @@ namespace Elwood.Pipeline.Azure.Tests;
 internal sealed class ReviewBlobService : HttpMessageHandler
 {
     private readonly Dictionary<string, (byte[] Bytes, int Version)> _blobs = [];
+    private readonly Dictionary<(string Path, string Version), byte[]> _versions = [];
+    private readonly bool _versioning;
     private int _version;
     private readonly Dictionary<string, string> _leases = [];
     public int Downloads, NotModified, Writes;
     public void LoseLease(BlobClient blob) { lock (_blobs) _leases.Remove(blob.Uri.AbsolutePath); }
     public BlobContainerClient Container { get; }
     private readonly HttpClient _http;
-    public ReviewBlobService()
+    public ReviewBlobService(bool versioning = false)
     {
+        _versioning = versioning;
         _http = new(this, disposeHandler: false);
         Container = new(new Uri("https://unit.test/control"), new BlobClientOptions
         { Transport = new HttpClientTransport(_http), Retry = { MaxRetries = 0 } });
@@ -27,6 +31,9 @@ internal sealed class ReviewBlobService : HttpMessageHandler
         var content = request.Content is null ? null : await request.Content.ReadAsByteArrayAsync(token);
         lock (_blobs)
         {
+            var query = request.RequestUri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Split('=', 2)).ToDictionary(p => Uri.UnescapeDataString(p[0]), p => p.Length == 2 ? Uri.UnescapeDataString(p[1]) : "");
+            if (query.GetValueOrDefault("comp") == "list") return List(query);
             var exists = _blobs.TryGetValue(path, out var entry);
             var etag = $"\"{entry.Version}\"";
             if (request.RequestUri.Query.Contains("comp=lease"))
@@ -56,7 +63,17 @@ internal sealed class ReviewBlobService : HttpMessageHandler
             }
             if (request.Method == HttpMethod.Delete)
             {
+                if (query.TryGetValue("versionid", out var version))
+                {
+                    if (!_versions.Remove((path, version))) return Error(HttpStatusCode.NotFound, "BlobNotFound");
+                    return new(HttpStatusCode.Accepted);
+                }
+                var deleteLease = request.Headers.TryGetValues("x-ms-lease-id", out var deleteIds) ? deleteIds.Single() : null;
+                if (_leases.TryGetValue(path, out var requiredDeleteLease) && deleteLease != requiredDeleteLease)
+                    return Error(HttpStatusCode.PreconditionFailed, "LeaseIdMissing");
+                if (!exists) return Error(HttpStatusCode.NotFound, "BlobNotFound");
                 _blobs.Remove(path);
+                _leases.Remove(path);
                 return new(HttpStatusCode.Accepted);
             }
             if (request.Headers.IfNoneMatch.Any() && exists ||
@@ -65,8 +82,32 @@ internal sealed class ReviewBlobService : HttpMessageHandler
             if (_leases.TryGetValue(path, out var requiredLease) ? writeLease != requiredLease : writeLease is not null)
                 return Error(HttpStatusCode.PreconditionFailed, "LeaseIdMismatchWithBlobOperation");
             Writes++; _blobs[path] = (content!, ++_version);
+            if (_versioning) _versions[(path, _version.ToString("D10"))] = content!;
             return Success(HttpStatusCode.Created, [], $"\"{_version}\"");
         }
+    }
+
+    private HttpResponseMessage List(Dictionary<string, string> query)
+    {
+        var prefix = "/control/" + query.GetValueOrDefault("prefix", "");
+        var marker = query.GetValueOrDefault("marker", "");
+        var maximum = int.Parse(query.GetValueOrDefault("maxresults", "5000"));
+        var entries = _versioning
+            ? _versions.Select(v => (Path: v.Key.Path, Version: v.Key.Version, Bytes: v.Value))
+            : _blobs.Select(v => (Path: v.Key, Version: "", Bytes: v.Value.Bytes));
+        var selected = entries.Where(v => v.Path.StartsWith(prefix, StringComparison.Ordinal) &&
+                string.CompareOrdinal(v.Path + "|" + v.Version, marker) > 0)
+            .OrderBy(v => v.Path + "|" + v.Version, StringComparer.Ordinal).Take(maximum + 1).ToArray();
+        var page = selected.Take(maximum).ToArray();
+        var next = selected.Length > maximum ? page[^1].Path + "|" + page[^1].Version : "";
+        var xml = new XElement("EnumerationResults", new XAttribute("ServiceEndpoint", "https://unit.test/"), new XAttribute("ContainerName", "control"),
+            new XElement("Prefix", query.GetValueOrDefault("prefix", "")), new XElement("Marker", marker), new XElement("MaxResults", maximum),
+            new XElement("Blobs", page.Select(v => new XElement("Blob", new XElement("Name", v.Path[9..]),
+                _versioning ? new XElement("VersionId", v.Version) : null,
+                _versioning ? new XElement("IsCurrentVersion", _blobs.TryGetValue(v.Path, out var current) && current.Version.ToString("D10") == v.Version ? "true" : "false") : null,
+                new XElement("Properties", new XElement("Last-Modified", DateTimeOffset.UtcNow.ToString("R")), new XElement("Etag", "\"1\""),
+                    new XElement("Content-Length", v.Bytes.Length), new XElement("BlobType", "BlockBlob"))))), new XElement("NextMarker", next));
+        return new(HttpStatusCode.OK) { Content = new StringContent(xml.ToString(), Encoding.UTF8, "application/xml") };
     }
     internal static HttpResponseMessage Error(HttpStatusCode status, string code)
     {

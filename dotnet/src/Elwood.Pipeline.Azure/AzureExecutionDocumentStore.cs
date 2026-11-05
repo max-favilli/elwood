@@ -13,7 +13,7 @@ namespace Elwood.Pipeline.Azure;
 /// </summary>
 public sealed class AzureExecutionDocumentStore(BlobContainerClient container, string storageNamespace = "elwood", int maxDocumentBytes = 32 * 1024 * 1024,
     BlobRetentionLedger? retention = null, TimeProvider? timeProvider = null)
-    : IExecutionDocumentStore, IDocumentPreviewStore, IStorageFailureClassifier, IImmutableDocumentStore
+    : IBoundedExecutionDocumentStore, IDocumentPreviewStore, IStorageFailureClassifier, IImmutableDocumentStore
 {
     public bool IsTransient(Exception exception) => AzureTransportFault.IsTransient(exception);
     private readonly string _prefix = SafePath.Id(storageNamespace) + "/";
@@ -106,6 +106,50 @@ public sealed class AzureExecutionDocumentStore(BlobContainerClient container, s
             await container.GetBlobClient(item.Name).DeleteIfExistsAsync(DeleteSnapshotsOption.IncludeSnapshots, cancellationToken: timeout.Token);
         await foreach (var item in container.GetBlobsAsync(states: BlobStates.Version | BlobStates.Snapshots, prefix: prefix, cancellationToken: timeout.Token))
             await DeleteVersion(item, timeout.Token);
+    }
+
+    private sealed record CleanupCursor(string Prefix, string Token);
+
+    public async Task<StorageCleanupPage> DeleteExecutionPageAsync(string executionId,
+        int maximumRecords = 128, string? cursor = null, CancellationToken cancellationToken = default)
+    {
+        if (maximumRecords is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(maximumRecords));
+        var prefix = _prefix + "exec/" + SafePath.Id(executionId) + "/";
+        string? continuation = null;
+        if (cursor is not null)
+        {
+            if (cursor.Length > 16384) throw new ArgumentException("Document cleanup cursor exceeds its limit.");
+            var saved = System.Text.Json.JsonSerializer.Deserialize<CleanupCursor>(Convert.FromBase64String(cursor));
+            if (saved is null || saved.Prefix != prefix) throw new ArgumentException("Document cleanup cursor belongs to another execution.");
+            continuation = saved.Token;
+        }
+        // Independent obligations cover registered uploads not yet visible to listing.
+        // Business output obligations are deliberately unaffected by this operation.
+        if (cursor is null && retention is not null) await retention.ExpireDocumentsAsync(executionId, cancellationToken);
+        await foreach (var page in container.GetBlobsAsync(states: BlobStates.Version | BlobStates.Snapshots,
+            prefix: prefix, cancellationToken: cancellationToken).AsPages(continuation, maximumRecords))
+        {
+            if (page.Values.Count > maximumRecords) throw new InvalidOperationException("Provider exceeded the document cleanup page limit.");
+            var deleted = 0; var busy = false;
+            foreach (var item in page.Values)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!item.Name.StartsWith(prefix, StringComparison.Ordinal)) throw new InvalidOperationException("Document cleanup escaped its execution.");
+                var blob = container.GetBlobClient(item.Name);
+                try
+                {
+                    var historical = item.Snapshot is not null || item.VersionId is not null && item.IsLatestVersion != true;
+                    var target = item.Snapshot is not null ? blob.WithSnapshot(item.Snapshot) : historical ? blob.WithVersion(item.VersionId) : blob;
+                    if ((await target.DeleteIfExistsAsync(historical ? DeleteSnapshotsOption.None : DeleteSnapshotsOption.IncludeSnapshots,
+                        cancellationToken: cancellationToken)).Value) deleted++;
+                }
+                catch (RequestFailedException ex) when (ex.Status is 409 or 412 && ex.ErrorCode is "LeaseIdMissing" or "LeaseIdMismatchWithBlobOperation") { busy = true; }
+            }
+            var next = string.IsNullOrEmpty(page.ContinuationToken) ? null : Convert.ToBase64String(
+                System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new CleanupCursor(prefix, page.ContinuationToken)));
+            return new(page.Values.Count, deleted, busy, next);
+        }
+        return new(0, 0, false, null);
     }
 
     private async Task DeleteVersions(string name, CancellationToken token)

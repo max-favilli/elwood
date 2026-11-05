@@ -74,6 +74,32 @@ public sealed class JournalProjectionTests(RedisFixture fixture) : IClassFixture
     }
 
     [Fact]
+    public async Task Cleanup_is_bounded_idempotent_and_scoped_to_the_original_generation_even_with_a_cold_cache()
+    {
+        var stage = await Stage(5);
+        await Journal.ReconcileAsync(stage, Projection, 0);
+        var other = stage with { Generation = "generation-other" };
+        _stages.Add(other);
+        var item = (await Journal.ReadPageAsync(stage, 0, 1))[0] with { Generation = other.Generation };
+        await Projection.PublishAsync(other, item);
+        try
+        {
+            await Projection.RemovePageAsync(stage, 1, 2);
+            await Projection.RemovePageAsync(stage, 1, 2); // Lost reply/cold entries are harmless.
+            var page = await Projection.ReadPageAsync(stage, 0);
+            Assert.NotNull(page[0]); Assert.Null(page[1]); Assert.Null(page[2]);
+            Assert.NotNull(page[3]); Assert.NotNull(page[4]);
+            Assert.NotNull((await Projection.ReadPageAsync(other, 0, 1))[0]);
+            var delayed = (await Journal.ReadPageAsync(stage, 1, 1))[0];
+            await Assert.ThrowsAsync<RedisServerException>(() => Projection.PublishAsync(stage, delayed));
+            var ttl = await fixture.First.GetDatabase().KeyTimeToLiveAsync(Key(stage, 0).ToString() + ":closed");
+            Assert.NotNull(ttl); Assert.InRange(ttl.Value, TimeSpan.Zero, TimeSpan.FromDays(31));
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => Projection.RemovePageAsync(stage, 0, 257));
+        }
+        finally { await Projection.RemovePageAsync(other, 0); }
+    }
+
+    [Fact]
     public async Task Delayed_projection_cannot_reverse_a_newer_checkpoint_and_missing_means_unknown()
     {
         var stage = await Stage();
@@ -136,7 +162,10 @@ public sealed class JournalProjectionTests(RedisFixture fixture) : IClassFixture
     public async Task DisposeAsync()
     {
         foreach (var stage in _stages)
+        {
             await fixture.First.GetDatabase().KeyDeleteAsync(Enumerable.Range(0, stage.ItemCount).Select(i => Key(stage, i)).ToArray());
+            if (stage.ItemCount > 0) await fixture.First.GetDatabase().KeyDeleteAsync(Key(stage, 0).ToString() + ":closed");
+        }
         if (Directory.Exists(_directory)) Directory.Delete(_directory, true);
     }
 }

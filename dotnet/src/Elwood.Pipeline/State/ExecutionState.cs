@@ -55,6 +55,7 @@ public sealed class ExecutionState
     public int RetentionSeconds { get; set; } = 30 * 24 * 60 * 60;
     public DateTime? ExpiresAt { get; set; }
     public bool Deleting { get; set; }
+    public Async.WorkCleanupProgress? WorkCleanup { get; set; }
     /// <summary>Reserved terminal capacity was used; recovery requires fresh replay admission.</summary>
     public bool RecoveryCapacityExhausted { get; set; }
     public int? ResponseStatusCode { get; set; }

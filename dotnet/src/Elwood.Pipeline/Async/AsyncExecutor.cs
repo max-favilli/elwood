@@ -31,6 +31,7 @@ public sealed class AsyncExecutor
     private readonly ContentFingerprintStore? _fingerprints;
     private readonly ExecutionConcurrencyGate? _concurrency;
     private readonly DistributedStepScheduler? _distributed;
+    private readonly WorkExecutionRetention? _workRetention;
     private readonly LocalFanOutExecutor? _localFanOut;
     private DateTime Now => _time.GetUtcNow().UtcDateTime;
 
@@ -38,13 +39,14 @@ public sealed class AsyncExecutor
         ISecretProvider? secretProvider = null, IEnumerable<ISourceConnector>? sourceConnectors = null,
         IEnumerable<IDestinationConnector>? destinationConnectors = null, ElwoodEngine? engine = null,
         LocalTestSession? testSession = null, TimeProvider? timeProvider = null, ContentFingerprintStore? fingerprints = null, ExecutionConcurrencyGate? concurrency = null,
-        DistributedStepScheduler? distributedWork = null)
+        DistributedStepScheduler? distributedWork = null, WorkExecutionRetention? workRetention = null)
     {
         _states = stateStore as IRecoverableStateStore ?? throw new ArgumentException("Queued execution requires a recoverable state store with cross-worker exclusion.");
         _documents = documentStore; _queue = stepQueue; _test = testSession; _time = timeProvider ?? TimeProvider.System;
         _fingerprints = fingerprints;
         _concurrency = concurrency;
         _distributed = distributedWork;
+        _workRetention = workRetention;
         if (testSession is not null) _localFanOut = new(documentStore, secretProvider, sourceConnectors, destinationConnectors, engine, testSession);
         _operations = new(documentStore, secretProvider, sourceConnectors, destinationConnectors, engine, testSession) { InspectContent = InspectContent };
     }
@@ -520,7 +522,7 @@ public sealed class AsyncExecutor
         foreach (var snapshot in await _states.ListRetainedAsync())
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (snapshot.WorkProfile is not null) continue; // 7.5 must drain items and prune their journal before deleting the parent.
+            if (snapshot.WorkProfile is not null && (snapshot.WorkProfile != DistributedStepScheduler.Profile || _workRetention is null)) continue;
             if (!snapshot.Deleting && !(snapshot.ExpiresAt <= Now)) continue;
             try
             {
@@ -530,9 +532,10 @@ public sealed class AsyncExecutor
                 if (state is null || state.Status is ExecutionStatus.Running or ExecutionStatus.Retrying or ExecutionStatus.Pending || !(state.ExpiresAt <= Now)) continue;
                 if (!state.Deleting) { state.Deleting = true; await claim.SaveAsync(state); } // One restartable tombstone, including cleanup retries.
                 await claim.ValidateAsync(cancellationToken);
+                if (state.WorkProfile is not null && !await _workRetention!.AdvanceAsync(state, claim, cancellationToken)) continue;
                 if (state.FingerprintKey is not null && _fingerprints is not null)
                     await _fingerprints.ReleasePendingAsync(state.FingerprintKey, state.ExecutionId, cancellationToken);
-                await documents.DeleteExecutionAsync(state.ExecutionId);
+                if (state.WorkProfile is null) await documents.DeleteExecutionAsync(state.ExecutionId);
                 await claim.DeleteAsync(); deleted++;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }

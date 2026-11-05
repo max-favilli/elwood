@@ -189,7 +189,10 @@ Depends on the preceding implementation packages.
   - [x] 7.5a — Typed, pipeline-authorized stage/item/attempt endpoints, bounded filtered pages, ordinal lookup, lazy previews and successful warnings.
   - [x] 7.5b — Persist selected retry intent before child transitions; reconcile interrupted commands, preserve revision/receipts and reject stale attempts. Separate uncertain-write acknowledgement in the portal.
   - [x] 7.5c — Portal item table, detail/attempt inspection, filtering, retained request IDs after lost responses and terminal polling stop. Existing whole-execution recovery controls are disabled for distributed executions.
-  - [ ] 7.5d — Physical retention: deletion intent, owner fencing/drain, bounded resumable cleanup of journal records, command receipts, documents/versions and Redis projections. Preserve output cleanup obligations.
+  - [ ] 7.5d — Close physical retention with admission/accounting verification. The [5 November implementation package](item-inspection-recovery-design.md#bounded-physical-cleanup-package--5-november-2026) adds parent/stage deletion intent, claim drain, bounded restartable journal/document/version/receipt/projection cleanup and independent output obligations. Production registration remains gated on 7.5e/g.
+    - [x] Implement and locally verify deletion fences, active-owner drain, restartable parent progress and bounded provider cleanup.
+    - [x] Preserve business-output cleanup obligations; use a fresh scoped local document layout instead of ambiguous flattened paths.
+    - [ ] Verify late journal admission/uploads after ownership loss against pre-reserved capacity and independent cleanup obligations; reserve cleanup checkpoint capacity before accepting work.
   - [ ] 7.5e — Reserve finite item/document/attempt capacity before admission and partial uploads; expose quota pressure and retention health, including cold Redis behavior.
   - [ ] 7.5f — Define and implement distributed replay scope/acknowledgement; add authoritative bounded stage status summaries and installed-host controls.
   - [ ] 7.5g — Verify cleanup/recovery races and installation opt-in, then register the distributed services in API/Functions and close 7.3/7.5.

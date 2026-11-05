@@ -45,6 +45,15 @@ public interface IExecutionDocumentStore : IDocumentStore
     Task DeleteExecutionAsync(string executionId);
 }
 
+/// <summary>Call only after the parent is deleting and all child writers have drained.</summary>
+public interface IBoundedExecutionDocumentStore : IExecutionDocumentStore
+{
+    Task<StorageCleanupPage> DeleteExecutionPageAsync(string executionId,
+        int maximumRecords = 128, string? cursor = null, CancellationToken cancellationToken = default);
+}
+
+public sealed record StorageCleanupPage(int Examined, int Deleted, bool Busy, string? NextCursor);
+
 /// <summary>Low-frequency maintenance of abandoned host storage artifacts.</summary>
 public interface IArtifactMaintenance
 {
