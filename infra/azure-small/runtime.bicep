@@ -175,7 +175,8 @@ var baseSettings = concat([
         { name: 'Elwood__Sync__ExecutionBudgetSeconds', value: '60' }
         { name: 'Elwood__VerificationOnly', value: string(verificationOnly) }
         { name: 'Elwood__RabbitMqIngressEnabled', value: string(enableRabbitMqIngress) }
-      ], largeFiles ? [{ name: 'DOTNET_GCHeapHardLimit', value: '0xD9999999' }] : [], originSettings) // Explicit 3.4 GiB ceiling, independent of host-reported physical memory.
+      ], largeFiles ? [{ name: 'DOTNET_GCHeapHardLimit', value: '0xD9999999' }]
+        : (capacityProfile == 'distributed' ? [{ name: 'DOTNET_GCHeapHardLimit', value: '0x60000000' }] : []), originSettings) // Explicit 3.4/1.5 GiB ceilings, independent of host-reported physical memory.
 var keyVaultSettings = [for secret in secretReferences: { name: secret.name, value: '@Microsoft.KeyVault(SecretUri=${secret.secretUri})' }]
 var extraSettings = concat(additionalSettings.?values ?? [], keyVaultSettings, empty(redisConnectionSecretUri) ? [] : [
   { name: 'Elwood__Redis__ConnectionString', value: '@Microsoft.KeyVault(SecretUri=${redisConnectionSecretUri})' }

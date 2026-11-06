@@ -92,6 +92,9 @@ jobs:
       - name: Installed distributed host (Redis and Azurite)
         env:
           ELWOOD_CAPACITY_REPORT_DIR: ${{ github.workspace }}/artifacts/distributed-capacity
+          # Match the distributed worker's managed-heap budget; emulator services
+          # run in separate containers and are not charged to this worker heap.
+          DOTNET_GCHeapHardLimit: '0x60000000'
         run: dotnet test dotnet/tests/Elwood.Runtime.Hosting.Tests --filter "Category=Integration" --verbosity normal
       - uses: actions/upload-artifact@v5
         if: always()
