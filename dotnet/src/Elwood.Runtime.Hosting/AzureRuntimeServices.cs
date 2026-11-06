@@ -74,6 +74,7 @@ public static class AzureRuntimeServices
         var limits = RetentionPartitionLimits.Read(configuration, partitioned);
         services.AddSingleton(limits);
         var distributed = configuration.GetValue<bool>("Elwood:Distributed:Enabled");
+        if (distributed || configuration.GetValue<bool>("Elwood:Redis:Enabled")) services.AddRedisRuntimeCache(configuration, scope);
         if (distributed && !partitioned)
             throw new InvalidOperationException("Distributed execution requires the files-25m or distributed capacity profile and its initialized 64-partition ledger.");
         if (capacityProfile == "distributed" && !distributed)
@@ -99,7 +100,8 @@ public static class AzureRuntimeServices
         services.AddSingleton<IStateStore>(sp => sp.GetRequiredService<AzureExecutionStateStore>());
         services.AddSingleton<IDeploymentStore>(sp => new BlobDeploymentStore(
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(catalogContainer), scope,
-            rabbitMqIngressEnabled: configuration.GetValue<bool>("Elwood:RabbitMqIngressEnabled"), distributedWorkEnabled: distributed));
+            rabbitMqIngressEnabled: configuration.GetValue<bool>("Elwood:RabbitMqIngressEnabled"), distributedWorkEnabled: distributed,
+            sharedCache: sp.GetService<IImmutableRuntimeCache>()));
         var queueProvider = configuration["Elwood:Azure:QueueProvider"] ?? "storage";
         if (queueProvider == "serviceBus")
         {

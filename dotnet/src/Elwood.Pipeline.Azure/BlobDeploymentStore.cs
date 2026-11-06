@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Cryptography;
 using Azure;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
@@ -20,6 +21,9 @@ public sealed class BlobDeploymentStore : IDeploymentStore, IDeploymentMaintenan
     private readonly BlobClient _blob;
     private readonly bool _rabbitMqIngressEnabled;
     private readonly bool _distributedWorkEnabled;
+    private readonly IImmutableRuntimeCache? _sharedCache;
+    private const string HashMetadata = "elwood_catalog_sha256";
+    private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly SemaphoreSlim _cacheGate = new(1, 1);
     private CachedCatalog? _cached;
@@ -27,11 +31,13 @@ public sealed class BlobDeploymentStore : IDeploymentStore, IDeploymentMaintenan
         Dictionary<string, (string PipelineId, string SourceName, PipelineBundle Bundle)> Routes, HashSet<string> Conflicts);
     private static T Copy<T>(T value) => JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value, JsonOptions), JsonOptions)!;
 
-    public BlobDeploymentStore(BlobContainerClient container, string storageNamespace = "elwood", bool rabbitMqIngressEnabled = false, bool distributedWorkEnabled = false)
+    public BlobDeploymentStore(BlobContainerClient container, string storageNamespace = "elwood", bool rabbitMqIngressEnabled = false, bool distributedWorkEnabled = false,
+        IImmutableRuntimeCache? sharedCache = null)
     {
         _blob = container.GetBlobClient(SafePath.Id(storageNamespace) + "/catalog.json");
         _rabbitMqIngressEnabled = rabbitMqIngressEnabled;
         _distributedWorkEnabled = distributedWorkEnabled;
+        _sharedCache = sharedCache;
     }
 
     public async Task<DeploymentDefinition?> GetAsync(string id)
@@ -196,6 +202,7 @@ public sealed class BlobDeploymentStore : IDeploymentStore, IDeploymentMaintenan
                 await _blob.UploadAsync(new BinaryData(bytes), new BlobUploadOptions
                 {
                     Conditions = etag is null ? new() { IfNoneMatch = ETag.All } : new() { IfMatch = etag.Value },
+                    Metadata = new Dictionary<string, string> { [HashMetadata] = Hash(bytes) },
                     HttpHeaders = new() { ContentType = "application/json" }
                 }, timeout.Token);
                 return result;
@@ -217,13 +224,34 @@ public sealed class BlobDeploymentStore : IDeploymentStore, IDeploymentMaintenan
         await _cacheGate.WaitAsync(timeout.Token);
         try
         {
-            var (catalog, etag) = await DownloadAsync(timeout.Token, _cached?.ETag);
+            // A new worker reads the authoritative ETag/hash before using Redis.
+            // Warm workers use conditional GET; deletions/deployments invalidate
+            // both routes and bundles without relying on pub/sub delivery.
+            var shared = _cached is null ? await ReadSharedAsync(timeout.Token) : null;
+            var (catalog, etag) = shared ?? await DownloadAsync(timeout.Token, _cached?.ETag);
             if (_cached is not null && _cached.ETag == etag && etag is not null) return _cached;
             if (etag is null && _cached?.ETag is not null) throw new InvalidDataException("Deployment catalog disappeared; restore it before serving routes.");
             var (routes, conflicts) = Routes(catalog);
             return _cached = new(catalog, etag, routes, conflicts);
         }
         finally { _cacheGate.Release(); }
+    }
+
+    private async Task<(Catalog Catalog, ETag? ETag)?> ReadSharedAsync(CancellationToken token)
+    {
+        if (_sharedCache is null) return null;
+        global::Azure.Response<BlobProperties> properties;
+        try { properties = await _blob.GetPropertiesAsync(cancellationToken: token); }
+        catch (RequestFailedException ex) when (ex.ErrorCode == "BlobNotFound") { return null; }
+        if (!properties.Value.Metadata.TryGetValue(HashMetadata, out var hash) || hash.Length != 64) return null;
+        byte[]? bytes;
+        try { bytes = await _sharedCache.GetAsync(hash, token); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch { return null; }
+        if (bytes is null || bytes.Length > MaxBytes || Hash(bytes) != hash) return null;
+        var catalog = JsonSerializer.Deserialize<Catalog>(bytes, JsonOptions);
+        Validate(catalog);
+        return (catalog!, properties.Value.ETag);
     }
 
     private async Task<(Catalog Catalog, ETag? ETag)> DownloadAsync(CancellationToken token, ETag? ifNoneMatch = null)
@@ -242,8 +270,18 @@ public sealed class BlobDeploymentStore : IDeploymentStore, IDeploymentMaintenan
                 if (buffer.Length + read > MaxBytes) throw new InvalidDataException("Deployment catalog exceeds its configured size limit.");
                 buffer.Write(chunk, 0, read);
             }
-            var catalog = JsonSerializer.Deserialize<Catalog>(buffer.ToArray(), JsonOptions);
+            var bytes = buffer.ToArray();
+            var hash = Hash(bytes);
+            if (response.Value.Details.Metadata.TryGetValue(HashMetadata, out var expected) && hash != expected)
+                throw new InvalidDataException("Deployment catalog integrity check failed.");
+            var catalog = JsonSerializer.Deserialize<Catalog>(bytes, JsonOptions);
             Validate(catalog);
+            if (_sharedCache is not null)
+            {
+                try { await _sharedCache.PutAsync(hash, bytes, token); }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                catch { /* Durable storage remains authoritative during a cache outage. */ }
+            }
             return (catalog!, response.Value.Details.ETag);
         }
         catch (RequestFailedException ex) when (ex.Status == 304 && ifNoneMatch is not null && _cached is not null)

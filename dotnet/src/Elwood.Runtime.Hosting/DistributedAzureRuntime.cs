@@ -4,6 +4,7 @@ using Azure.Storage.Blobs;
 using Elwood.Pipeline.Async;
 using Elwood.Pipeline.Azure;
 using Elwood.Pipeline.Redis;
+using Elwood.Pipeline.Registry;
 using Elwood.Pipeline.Secrets;
 using Elwood.Pipeline.Storage;
 using StackExchange.Redis;
@@ -15,8 +16,7 @@ public static class DistributedAzureRuntime
     public static IServiceCollection AddAzureRuntimeCredentials(this IServiceCollection services)
         => services.AddSingleton<TokenCredential>(new AzureIdentity::Azure.Identity.DefaultAzureCredential());
 
-    public static IServiceCollection AddDistributedAzureRuntime(this IServiceCollection services, IConfiguration configuration,
-        string journalContainer, string storageNamespace)
+    public static IServiceCollection AddRedisRuntimeCache(this IServiceCollection services, IConfiguration configuration, string storageNamespace)
     {
         var connection = configuration["Elwood:Redis:ConnectionString"];
         if (string.IsNullOrWhiteSpace(connection)) throw new InvalidOperationException("Elwood:Redis:ConnectionString is required for the distributed profile.");
@@ -28,6 +28,13 @@ public static class DistributedAzureRuntime
         options.AbortOnConnectFail = false; options.ConnectTimeout = 3000; options.AsyncTimeout = 3000;
         options.ConnectRetry = 1;
         services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(options));
+        services.AddSingleton<IImmutableRuntimeCache>(sp => new RedisImmutableRuntimeCache(sp.GetRequiredService<IConnectionMultiplexer>(), storageNamespace));
+        return services;
+    }
+
+    public static IServiceCollection AddDistributedAzureRuntime(this IServiceCollection services, IConfiguration configuration,
+        string journalContainer, string storageNamespace)
+    {
         services.AddSingleton(sp => new RedisWorkJournalProjection(sp.GetRequiredService<IConnectionMultiplexer>(), storageNamespace));
         services.AddSingleton<IWorkJournalProjectionRetention>(sp => sp.GetRequiredService<RedisWorkJournalProjection>());
         services.AddSingleton<IWorkCapacity>(sp => new BlobWorkCapacity(sp.GetRequiredService<BlobRetentionLedger>(),

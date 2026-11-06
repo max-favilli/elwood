@@ -108,13 +108,14 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
                 fanOut: { path: '$idm.items', concurrency: 4 }
                 map: '{ ordinal: $index, value: $ }'
                 destinations:
-                  http: { url: '{{url}}/deliver' }
+                  http:
+                    - { url: '{{url}}/deliver' }
             """ };
         var deployments = first.GetRequiredService<IDeploymentStore>();
         var draft = await deployments.SaveDraftAsync("orders", content, null, true);
         await deployments.DeployAsync("orders", draft.DraftRevisionId, "test");
         var bundle = await deployments.GetActiveAsync("orders");
-        var pipeline = new PipelineParser().ParseContent(bundle!.Content, "orders");
+        var pipeline = new PipelineParser().ParseContent(bundle!.Content, "orders", bundle.RevisionId);
         var runner = first.GetRequiredService<DurableRuntime>().Runner("orders");
         var watch = Stopwatch.StartNew();
         var id = await runner.StartAsync(pipeline, JsonNodeValueFactory.Instance.Parse("[1,2,3,4,5,6,7,8]"), "input");
