@@ -41,10 +41,13 @@ namespace Elwood.Runtime.Hosting.Tests;
 [Trait("Category", "Integration")]
 public sealed class InstalledDistributedTests(ITestOutputHelper output)
 {
-    [Theory]
-    [InlineData(8)]
-    [InlineData(2048)]
-    public async Task Independent_installed_workers_share_accounting_recover_cold_Redis_and_clean_expired_work(int itemCount)
+    [Fact]
+    public Task Installed_smoke_and_shipped_https_client() => Run(8);
+
+    [Fact]
+    public Task Thousands_of_items_share_accounting_recover_cold_Redis_and_clean_expired_work() => Run(2048);
+
+    private async Task Run(int itemCount)
     {
         await using var storage = new AzuriteBuilder().WithImage("mcr.microsoft.com/azure-storage/azurite:3.35.0")
             .WithCommand("--skipApiVersionCheck").Build();
