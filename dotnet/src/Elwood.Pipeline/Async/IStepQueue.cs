@@ -34,6 +34,8 @@ public sealed class StepMessage
     /// <summary>Both fields are present only for a durably admitted distributed item.</summary>
     public string? WorkGeneration { get; set; }
     public int? WorkOrdinal { get; set; }
+    /// <summary>Bounded result-publication continuation; never dispatches connectors or new items.</summary>
+    public bool AggregateOnly { get; set; }
 }
 
 public enum StepType

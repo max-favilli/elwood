@@ -112,6 +112,7 @@ public sealed class DistributedStepState
     public string? RecoveryIssue { get; set; }
     public bool Expanded { get; init; }
     public int ItemCursor { get; set; }
+    public int DispatchCursor { get; set; }
     public int PermitCursor { get; set; }
     public bool ScanHasActive { get; set; }
     public bool ScanHasFailure { get; set; }

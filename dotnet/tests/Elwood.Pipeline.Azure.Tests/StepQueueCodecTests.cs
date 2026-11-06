@@ -6,6 +6,16 @@ namespace Elwood.Pipeline.Azure.Tests;
 public sealed class StepQueueCodecTests
 {
     [Fact]
+    public void Aggregation_continuations_have_their_own_envelope_and_cannot_be_item_calls()
+    {
+        var hint = new StepMessage { ExecutionId = "execution", PipelineId = "pipeline", StepName = "output", Type = StepType.Output, AggregateOnly = true };
+        var json = StorageQueueStepQueue.Serialize(hint);
+        Assert.Contains("\"version\":3", json); Assert.True(StorageQueueStepQueue.Deserialize(json).AggregateOnly);
+        Assert.Throws<ArgumentException>(() => StorageQueueStepQueue.Deserialize(json.Replace("\"version\":3", "\"version\":1")));
+        hint.WorkGeneration = "generation"; hint.WorkOrdinal = 0;
+        Assert.Throws<ArgumentException>(() => StorageQueueStepQueue.Serialize(hint));
+    }
+    [Fact]
     public void VersionedMessageRoundTripsItsCompleteIdentity()
     {
         var source = new StepMessage { ExecutionId = "execution-1", PipelineId = "pipeline", StepName = "send-order", Type = StepType.Output, StageIndex = 2 };

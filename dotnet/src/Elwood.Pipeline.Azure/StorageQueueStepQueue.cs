@@ -55,7 +55,7 @@ public sealed class StorageQueueStepQueue : IStepQueue, IQueuedStepConsumer
     public static string Serialize(StepMessage message)
     {
         Validate(message);
-        var json = JsonSerializer.Serialize(new Envelope { Version = message.WorkGeneration is null ? 1 : 2, Step = message }, JsonOptions);
+        var json = JsonSerializer.Serialize(new Envelope { Version = message.AggregateOnly ? 3 : message.WorkGeneration is null ? 1 : 2, Step = message }, JsonOptions);
         if (Encoding.UTF8.GetByteCount(json) > 4096) throw new ArgumentException("Step queue message exceeds 4096 bytes.");
         return json;
     }
@@ -64,7 +64,8 @@ public sealed class StorageQueueStepQueue : IStepQueue, IQueuedStepConsumer
     {
         if (Encoding.UTF8.GetByteCount(json) > 4096) throw new ArgumentException("Step queue message exceeds 4096 bytes.");
         var envelope = JsonSerializer.Deserialize<Envelope>(json, JsonOptions);
-        if (envelope is not { Version: 1 or 2, Step: not null } || (envelope.Version == 2) != (envelope.Step.WorkGeneration is not null))
+        if (envelope is not { Version: 1 or 2 or 3, Step: not null } || (envelope.Version == 2) != (envelope.Step.WorkGeneration is not null)
+            || (envelope.Version == 3) != envelope.Step.AggregateOnly)
             throw new ArgumentException("Unsupported or incomplete step queue message.");
         Validate(envelope.Step);
         return envelope.Step;
@@ -73,6 +74,8 @@ public sealed class StorageQueueStepQueue : IStepQueue, IQueuedStepConsumer
     private static void Validate(StepMessage message)
     {
         ArgumentNullException.ThrowIfNull(message);
+        if (message.AggregateOnly && (message.WorkGeneration is not null || message.WorkOrdinal is not null))
+            throw new ArgumentException("An aggregation continuation cannot be an item hint.");
         SafePath.Id(message.ExecutionId);
         if ((message.WorkGeneration is null) != (message.WorkOrdinal is null) || message.WorkOrdinal is < 0 or >= 100000)
             throw new ArgumentException("Incomplete or invalid distributed item identity.");

@@ -78,6 +78,18 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
         }
         await Initialize(state, step.Work, claim, token);
         await PublishPage(message, step.Work, 0, PageSize, token);
+        step.Work.DispatchCursor = Math.Min(PageSize, step.Work.Stage.ItemCount);
+        await claim.ValidateAsync(token); await claim.SaveAsync(state);
+    }
+
+    internal async Task DispatchNextAsync(ExecutionState state, StepMessage completed, CancellationToken token)
+    {
+        if (!Active(state) || Step(state, completed)?.Work is not { Admitted: true, Expanded: true } work ||
+            work.Stage.Generation != completed.WorkGeneration) return;
+        if (work.DispatchCursor < 0 || work.DispatchCursor > work.Stage.ItemCount) throw new WorkJournalException("Invalid stage dispatch cursor.");
+        if (work.DispatchCursor == work.Stage.ItemCount) return;
+        await PublishPage(completed, work, work.DispatchCursor, 1, token);
+        work.DispatchCursor++; // Indexed recovery handles any lost publication.
     }
 
     private async Task Initialize(ExecutionState state, DistributedStepState work, IExecutionClaim claim, CancellationToken token)
@@ -124,7 +136,7 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
     }
 
     /// <summary>One bounded page under the parent claim; corrupt stages cannot stall their siblings.</summary>
-    internal async Task RefreshAsync(ExecutionState state, IExecutionClaim claim, CancellationToken token)
+    internal async Task RefreshAsync(ExecutionState state, IExecutionClaim claim, CancellationToken token, int pageBudget = PageSize)
     {
         if (!Active(state)) return;
         var steps = state.Sources.Select(s => new StepMessage { Type = StepType.Source, StepName = s.Key })
@@ -132,15 +144,16 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
             .Where(m => Step(state, m)?.Work is not null).ToArray();
         if (steps.Length == 0) return;
         var start = Math.Clamp(state.WorkRecoveryCursor, 0, steps.Length - 1);
-        var visited = 0; var remaining = PageSize;
+        if (pageBudget is < 1 or > PageSize) throw new ArgumentOutOfRangeException(nameof(pageBudget));
+        var visited = 0; var remaining = pageBudget;
         for (; visited < steps.Length && remaining > 0; visited++)
         {
             token.ThrowIfCancellationRequested(); await claim.ValidateAsync(token);
             var message = steps[(start + visited) % steps.Length];
             message.ExecutionId = state.ExecutionId; message.PipelineId = state.PipelineId ?? state.PipelineName;
             var step = Step(state, message)!; var work = step.Work!;
-            remaining--;
             if (step.Status == ExecutionStatus.Completed) continue;
+            remaining--;
             try
             {
                 if (work.Stage.ExecutionId != state.ExecutionId || work.Stage.RevisionId != state.RevisionId || (!work.Expanded && work.Stage.ItemCount != 1))
@@ -320,9 +333,26 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
             if (step.Status != ExecutionStatus.Running) step.CompletedAt = Now;
             return;
         }
+        await AggregateStage(state, message, step, work, count, token);
+    }
+
+    internal async Task AggregateAsync(ExecutionState state, StepMessage message, IExecutionClaim claim, CancellationToken token)
+    {
+        if (!Active(state) || Step(state, message) is not { Work: { Expanded: true } work } step) return;
+        if (work.Stage.ExecutionId != state.ExecutionId || work.Stage.RevisionId != state.RevisionId)
+            throw new WorkJournalException("Aggregation stage identity differs from its parent.");
+        await claim.ValidateAsync(token);
+        await AggregateStage(state, message, step, work, PageSize, token);
+        await claim.ValidateAsync(token); await claim.SaveAsync(state);
+    }
+
+    private async Task AggregateStage(ExecutionState state, StepMessage message, StepState step, DistributedStepState work, int count, CancellationToken token)
+    {
+        if (work.ScanHasFailure) return;
         try
         {
             var aggregate = new WorkStageResults(journal, documents);
+            var previous = work.AggregatedItems;
             if (await aggregate.AdvanceAsync(work, step, message.Type, message.StepName, count, token))
             {
                 step.Status = ExecutionStatus.Completed; step.CompletedAt = Now;
@@ -331,6 +361,15 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
                     Complete = true, Scanned = work.Stage.ItemCount, Completed = work.Stage.ItemCount };
                 if (step is SourceStepState source) { source.FanOutCount = work.Stage.ItemCount; source.FanOutCompleted = work.Stage.ItemCount; }
                 if (step is OutputStepState output) { output.ItemCount = work.Stage.ItemCount; output.DeliveredCount = work.DeliveredCount; }
+            }
+            else if (work.AggregatedItems > previous || work.AggregatedItems == work.Stage.ItemCount)
+            {
+                // Continue only when result publication can make progress. These
+                // hints do no recovery scan and never republish pending items.
+                // Loss is safe: indexed recovery resumes the durable prefix.
+                try { await queue.EnqueueAsync(new() { ExecutionId = state.ExecutionId, PipelineId = state.PipelineId ?? state.PipelineName,
+                    StepName = message.StepName, Type = message.Type, AggregateOnly = true }); }
+                catch { }
             }
         }
         catch (FanOutLimitException error)

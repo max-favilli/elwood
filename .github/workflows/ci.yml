@@ -91,7 +91,7 @@ jobs:
         run: dotnet test dotnet/tests/Elwood.Pipeline.Redis.Tests --filter "Category=Integration" --verbosity normal
       - name: Installed distributed host (Redis and Azurite)
         env:
-          ELWOOD_CAPACITY_REPORT_DIR: artifacts/distributed-capacity
+          ELWOOD_CAPACITY_REPORT_DIR: ${{ github.workspace }}/artifacts/distributed-capacity
         run: dotnet test dotnet/tests/Elwood.Runtime.Hosting.Tests --filter "Category=Integration" --verbosity normal
       - uses: actions/upload-artifact@v5
         if: always()

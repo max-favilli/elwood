@@ -115,6 +115,7 @@ public static class AzureRuntimeServices
         services.AddSingleton<ISecretProvider>(new EnvironmentSecretProvider());
         services.AddSingleton(sp => new AzureRetentionReadiness(sp.GetRequiredService<TokenCredential>(), storageResourceId,
             sp.GetRequiredService<BlobServiceClient>(), stateContainer, documentContainer, outputContainer, catalogContainer, scope));
+        services.AddSingleton(sp => new RetentionPolicyVerifier(sp.GetRequiredService<AzureRetentionReadiness>().CheckAsync));
         services.AddSingleton<BlobRetentionLedger>(sp =>
         {
             var container = sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(catalogContainer);
@@ -132,7 +133,7 @@ public static class AzureRuntimeServices
         });
         services.AddSingleton(sp => new RetentionAdmissionGuard(async token =>
         {
-            await sp.GetRequiredService<AzureRetentionReadiness>().CheckAsync(token);
+            await sp.GetRequiredService<RetentionPolicyVerifier>().VerifyAsync(token);
             if (!(await sp.GetRequiredService<BlobOutputRetention>().HealthAsync(token)).Healthy)
                 throw new InvalidOperationException("Retention health is unverified, failed or overdue. Repair cleanup before accepting further work.");
         }));

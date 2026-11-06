@@ -88,16 +88,16 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
             services.AddAzureDurableRuntime(config);
             services.AddSingleton(blobs).AddSingleton(table).AddSingleton<IConnectionMultiplexer>(cache);
             services.AddSingleton<IStepQueue>(new StorageQueueStepQueue(queueClient));
+            services.AddSingleton(new RetentionPolicyVerifier(_ => Task.CompletedTask));
             services.AddSingleton(sp => new BlobOutputRetention(sp.GetRequiredService<BlobRetentionLedger>(), uri =>
             {
                 var parts = new BlobUriBuilder(uri);
                 return blobs.GetBlobContainerClient(parts.BlobContainerName).GetBlobClient(parts.BlobName);
             }));
-            var host = services.BuildServiceProvider();
             // Azurite cannot simulate ARM lifecycle/RBAC/versioning. No production
-            // configuration can select this replacement or bypass those checks.
-            host.GetRequiredService<BlobRetentionLedger>().VerifyAdmissionAsync = _ => Task.CompletedTask;
-            return host;
+            // configuration selects the above probe replacement. Runtime health,
+            // initialized ledgers, finite quotas and cleanup stay enabled.
+            return services.BuildServiceProvider();
         }
         await using var first = Host(); await using var second = Host();
         Assert.True(first.GetRequiredService<DurableRuntime>().SupportsDistributedWork);
@@ -105,6 +105,7 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         Assert.IsType<BlobWorkCapacity>(first.GetRequiredService<IWorkCapacity>());
         var retention = first.GetRequiredService<BlobOutputRetention>();
         await retention.SweepAsync(); Assert.True((await retention.HealthAsync()).Healthy);
+        await using var maintenance = new Maintenance(retention);
         var content = new PipelineContent { Yaml = $$"""
             name: orders
             mode: async
@@ -146,13 +147,22 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         var lost = false;
         for (var round = 0; round < 400; round++)
         {
+            if (Environment.GetEnvironmentVariable("ELWOOD_CAPACITY_REPORT_DIR") is { Length: > 0 } progressDirectory)
+            {
+                Directory.CreateDirectory(progressDirectory);
+                await File.WriteAllTextAsync(Path.Combine(progressDirectory, $"progress-{itemCount}.json"), JsonSerializer.Serialize(new
+                { round, completedCalls = calls.Count, itemCount, seconds = watch.Elapsed.TotalSeconds, sdkRequests = transactions.Count - startedRequests }));
+            }
             await Task.WhenAll(Enumerable.Range(0, 8).Select(i => Consume(i % 2 == 0 ? first : second)));
             if (!lost && calls.Count > 0)
             {
                 await cache.GetServer(cache.GetEndPoints().Single()).FlushDatabaseAsync(); lost = true;
             }
             await second.GetRequiredService<DurableRuntime>().Runner().RecoverAsync(timeout.Token);
-            if ((await states.GetExecutionAsync(id))!.Status == ExecutionStatus.Completed) break;
+            var observed = (await states.GetExecutionAsync(id))!;
+            if (observed.Status == ExecutionStatus.Completed) break;
+            Assert.True(observed.Status is ExecutionStatus.Running or ExecutionStatus.Retrying,
+                $"Execution stopped after {calls.Count}/{itemCount} calls: {observed.Status}; {string.Join("; ", observed.Errors)}");
         }
         var state = (await states.GetExecutionAsync(id))!;
         Assert.Equal(ExecutionStatus.Completed, state.Status); Assert.True(lost);
@@ -185,16 +195,36 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         Assert.Null(await states.GetExecutionAsync(id));
         await foreach (var blob in blobs.GetBlobContainerClient("states").GetBlobsAsync(prefix: "elwood/work-journal/" + id + "/"))
             Assert.Fail("An expired execution left journal blob " + blob.Name);
+        await foreach (var blob in blobs.GetBlobContainerClient("documents").GetBlobsAsync(prefix: "elwood/exec/" + id + "/"))
+            Assert.Fail("An expired execution left document " + blob.Name);
+        Assert.Equal(0, (await first.GetRequiredService<BlobRetentionLedger>().CapacityAsync()).ReservedWorkItems);
         Assert.All(await first.GetRequiredService<RedisWorkJournalProjection>().ReadPageAsync(stage, 0), Assert.Null);
 
         // Missing initialized state must fail closed, including after restart.
+        await maintenance.DisposeAsync();
         await control.GetBlobClient("elwood/retention/00.json").DeleteAsync();
         await using var restarted = Host();
         await Assert.ThrowsAsync<InvalidOperationException>(() => restarted.GetRequiredService<BlobRetentionLedger>().CapacityAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => restarted.GetRequiredService<RetentionAdmissionGuard>().CheckAsync(default));
     }
 
     private sealed class RequestCounter : HttpPipelineSynchronousPolicy
     { private long _count; public long Count => Interlocked.Read(ref _count); public override void OnSendingRequest(HttpMessage message) => Interlocked.Increment(ref _count); }
+
+    private sealed class Maintenance : IAsyncDisposable
+    {
+        private readonly CancellationTokenSource _stop = new(); private readonly Task _task; private bool _disposed;
+        public Maintenance(BlobOutputRetention retention) => _task = Task.Run(async () =>
+        {
+            try
+            {
+                while (true) { await Task.Delay(TimeSpan.FromMinutes(1), _stop.Token); await retention.SweepAsync(_stop.Token); }
+            }
+            catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
+        });
+        public async ValueTask DisposeAsync()
+        { if (_disposed) return; _disposed = true; _stop.Cancel(); try { await _task; } finally { _stop.Dispose(); } }
+    }
 
     private sealed class NoCloudCredential : TokenCredential
     {

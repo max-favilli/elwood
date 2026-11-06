@@ -129,8 +129,10 @@ public sealed partial class AsyncExecutor
             var observed = await _states.GetExecutionAsync(message.ExecutionId);
             if (observed?.WorkProfile is null) return; // Never reinterpret an item hint as an ordinary step.
             RequireDistributed(observed);
-            await _distributed!.ExecuteAsync(message, cancellationToken);
-            await RefreshDistributedAsync(message.ExecutionId, cancellationToken);
+            // A duplicate/busy hint has made no durable progress. Scanning and
+            // republishing a full page for each one amplifies queue traffic.
+            if (await _distributed!.ExecuteAsync(message, cancellationToken))
+                await RefreshDistributedAsync(message, cancellationToken);
             return;
         }
         await using var claim = await _states.TryClaimAsync(message.ExecutionId, cancellationToken);
@@ -159,6 +161,13 @@ public sealed partial class AsyncExecutor
         cancellationToken = executionBudget.Token;
         var step = Step(state, message);
         if (step is null || step.Status == ExecutionStatus.Completed) return;
+        if (message.AggregateOnly)
+        {
+            if (state.WorkProfile is null || step.Work is null) return;
+            await _distributed!.AggregateAsync(state, message, claim, cancellationToken);
+            if (state.Status is ExecutionStatus.Running or ExecutionStatus.Retrying) await Advance(state, await Load(state), claim);
+            return;
+        }
         if (step.Work is not null)
         {
             await _distributed!.RefreshAsync(state, claim, cancellationToken);
@@ -362,8 +371,9 @@ public sealed partial class AsyncExecutor
         if (state.WorkProfile is not null)
             throw new RecoveryConflictException("Distributed item recovery and replay require the item-aware operator endpoints (M7.5).");
     }
-    private async Task RefreshDistributedAsync(string id, CancellationToken token)
+    private async Task RefreshDistributedAsync(StepMessage completed, CancellationToken token)
     {
+        var id = completed.ExecutionId;
         await using var claim = await _states.TryClaimAsync(id, token);
         if (claim is null) return; // The durable recovery index retries parent publication.
         await claim.ValidateAsync(token);
@@ -372,7 +382,8 @@ public sealed partial class AsyncExecutor
         RequireDistributed(state);
         if (_distributed is not null) await _distributed.RecoverCommandAsync(state, claim, token);
         if (await StopExpiredLifetime(state, claim)) return;
-        await _distributed!.RefreshAsync(state, claim, token);
+        await _distributed!.DispatchNextAsync(state, completed, token);
+        await _distributed!.RefreshAsync(state, claim, token, pageBudget: 1);
         if (state.Status is ExecutionStatus.Running or ExecutionStatus.Retrying) await Advance(state, await Load(state), claim);
     }
 

@@ -1,5 +1,8 @@
 namespace Elwood.Runtime.Api;
 
+/// <summary>Native policy probe boundary; embedded test hosts can replace the ARM probe without bypassing runtime health.</summary>
+public sealed record RetentionPolicyVerifier(Func<CancellationToken, Task> VerifyAsync);
+
 /// <summary>Bounded health cache shared by admission on one worker; cleanup never depends on this guard.</summary>
 public sealed class RetentionAdmissionGuard(Func<CancellationToken, Task> verify, TimeProvider? timeProvider = null)
 {
