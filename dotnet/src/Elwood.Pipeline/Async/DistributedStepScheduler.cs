@@ -88,8 +88,16 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
             work.Stage.Generation != completed.WorkGeneration) return;
         if (work.DispatchCursor < 0 || work.DispatchCursor > work.Stage.ItemCount) throw new WorkJournalException("Invalid stage dispatch cursor.");
         if (work.DispatchCursor == work.Stage.ItemCount) return;
-        await PublishPage(completed, work, work.DispatchCursor, 1, token);
-        work.DispatchCursor++; // Indexed recovery handles any lost publication.
+        try
+        {
+            await PublishPage(completed, work, work.DispatchCursor, 1, token);
+            work.DispatchCursor++; // Indexed recovery handles any lost publication.
+        }
+        catch (Exception) when (token.IsCancellationRequested) { throw; }
+        catch (Exception error)
+        {
+            work.RecoveryIssue = "Item dispatch requires attention (" + error.GetType().Name + ").";
+        }
     }
 
     private async Task Initialize(ExecutionState state, DistributedStepState work, IExecutionClaim claim, CancellationToken token)
@@ -136,7 +144,8 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
     }
 
     /// <summary>One bounded page under the parent claim; corrupt stages cannot stall their siblings.</summary>
-    internal async Task RefreshAsync(ExecutionState state, IExecutionClaim claim, CancellationToken token, int pageBudget = PageSize)
+    internal async Task RefreshAsync(ExecutionState state, IExecutionClaim claim, CancellationToken token, int pageBudget = PageSize,
+        StepMessage? completed = null)
     {
         if (!Active(state)) return;
         var steps = state.Sources.Select(s => new StepMessage { Type = StepType.Source, StepName = s.Key })
@@ -144,6 +153,10 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
             .Where(m => Step(state, m)?.Work is not null).ToArray();
         if (steps.Length == 0) return;
         var start = Math.Clamp(state.WorkRecoveryCursor, 0, steps.Length - 1);
+        // A completion publishes its own stage promptly. Periodic recovery keeps
+        // its independent round-robin cursor so damaged siblings cannot starve it.
+        var completedIndex = completed is null ? -1 : Array.FindIndex(steps, s => s.Type == completed.Type && s.StepName == completed.StepName);
+        if (completedIndex >= 0) start = completedIndex;
         if (pageBudget is < 1 or > PageSize) throw new ArgumentOutOfRangeException(nameof(pageBudget));
         var visited = 0; var remaining = pageBudget;
         for (; visited < steps.Length && remaining > 0; visited++)
@@ -161,6 +174,14 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
                 await Initialize(state, work, claim, token);
                 if (work.Expanded)
                 {
+                    // An out-of-order failure must be visible immediately, without
+                    // pretending it was part of the sequential summary scan.
+                    if (completedIndex >= 0 && visited == 0 && completed!.WorkOrdinal is { } ordinal && ordinal != work.ItemCursor)
+                    {
+                        var completedItem = (await journal.ReadPageAsync(work.Stage, ordinal, 1, token)).Single();
+                        if (completedItem.Status is "Failed" or "AwaitingReview")
+                            await PublishFailure(state, message, step, work, completedItem, token);
+                    }
                     var count = Math.Min(remaining + 1, Math.Max(1, work.Stage.ItemCount));
                     remaining -= count - 1;
                     await RefreshExpanded(state, message, step, work, count, token);
@@ -299,19 +320,8 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
                 work.StatusScan?.Observe(item.Status, journal.Time.GetUtcNow()); observed = true;
                 if (item.Status is "Failed" or "AwaitingReview")
                 {
-                    if (item.CheckpointReference is not null)
-                    {
-                        var checkpoint = JsonSerializer.Deserialize<ExecutionState>(await journal.ReadDocument(item.CheckpointReference, item.CheckpointSha256!, token))
-                            ?? throw new WorkJournalException("Failed item checkpoint is missing.");
-                        if (checkpoint.ExecutionId != state.ExecutionId || checkpoint.RevisionId != state.RevisionId || checkpoint.PipelineSnapshotRef != work.Stage.ManifestReference)
-                            throw new WorkJournalException("Failed item checkpoint has the wrong parent identity.");
-                        var failedStep = Step(checkpoint, message) ?? throw new WorkJournalException("Failed item step is missing.");
-                        foreach (var diagnostic in failedStep.Diagnostics.Take(Math.Max(0, 64 - step.Diagnostics.Count)))
-                        { diagnostic.ItemOrdinal = ordinal; step.Diagnostics.Add(diagnostic); }
-                    }
+                    await PublishFailure(state, message, step, work, item, token);
                     work.ScanHasFailure = true; work.ScanHasReview |= item.Status == "AwaitingReview";
-                    step.OutcomeUncertain |= item.Uncertain;
-                    step.Errors = [$"Item {ordinal}: {item.Diagnostic ?? "Distributed item failed."}"];
                 }
                 else
                 {
@@ -334,6 +344,24 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
             return;
         }
         await AggregateStage(state, message, step, work, count, token);
+    }
+
+    private async Task PublishFailure(ExecutionState state, StepMessage message, StepState step, DistributedStepState work,
+        WorkJournalItem item, CancellationToken token)
+    {
+        if (item.CheckpointReference is not null)
+        {
+            var checkpoint = JsonSerializer.Deserialize<ExecutionState>(await journal.ReadDocument(item.CheckpointReference, item.CheckpointSha256!, token))
+                ?? throw new WorkJournalException("Failed item checkpoint is missing.");
+            if (checkpoint.ExecutionId != state.ExecutionId || checkpoint.RevisionId != state.RevisionId || checkpoint.PipelineSnapshotRef != work.Stage.ManifestReference)
+                throw new WorkJournalException("Failed item checkpoint has the wrong parent identity.");
+            var failedStep = Step(checkpoint, message) ?? throw new WorkJournalException("Failed item step is missing.");
+            step.Diagnostics.RemoveAll(d => d.ItemOrdinal == item.Ordinal);
+            foreach (var diagnostic in failedStep.Diagnostics.Take(Math.Max(0, 64 - step.Diagnostics.Count)))
+            { diagnostic.ItemOrdinal = item.Ordinal; step.Diagnostics.Add(diagnostic); }
+        }
+        step.OutcomeUncertain |= item.Uncertain;
+        step.Errors = [$"Item {item.Ordinal}: {item.Diagnostic ?? "Distributed item failed."}"];
     }
 
     internal async Task AggregateAsync(ExecutionState state, StepMessage message, IExecutionClaim claim, CancellationToken token)

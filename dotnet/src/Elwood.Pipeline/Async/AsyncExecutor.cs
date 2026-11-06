@@ -383,7 +383,7 @@ public sealed partial class AsyncExecutor
         if (_distributed is not null) await _distributed.RecoverCommandAsync(state, claim, token);
         if (await StopExpiredLifetime(state, claim)) return;
         await _distributed!.DispatchNextAsync(state, completed, token);
-        await _distributed!.RefreshAsync(state, claim, token, pageBudget: 1);
+        await _distributed!.RefreshAsync(state, claim, token, pageBudget: 1, completed: completed);
         if (state.Status is ExecutionStatus.Running or ExecutionStatus.Retrying) await Advance(state, await Load(state), claim);
     }
 
