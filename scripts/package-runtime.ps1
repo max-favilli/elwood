@@ -15,7 +15,12 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $projects = [ordered]@{ 'functions' = 'Elwood.Runtime.Azure.Functions'; 'api' = 'Elwood.Runtime.Api'; 'ingress' = 'Elwood.Runtime.Azure.Ingress' }
 foreach ($entry in $projects.GetEnumerator()) {
     $publish = Join-Path $output "publish-$($entry.Key)"
-    & dotnet publish (Join-Path $root "dotnet/src/$($entry.Value)") -c Release --no-self-contained "-p:Version=$Version" -o $publish --nologo -v:q
+    $project = Join-Path $root "dotnet/src/$($entry.Value)/$($entry.Value).csproj"
+    $projectVersion = (& dotnet msbuild $project -getProperty:Version).Trim()
+    if ($LASTEXITCODE -ne 0 -or $projectVersion -ne $Version) { throw "Requested version does not match $($entry.Value): $projectVersion." }
+    # Do not override Version globally: Core and other unchanged dependencies
+    # intentionally keep their own package/assembly versions.
+    & dotnet publish $project -c Release --no-self-contained -o $publish --nologo -v:q
     if ($LASTEXITCODE -ne 0) { throw "Publishing $($entry.Key) failed." }
     $forbidden = Get-ChildItem -LiteralPath $publish -Recurse -File | Where-Object { $_.Name -in @('secrets.json','local.settings.json') -or $_.Extension -in @('.pfx','.pem') -or $_.FullName -match '[\\/]\.elwood[\\/]' }
     if ($forbidden) { throw "Publishing $($entry.Key) included a private configuration/certificate file. Inspect the local output; nothing was uploaded." }
@@ -24,6 +29,7 @@ foreach ($entry in $projects.GetEnumerator()) {
             if (!(Test-Path -LiteralPath (Join-Path $publish $required))) { throw "Functions package is missing $required." }
         }
     }
+    Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $publish 'LICENSE')
     # ZipFile includes the hidden .azurefunctions directory on Unix; Compress-Archive does not.
     [IO.Compression.ZipFile]::CreateFromDirectory($publish, (Join-Path $output "elwood-$($entry.Key)-$Version.zip"))
 }
