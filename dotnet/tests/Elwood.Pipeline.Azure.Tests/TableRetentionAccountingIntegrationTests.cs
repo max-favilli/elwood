@@ -34,11 +34,11 @@ public sealed class TableRetentionAccountingIntegrationTests(AzuriteFixture fixt
             Assert.Equal(1, (await first.ReadQuotaAsync()).GetInt64("objects"));
             Assert.Single((await first.QueryPageAsync("h|", null, 256, null)).Rows);
 
-            var original = await first.ReadAsync("lost"); var operation = Guid.NewGuid().ToString("N");
+            var original = await first.ReadAsync("lost"); var operation = Guid.NewGuid().ToString("N"); var lostEntry = Entry("lost");
             loss.Enabled = true;
-            Assert.Equal(TableAccountingCommit.Committed, await first.CommitAsync("lost", original, Entry("lost"), operation, now));
+            Assert.Equal(TableAccountingCommit.Committed, await first.CommitAsync("lost", original, lostEntry, operation, now));
             Assert.False(loss.Enabled);
-            Assert.Equal(TableAccountingCommit.Committed, await first.CommitAsync("lost", original, Entry("lost"), operation, now));
+            Assert.Equal(TableAccountingCommit.Committed, await first.CommitAsync("lost", original, lostEntry, operation, now));
             Assert.Equal(2, (await first.ReadQuotaAsync()).GetInt64("objects"));
 
             for (var i = 0; i < 300; i++)
