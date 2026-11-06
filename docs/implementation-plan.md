@@ -6,6 +6,8 @@ Current task-by-task progress is tracked in the [master checklist and WBS](maste
 
 The dated implementation notes below record what was true at each checkpoint. Their earlier statements about unimplemented features, pending tests or unpushed commits are historical; use the current status and master checklist for remaining work.
 
+Eagle's confirmed 6 November operating envelope adds explicit M7 capacity gates: prompt-start autoscaling, 100 MB actual trigger bodies, 200 MB structured payloads, 4 GB binary assets and 40-minute workflows. These exceed the current profiles. The [Eagle capacity WBS](eagle-capacity-plan.md) separates scalable accounting, streamed file handling, structured transformation memory, scheduling and consumer-native acceptance. The DSL's behavior remains unchanged.
+
 This plan covers the backend and the sibling `elwood-portal` repository. Each milestone ends with a demonstrable behavior and focused automated checks. Milestones describe proposed delivery order; they do not expand the agreed product scope.
 
 ## Git baseline before milestone implementation on 6 October 2026

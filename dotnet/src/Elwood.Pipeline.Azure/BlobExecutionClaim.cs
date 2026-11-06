@@ -160,6 +160,36 @@ public sealed class BlobExecutionClaim : IExecutionClaim
 
     public Task DeleteAsync() => DeleteAsync(CancellationToken.None);
 
+    // Streaming artifacts reuse the same renewal/deadline implementation. Each
+    // block carries the server lease, so an expired writer cannot stage blocks
+    // after cleanup has deleted the placeholder, even if local cancellation lags.
+    internal async Task StagePayloadBlockAsync(string id, ReadOnlyMemory<byte> bytes, CancellationToken token)
+    {
+        ThrowIfLost();
+        using var request = CancellationTokenSource.CreateLinkedTokenSource(token, OwnershipLost);
+        request.CancelAfter(_requestBudget);
+        using var stream = BinaryData.FromBytes(bytes).ToStream();
+        await _blob.GetParentBlobContainerClient().GetBlockBlobClient(_blob.Name).StageBlockAsync(id, stream,
+            new BlockBlobStageBlockOptions { Conditions = new BlobRequestConditions { LeaseId = _lease.LeaseId } }, request.Token);
+        ThrowIfLost();
+    }
+
+    internal async Task<BlobContentInfo> CommitPayloadBlocksAsync(IReadOnlyList<string> blocks, ETag placeholder,
+        IDictionary<string, string> metadata, string contentType, CancellationToken token)
+    {
+        ThrowIfLost();
+        using var request = CancellationTokenSource.CreateLinkedTokenSource(token, OwnershipLost);
+        request.CancelAfter(_requestBudget);
+        var result = await _blob.GetParentBlobContainerClient().GetBlockBlobClient(_blob.Name).CommitBlockListAsync(blocks,
+            new CommitBlockListOptions
+            {
+                Conditions = new BlobRequestConditions { LeaseId = _lease.LeaseId, IfMatch = placeholder },
+                Metadata = metadata, HttpHeaders = new BlobHttpHeaders { ContentType = contentType }
+            }, request.Token);
+        ThrowIfLost();
+        return result.Value;
+    }
+
     internal async Task DeleteAsync(CancellationToken cancellationToken)
     {
         ThrowIfLost();

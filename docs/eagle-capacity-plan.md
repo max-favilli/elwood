@@ -13,15 +13,32 @@ Use the owner's rounded figures as design inputs, not as a measured Elwood capac
 - About 625,000 events and 1.1 million output records in a recent 30-day window.
 - About 61,000 source/payload rows on a median day, including trigger and child payloads; a maximum above 600,000.
 - Individual executions exceeding 6,600 outputs or 2,100 pulled inputs. The next full batch check must cover at least 7,000 expanded items.
-- Thirty-day history by default, configurable per pipeline/destination. Bursts should produce bounded backlog/backpressure instead of turning healthy business operations into failed executions.
+- Thirty-day history by default, configurable per pipeline/destination. Prompt processing under load is the normal operating requirement; bounded backlog/backpressure is an emergency protection when capacity or a downstream service is unavailable.
+- Processing starts milliseconds after receipt in Eagle, with autoscaling for peaks. Individual integrations take about 200 ms to 40 minutes end to end. Measure upload, durable acceptance, first processing and completion separately; a 100 MB request cannot be fully accepted before it has arrived.
+- SAP sends actual trigger bodies up to **100 MB**, not merely references to external files.
+- JSON, XML, CSV, tabular and text payloads rarely reach **150–200 MB**. Binary assets (images, videos and other files) can reach **4 GB** and need movement, naming, compression and image resizing. These are distinct processing paths, not a requirement to build a 4 GB JSON tree.
 
-The exact Elwood item count requires the first pilot's YAML and cannot be obtained by summing all these overlapping production counters. Body sizes, arrival rates within the burst day and acceptable queue delay are separate sizing inputs.
+The exact Elwood item count requires the first pilot's YAML and cannot be obtained by summing all these overlapping production counters. Per-second/minute burst arrival rates, representative transformation shapes and the requested binary operations remain verification inputs. Whole-document structured operations retain their DSL semantics; do not assume independent record processing is equivalent to joins, sorting or grouping. Byte limits in implementation/tests use explicit MiB/GiB; the owner's MB/GB figures above are workload observations, not inferred binary units.
 
 ## Why the existing profile is insufficient
 
 The fixed 64-partition Blob ledger holds at most 131,072 accounting objects. A completed 2,048-item fixture registered 42,707 objects. This covers a bounded functional pilot, not the production retention envelope above. Increasing the JSON ledger beyond its 4 MiB bound, reducing history silently or relabeling events as larger work units would not solve the requirement.
 
-The 2,048-item delivery/recovery checks completed, but both full tests exceeded 60 minutes during cleanup, including the bounded-parallel deletion correction at `52d1904`. That run processed the items in 2,998 seconds with 943,148 SDK requests and 42,762 accounting objects. Those results remain useful regression evidence; they do not establish Eagle's production throughput or the required retained cardinality.
+The bounded maintenance changes passed a complete 2,048-item delivery/recovery/physical-cleanup run at `7061e7b`: processing took 1,820.503 seconds and cleanup 371.884 seconds. The subsequent run at `acf2694` again reached the 60-minute test deadline during cleanup after processing took 3,285.543 seconds. Preserve both observations in [the evidence](m7-pilot-evidence.md); a single pass does not establish consistent throughput, Eagle's production latency or the required retained cardinality.
+
+### Payload and hosting audit — 6 November 2026
+
+| Boundary | Current implementation | Required work |
+|---|---|---|
+| Ordinary HTTP trigger | Reads the entire body into a string, then parses JSON | Bounded streamed acceptance of a real 100 MB body, raw-byte hash, declared source format, retry/idempotency and disconnect recovery; no acknowledgement before durable acceptance |
+| Source/destination connectors | String content; HTTP/Blob reads accumulate in memory; HTTP source default 10 MiB and maximum 128 MiB | Streamed binary transfers and references; separately measured 200 MB structured parsing/evaluation and response serialization |
+| Durable documents/checkpoints | Documents default 32 MiB (128 MiB for `files-25m`); checkpoint bound 4 MiB; selected fan-out aggregate bound 16 MiB | Keep checkpoints and item context small; reference large payloads and stage data; indexed/streamed fan-out selection and aggregation instead of copying a large message per item |
+| Execution hosting | Shipped Functions timeout is five minutes; budget profile uses three instances and four queue calls per host | Verify a 40-minute workflow across checkpoints and worker restart; choose an appropriate worker for any indivisible long call/transformation; separate short/large workloads and size warm capacity/scale limits |
+| Binary operations | No enabled pipeline path for 4 GB transfer/compression/resize | Explicit file-operation contract, byte/pixel/expanded-output/time limits, immutable output receipts and replay safety; provider-neutral interfaces with measured worker memory/temp-storage needs |
+
+Azure Functions documents a 210 MB HTTP request maximum, a roughly 230-second HTTP response limit, Flex instance sizes up to 4 GiB, and only 0.8 GB temporary storage on Flex. Warm instances reduce startup delays; scale-out is not an instantaneous latency guarantee. These constraints mean neither a 40-minute synchronous HTTP response nor spooling a 4 GB file onto default Flex local disk is an appropriate default. Select and validate the consumer hosting profile after measuring actual transformations; no expensive tier is implicitly approved. [Microsoft hosting limits](https://learn.microsoft.com/en-us/azure/azure-functions/functions-scale).
+
+Internal queue notifications continue carrying IDs/references; they do not carry the 100 MB trigger body or multi-GB asset. Azure Storage Queue messages are limited to 64 KiB. [Microsoft queue limits](https://learn.microsoft.com/en-us/azure/storage/queues/scalability-targets).
 
 ## Implementation direction
 
@@ -44,6 +61,13 @@ Select the new provider through an explicit installation layout/profile. Keep th
 - [ ] Preserve late-write ownership, item/attempt reservations, terminal-checkpoint headroom and independent output retention.
 - [ ] Add scheduling/ingress backpressure with no duplicate deliveries or spurious terminal failures.
 - [ ] Wire the provider into installed API/Functions/ingress registration, explicit bootstrap and Bicep settings.
+- [ ] Complete streamed payload references, ownership/cleanup and bounded reads for large trigger bodies and binary assets. The first adapter package below is not host activation.
+  - [x] Add the stream/reference contract and Azure storage implementation; local generated 4 GiB, quota, loss/cancellation, ownership and cleanup regressions pass.
+  - [ ] Verify multi-block transfer, empty payloads and partial-upload cleanup against the real SDK/Azurite service in CI.
+- [ ] Wire 100 MB durable trigger acceptance, declared-format parsing, streamed HTTP/Blob binary sources and destinations, and metadata-only history/portal inspection.
+- [ ] Verify 200 MB structured transformations, joins/grouping/sorting where required, fan-out context/aggregation, memory admission and restart behavior without changing DSL semantics.
+- [ ] Specify and implement the required binary move/name/compress/resize operations with bounded input/output, resource budgets, receipts and retention; prove a 4 GB transfer end to end.
+- [ ] Implement and measure prompt-start scheduling, autoscale/warm capacity, mixed small/large workload isolation and 40-minute workflow recovery. Record p50/p95/p99 upload-to-accept and accept-to-start latency, instantaneous arrival rates and downstream limits.
 - [ ] Prove operation and memory bounds at production-scale metadata cardinality; exercise concurrency, throttles, lost replies, missing control rows and cleanup interruption against SDK transports and Azurite.
 - [ ] Complete an installed batch of at least 7,000 items, recovery, selected retries and physical retention. Measure normal and duplicate/burst delivery separately.
 - [ ] Publish measured limits, deployment choices, cost-model inputs and updated versioned consumer handoffs.
@@ -68,4 +92,12 @@ No release is Eagle-production-ready while the required implementation and verif
 
 The installer-only empty-partition initializer refuses existing orphan rows, and normal admission refuses missing or incompatible controls. The eventual outer layout marker must additionally prevent reinitializing a previously ready empty partition whose quota row was deleted. This primitive does not replace that installation fence.
 
-The initial local regressions exercise transaction conflicts, lost replies, generation replacement, missing controls, bounded queries and the parent-close fence. The real SDK/Azurite transaction regression and installed HTTPS smoke pass at `7061e7b` in [CI 42244834223](https://github.com/max-favilli/elwood/actions/runs/42244834223); the full capacity run is separate. The first service test correctly rejected a fixture retry that accidentally generated a new ownership generation; the corrected fixture reuses the exact original request. Whole-provider expiry, retained-cardinality checks and the installed 7,000-item gate remain open. Also include reserved checkpoint bytes in sizing: the existing parent reservation is three 4 MiB slots per execution, a conservative logical reservation rather than a measurement of bytes actually stored or billed.
+The initial local regressions exercise transaction conflicts, lost replies, generation replacement, missing controls, bounded queries and the parent-close fence. The real SDK/Azurite transaction regression and installed HTTPS smoke pass at `7061e7b` in [CI 42244834223](https://github.com/max-favilli/elwood/actions/runs/42244834223). The first service test correctly rejected a fixture retry that accidentally generated a new ownership generation; the corrected fixture reuses the exact original request. Whole-provider expiry, retained-cardinality checks and the installed 7,000-item gate remain open. Also include reserved checkpoint bytes in sizing: the existing parent reservation is three 4 MiB slots per execution, a conservative logical reservation rather than a measurement of bytes actually stored or billed.
+
+### Streamed payload foundation
+
+`IExecutionPayloadStore` separates opaque bytes from text documents and DSL values. The initial Azure adapter reads nonseekable inputs with a single 4 MiB buffer, hashes while reading and uses 64-bit lengths. Admission reserves the declared length or, if unknown, the authored maximum before upload. Unknown-length reservations remain conservatively charged at that maximum until cleanup. A leased empty placeholder and final commit reserve two object slots; every block requires the server lease, and commit also checks the placeholder ETag. A reference becomes available only after commit and retention confirmation. It contains a logical key, length, MIME type, SHA-256 and version, never credentials or the body.
+
+Interrupted, cancelled, oversized and uncertain writes keep independent cleanup obligations. The existing execution-prefix cleanup applies; the independent sweeper also removes the owned placeholder version without deleting replacements. Transfer lifetime is bounded to at most one hour, within the existing unconfirmed-write grace. This is storage infrastructure only: no runtime profile, trigger, connector or DSL path yet uses the new interface, and no 100 MB/200 MB/4 GB end-to-end support is claimed. The new generated 4 GiB copy check measures the transfer algorithm without allocating a complete input; real SDK emulator tests exercise multi-block storage separately. Native Azure transfer/cost acceptance remains open.
+
+Local verification on 6 November: **108 Azure adapter unit tests pass**, including 14 new streaming cases; the .NET 8 build passes with no warnings/errors. The three new real SDK/Azurite cases are committed for CI and are not yet counted as passed. No Azure resources or software installations were added.

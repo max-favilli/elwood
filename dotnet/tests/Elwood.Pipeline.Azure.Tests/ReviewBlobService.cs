@@ -12,6 +12,9 @@ internal sealed class ReviewBlobService : HttpMessageHandler
     private readonly Dictionary<string, (byte[] Bytes, int Version)> _blobs = [];
     private readonly Dictionary<(string Path, string Version), byte[]> _versions = [];
     private readonly Dictionary<(string Path, int Version), Dictionary<string, string>> _metadata = [];
+    private readonly Dictionary<(string Path, int Version), string> _contentTypes = [];
+    private readonly Dictionary<(string Path, string Id), byte[]> _blocks = [];
+    public int StagedBlocks => _blocks.Count;
     public Func<HttpRequestMessage, CancellationToken, Task>? BeforeUpload;
     public Func<HttpRequestMessage, CancellationToken, Task>? BeforeDelete;
     public string? LoseUploadReplyFor;
@@ -64,10 +67,13 @@ internal sealed class ReviewBlobService : HttpMessageHandler
             if (request.Method == HttpMethod.Get || request.Method == HttpMethod.Head)
             {
                 if (!exists) return Error(HttpStatusCode.NotFound, "BlobNotFound");
+                if (request.Headers.IfMatch.Any(t => t.Tag != etag)) return Error(HttpStatusCode.PreconditionFailed, "ConditionNotMet");
                 if (request.Headers.IfNoneMatch.Any(t => t.Tag == etag))
                 { NotModified++; return new(HttpStatusCode.NotModified); }
                 Downloads++;
                 var read = Success(HttpStatusCode.OK, entry.Bytes, etag);
+                read.Content.Headers.ContentType = System.Net.Http.Headers.MediaTypeHeaderValue.Parse(
+                    _contentTypes.GetValueOrDefault((path, entry.Version), "application/octet-stream"));
                 foreach (var pair in _metadata.GetValueOrDefault((path, entry.Version)) ?? []) read.Headers.Add("x-ms-meta-" + pair.Key, pair.Value);
                 if (_versioning) read.Headers.Add("x-ms-version-id", entry.Version.ToString("D10"));
                 return read;
@@ -87,6 +93,7 @@ internal sealed class ReviewBlobService : HttpMessageHandler
                 if (!exists) return Error(HttpStatusCode.NotFound, "BlobNotFound");
                 _blobs.Remove(path);
                 _leases.Remove(path);
+                foreach (var key in _blocks.Keys.Where(k => k.Path == path).ToArray()) _blocks.Remove(key);
                 return new(HttpStatusCode.Accepted);
             }
             if (request.Headers.IfNoneMatch.Any() && exists ||
@@ -94,7 +101,22 @@ internal sealed class ReviewBlobService : HttpMessageHandler
             var writeLease = request.Headers.TryGetValues("x-ms-lease-id", out var writeIds) ? writeIds.Single() : null;
             if (_leases.TryGetValue(path, out var requiredLease) ? writeLease != requiredLease : writeLease is not null)
                 return Error(HttpStatusCode.PreconditionFailed, "LeaseIdMismatchWithBlobOperation");
+            if (query.GetValueOrDefault("comp") == "block")
+            {
+                _blocks[(path, query["blockid"])] = content!;
+                return Success(HttpStatusCode.Created, [], etag);
+            }
+            if (query.GetValueOrDefault("comp") == "blocklist")
+            {
+                using var xml = new MemoryStream(content!);
+                var ids = XDocument.Load(xml).Root!.Elements().Select(e => e.Value).ToArray();
+                if (ids.Any(id => !_blocks.ContainsKey((path, id)))) return Error(HttpStatusCode.BadRequest, "InvalidBlockList");
+                content = ids.SelectMany(id => _blocks[(path, id)]).ToArray();
+                foreach (var key in _blocks.Keys.Where(k => k.Path == path).ToArray()) _blocks.Remove(key);
+            }
             Writes++; _blobs[path] = (content!, ++_version);
+            _contentTypes[(path, _version)] = request.Headers.TryGetValues("x-ms-blob-content-type", out var types)
+                ? types.Single() : "application/octet-stream";
             _metadata[(path, _version)] = request.Headers.Where(h => h.Key.StartsWith("x-ms-meta-", StringComparison.OrdinalIgnoreCase))
                 .ToDictionary(h => h.Key[10..], h => h.Value.Single(), StringComparer.OrdinalIgnoreCase);
             if (_versioning) _versions[(path, _version.ToString("D10"))] = content!;
@@ -138,6 +160,7 @@ internal sealed class ReviewBlobService : HttpMessageHandler
     private static HttpResponseMessage Success(HttpStatusCode status, byte[] content, string etag)
     {
         var result = new HttpResponseMessage(status) { Content = new ByteArrayContent(content) };
+        result.Content.Headers.ContentLength = content.Length;
         result.Headers.ETag = new(etag); result.Content.Headers.LastModified = DateTimeOffset.UtcNow;
         result.Headers.Add("x-ms-blob-type", "BlockBlob"); return result;
     }

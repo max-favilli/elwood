@@ -2,7 +2,7 @@
 
 Release candidate preparation is in progress. Use a published tag and its passing evidence, not an arbitrary `main` checkout. This document will name the published assets when release verification completes.
 
-**Eagle production gate:** the owner has now supplied volumes far above this profile's retained-metadata capacity, including individual executions above 6,600 outputs. The [Eagle capacity package](eagle-capacity-plan.md) is required before live adoption. The existing distributed profile and measurements below are a bounded functional test profile, not approval to provision it for the full Eagle workload.
+**Eagle production gate:** the owner has supplied volumes far above this profile's retained-metadata capacity, including individual executions above 6,600 outputs. Eagle also requires prompt start/autoscaling, actual 100 MB trigger bodies, structured data up to 200 MB, binary assets up to 4 GB and workflows lasting up to 40 minutes. The [Eagle capacity package](eagle-capacity-plan.md) tracks these implementation and measurement gates. The existing distributed profile and measurements below are a bounded functional test profile, not approval to provision it for the full Eagle workload.
 
 Elwood owns orchestration, transformations, delivery history, recovery and retention. The consumer owns its Azure subscription, resource group, networking, business database, third-party connections and deployment approval. This repository does not provision permanent resources for either pilot. SQL stores the consumer's catalog/business data; Elwood state uses Blob/Table, scheduling uses Storage Queue or Service Bus, and Redis supplies shared definitions and reconstructible item status.
 

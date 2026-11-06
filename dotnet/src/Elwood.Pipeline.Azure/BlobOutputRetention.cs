@@ -167,7 +167,9 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
 
     private static bool Owned(BlobItem item, BlobRetentionEntry entry) => item.Metadata is not null &&
         item.Metadata.TryGetValue(OwnerMetadata, out var value) && value == entry.OwnershipId &&
-        (entry.ETag is null or "leased" || item.Snapshot is not null || entry.VersionId is not null && item.VersionId == entry.VersionId ||
+        // A document has a unique never-reused physical name and owner ID. A
+        // streaming document also owns its empty placeholder's earlier version.
+        (entry.Kind == "document" || entry.ETag is null or "leased" || item.Snapshot is not null || entry.VersionId is not null && item.VersionId == entry.VersionId ||
             item.Properties.ETag?.ToString().Trim('"') == entry.ETag.Trim('"'));
 
     public async Task<BlobRetentionHealth> HealthAsync(CancellationToken token = default)
