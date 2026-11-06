@@ -5,7 +5,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 // Run only against the consumer's approved installation. Creates one synthetic
 // definition/execution, sends no external connector calls, and retires its route.
 const base = new URL(process.env.ELWOOD_RUNTIME_URL ?? '');
-if (base.protocol !== 'https:' || base.pathname !== '/' || base.username || base.password || base.search || base.hash)
+// CI exercises this exact client against an isolated local runtime. Remote
+// installations always require TLS; this opt-in accepts only literal loopback.
+const loopbackTest = process.argv.includes('--allow-loopback-http') && base.protocol === 'http:' &&
+  ['127.0.0.1', '[::1]'].includes(base.hostname);
+if ((!loopbackTest && base.protocol !== 'https:') || base.pathname !== '/' || base.username || base.password || base.search || base.hash)
   throw new Error('ELWOOD_RUNTIME_URL must be an HTTPS origin without credentials or a path.');
 const token = process.env.ELWOOD_MANAGEMENT_TOKEN;
 if (!token) throw new Error('Set ELWOOD_MANAGEMENT_TOKEN without putting it in command history or Git.');

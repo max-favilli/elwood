@@ -79,7 +79,7 @@ App Service rejects hyphens in individual setting names during some updates. Pip
 
 For RabbitMQ, approve B1 cost before enabling `enableRabbitMqIngress`, publish/ZIP `dotnet/src/Elwood.Runtime.Azure.Ingress` and deploy to the generated ingress app. It shares the catalog, identity, state and internal queue with Functions. Give it broker network access and scoped secrets. `/health` is process liveness; `/readiness` checks storage retention, not broker connectivity. Monitor broker connection failures separately.
 
-For BlobCreated events, configure Event Grid against the deployed HTTP trigger with `eventGrid: true`, scoped subject filters and secret delivery authentication. `test-event-grid.bicep` illustrates the authenticated validation/delivery contract. Event identity suppresses redelivery; opt-in [content deduplication](../../docs/content-deduplication.md) additionally suppresses different events carrying equal file bytes.
+For BlobCreated events, configure Event Grid against the deployed HTTP trigger with an `eventGrid` object, for example `eventGrid: { subjectPrefix: /blobServices/default/containers/inbound/blobs/deldo/ }`, and secret delivery authentication. `test-event-grid.bicep` illustrates the authenticated validation/delivery contract; replace its lab resource names with the consumer's resources. Event identity suppresses redelivery; opt-in [content deduplication](../../docs/content-deduplication.md) additionally suppresses different events carrying equal file bytes.
 
 ## Disposable verification lab
 

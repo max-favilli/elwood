@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { mkdtemp, mkdir, writeFile, access, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, basename } from 'node:path';
@@ -253,6 +254,16 @@ outputs:
     const afterTest = await (await trigger('identical-files', null, { path: 'another.json' })).json();
     assert.equal(afterTest.skipped, true); assert.equal(afterTest.duplicateOf, forced.executionId);
     assert.equal(duplicateDeliveries, 3);
+    // Exercise the shipped installation client against real management, draft,
+    // deploy, durable trigger, completion and route-retirement endpoints.
+    const smoke = await promisify(execFile)(process.execPath, [resolve('scripts/verify-installation.mjs'), '--allow-loopback-http'], {
+      windowsHide: true, timeout: 60000,
+      env: { ...process.env, ELWOOD_RUNTIME_URL: base, ELWOOD_MANAGEMENT_TOKEN: admin },
+    });
+    const installed = JSON.parse(smoke.stdout);
+    assert.equal(installed.result, 'passed'); assert.equal(installed.distributed, false);
+    assert.equal((await request(`/api/v1/trigger/${installed.pipelineId}`, 'POST', [])).status, 404);
+    assert.equal((await request(`/api/executions/${installed.executionId}`)).status, 200);
   } finally {
     await stop(); upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve));
     assert.ok(basename(root).startsWith('elwood-durable-api-'));

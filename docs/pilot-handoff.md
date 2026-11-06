@@ -37,13 +37,22 @@ node scripts/verify-installation.mjs --distributed   # Eagle / distributed profi
 
 The smoke creates a uniquely named synthetic pipeline, accepts 32 items, checks pinned completion, item inspection (distributed mode) and retention health, then retires its route. It calls no third-party systems. Synthetic execution history expires after 15 minutes through normal cleanup. Preserve the returned execution/revision IDs and timestamp; inspect physical cleanup after the next retention ticks. A script error or 503 is a failed install check, not something to bypass with `VerificationOnly` or an empty ledger.
 
-The portal remains a separately deployed Next.js application. Use portal commit `0f76a98` or a later independently verified release. Configure its runtime origin, HTTPS and matching CORS origin according to its README. Existing controls include draft real/mock testing, item/attempt/receipt inspection, selected recovery and separately acknowledged replay. Check session scope with an ordinary operator account, not just the initial wildcard bootstrap account.
+The portal remains a separately deployed Next.js application. Use portal commit `05778bae8b38b32a4fea262ec4cf7be3eaab4e07` ([passing CI](https://github.com/max-favilli/elwood-portal/actions/runs/42206850692)) or a later independently verified release. Configure its runtime origin, HTTPS and matching CORS origin according to its README. Existing controls include draft real/mock testing, item/attempt/receipt inspection, selected recovery and separately acknowledged replay. Check session scope with an ordinary operator account, not just the initial wildcard bootstrap account.
 
 ## Deldo integration
 
 Start from [sample-deldo-stock](examples/connectors/sample-deldo-stock/pipeline.elwood.yaml), the consumer's verified `pipelines/deldo-stock` bundle and its `normalized-offer.schema.json`. The consumer's real column map and SQL schema remain authoritative. The sample is an example, not a deployment containing production URLs.
 
 The intended flow is Event Grid BlobCreated → normalize the event → pull the announced Blob with `ifMatch` ETag and `maxBytes: 26214400` → parse/normalize CSV → call `catalog.usp_ImportOffers` with the whole output JSON as `@payload` → deliver a JSON snapshot. The SQL procedure's first result set is recorded for inspection. Event Grid batches are split into individual durable acceptances, and subscription validation is supported. If the supplier uses SFTP, the consumer must arrange landing in Blob storage; Elwood does not implement an SFTP listener.
+
+Update the consumer's earlier target YAML before deploying it:
+
+- Add `eventGrid: { subjectPrefix: /blobServices/default/containers/inbound/blobs/deldo/ }` to the HTTP source; optionally constrain `topic` to the exact storage account resource ID. This is an object, not a boolean.
+- Add trigger `auth: { type: basic, user: $secrets.eventGrid.user, password: $secrets.eventGrid.password }`. Configure Event Grid's secret `Authorization` delivery header to match, including subscription validation; grant the trigger access to those exact secrets.
+- Set the Blob pull's `maxBytes: 26214400`; its default is 10 MiB. Keep the announced `ifMatch` ETag.
+- Use the owned snapshot container/prefix described below and `overwrite: true` for the deterministic snapshot name. Keep uncertain-write retries conditional on this being safe for the consumer.
+
+The existing `normalize.elwood` numeric guards and event validation remain necessary. The consumer's requests for callable let-bound lambdas, strict `toNumber`, `fail(message)` and consistent strict member access are separate DSL follow-ups, not new language behavior in this platform release. Keep the verified script workarounds. JSON snapshot delivery is implemented; pipeline Parquet delivery is not.
 
 Change the sample snapshot destination from its illustrative `analytics` container to the installation's **owned output container**, normally `outputs`, under `elwood/deldo/...`. Use that account's identity or a separately scoped connection secret. Configure the pipeline's Blob Run/Test prefix grants. The installed Azure profile refuses delivery into an account/container outside its verified retention boundary. Supplier input files belong in an inbound container/account outside owned output retention; only read access is needed there.
 
