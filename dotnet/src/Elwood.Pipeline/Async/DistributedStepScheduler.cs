@@ -7,7 +7,7 @@ namespace Elwood.Pipeline.Async;
 
 /// <summary>
 /// Explicit distributed runtime bridge: parent claims protect admission/publication;
-/// read guards protect parent validation and the journal owns connector attempts.
+/// atomic parent reads validate status and the journal owns connector attempts.
 /// Installed hosts register this with item retention, accounting and operator endpoints.
 /// </summary>
 public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDocumentStore documents,
@@ -129,24 +129,19 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
         return await runner.ExecuteAsync(work.Stage, ordinal, "worker-" + Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"), token,
             async ct =>
             {
-                IExecutionGuard? parent;
-                async Task<IExecutionGuard?> Guard() => states is IExecutionGuardStore guards
-                    ? await guards.TryGuardAsync(message.ExecutionId, ct) : await states.TryClaimAsync(message.ExecutionId, ct);
-                while ((parent = await Guard()) is null)
-                {
-                    if (await states.GetExecutionAsync(message.ExecutionId) is null) throw new WorkJournalException("Parent execution was removed.");
-                    await Task.Delay(Random.Shared.Next(75, 151), ct);
-                }
-                await using (parent)
-                {
-                    await parent.ValidateAsync(ct);
-                    var current = await states.GetExecutionAsync(message.ExecutionId);
-                    var currentWork = current is null ? null : Step(current, message)?.Work;
-                    if (current is null || !Active(current) || current.RevisionId != work.Stage.RevisionId ||
-                        currentWork?.Admitted != true || currentWork.Stage != work.Stage || Step(current, message)?.Status == ExecutionStatus.Completed)
-                        throw new WorkJournalException("Parent execution no longer authorizes this item.");
-                    await parent.ValidateAsync(ct);
-                }
+                // The provider returns one atomic, authoritative snapshot. A
+                // read does not need to exclude a writer: call intent is durable
+                // before dispatch, and a stop after validation must already treat
+                // that call as potentially in flight. Holding/releasing a parent
+                // lease before dispatch cannot remove that race. Item ownership
+                // is validated AFTER this read and still fences every checkpoint.
+                ct.ThrowIfCancellationRequested();
+                var current = await states.GetExecutionAsync(message.ExecutionId);
+                var currentWork = current is null ? null : Step(current, message)?.Work;
+                if (current is null || !Active(current) || current.RevisionId != work.Stage.RevisionId ||
+                    currentWork?.Admitted != true || currentWork.Stage != work.Stage || Step(current, message)?.Status == ExecutionStatus.Completed)
+                    throw new WorkJournalException("Parent execution no longer authorizes this item.");
+                ct.ThrowIfCancellationRequested();
             });
     }
 

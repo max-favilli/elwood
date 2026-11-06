@@ -3,25 +3,13 @@ using Elwood.Pipeline.State;
 namespace Elwood.Pipeline.Storage;
 
 /// <summary>
-/// Exclusive parent ownership for read validation. A renewable guard fences and
-/// cancels its holder on ownership loss; it grants no state mutation methods.
+/// Save/delete use this claim's original fencing identity; cloud documents remain immutable.
 /// </summary>
-public interface IExecutionGuard : IAsyncDisposable
+public interface IExecutionClaim : IAsyncDisposable
 {
     string ExecutionId { get; }
     CancellationToken OwnershipLost { get; }
     Task ValidateAsync(CancellationToken cancellationToken = default);
-}
-
-/// <summary>An optional read-only claim using the same fence as parent writes, without admission/index mutations.</summary>
-public interface IExecutionGuardStore
-{
-    Task<IExecutionGuard?> TryGuardAsync(string executionId, CancellationToken cancellationToken = default);
-}
-
-/// <summary>Save/delete use this claim's original fencing identity; cloud documents remain immutable.</summary>
-public interface IExecutionClaim : IExecutionGuard
-{
     Task SaveAsync(ExecutionState state);
     Task DeleteAsync();
 }

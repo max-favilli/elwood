@@ -4,11 +4,13 @@ namespace Elwood.Pipeline.Storage;
 
 /// <summary>
 /// Stores execution state — metadata + refs, not payloads.
-/// Redis in production, in-memory or file system for dev.
+/// The installed Azure profile uses fenced Blob state with a Table index;
+/// in-memory and file system adapters support development.
 /// </summary>
 public interface IStateStore
 {
     Task SaveExecutionAsync(ExecutionState state);
+    /// <summary>Return one atomic, authoritative snapshot, never cached/eventually consistent state used to authorize item calls.</summary>
     Task<ExecutionState?> GetExecutionAsync(string executionId);
     Task<List<ExecutionState>> ListExecutionsAsync(string? pipelineName = null, int limit = 50);
     Task UpdateSourceStepAsync(string executionId, string sourceName, SourceStepState step);

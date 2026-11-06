@@ -109,9 +109,9 @@ destinations:
 
 SDK retries are disabled. Lost connections, deadlines and server failures after an upload starts may mean the write completed; the pipeline policy controls retry or review. A create-only conflict or stale ETag is not automatically retried. For deterministic version-named snapshots, use explicit `overwrite: true` with `allowUncertainWrites: true` only if rewriting the same payload is acceptable.
 
-### Output retention release requirement
+### Output retention
 
-The maintainer requires delivered blobs to expire after 30 days by default, with pipeline defaults and per-destination overrides. The M5 connector does not yet enforce destination expiry; `ttlSeconds` currently covers execution artifacts only. M6 must provide durable output cleanup and verified lifecycle policies, including versions/snapshots and finite soft-delete retention. Source blobs are excluded. See [storage retention](storage-retention.md) for the release gate; do not assume an existing M5 upload is automatically deleted after 30 days.
+Delivered blobs inherit the pipeline's `ttlSeconds` (30 days by default), or use a destination `ttlSeconds` override. The installed Azure profile records durable cleanup ownership before delivery and verifies lifecycle policy, including versions/snapshots and finite soft-delete retention. Deliveries must stay inside the host-owned output container/prefix; source blobs are excluded. Missing or unhealthy retention control data blocks admission. See [storage retention](storage-retention.md) and [Azure operations](azure-operations.md). Existing untracked uploads are not adopted merely by adding a TTL to their YAML; migration and ownership require explicit operator handling.
 
 ## Scoped access to host identities
 
@@ -124,11 +124,17 @@ Named connection strings/passwords use the existing [Test/Run secret grants](man
       "my-pipeline": {
         "Test": {
           "SqlIdentityServers": ["my-server.database.windows.net"],
-          "BlobAccounts": ["https://my-account.blob.core.windows.net"]
+          "BlobPrefixes": [
+            "https://input-account.blob.core.windows.net/inbound/deldo",
+            "https://runtime-account.blob.core.windows.net/outputs/elwood/deldo"
+          ]
         },
         "Run": {
           "SqlIdentityServers": ["my-server.database.windows.net"],
-          "BlobAccounts": ["https://my-account.blob.core.windows.net"]
+          "BlobPrefixes": [
+            "https://input-account.blob.core.windows.net/inbound/deldo",
+            "https://runtime-account.blob.core.windows.net/outputs/elwood/deldo"
+          ]
         }
       }
     }
@@ -136,7 +142,7 @@ Named connection strings/passwords use the existing [Test/Run secret grants](man
 }
 ```
 
-SQL Integrated Security and explicit `Authentication` modes require an exact `Data Source` grant. SQL database-file attachment is disabled. Blob `accountUrl` requires an exact HTTPS account root grant, with no query/userinfo/fragment. Azure RBAC and SQL permissions still apply. Grants authorize a server/account, not individual procedures/containers: use restricted service identities for narrower access. YAML cannot grant itself host identity access. Mocks resolve neither secrets nor identities.
+SQL Integrated Security and explicit `Authentication` modes require an exact `Data Source` grant; restrict procedure/database access with the SQL identity's permissions. SQL database-file attachment is disabled. Blob `accountUrl` must be an HTTPS account root without query/userinfo/fragment. `BlobPrefixes` grants access to that account and restricts paths to descendants of the named container/prefix. A broad `BlobAccounts` grant is also supported for external accounts, but the runtime's own account always requires prefix grants and rejects access to its internal state/document/catalog containers. When prefix grants are present they restrict external accounts too. These grants do not replace Azure RBAC, SQL permissions or the separate host-owned output-retention boundary. YAML cannot grant itself host identity access. Mocks resolve neither secrets nor identities.
 
 ## External RabbitMQ ingress
 

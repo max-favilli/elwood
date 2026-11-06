@@ -222,8 +222,9 @@ public sealed class WorkItemStepExecutor(
         public CancellationToken OwnershipLost => item.OwnershipLost;
         public async Task ValidateAsync(CancellationToken cancellationToken = default)
         {
-            await item.ValidateAsync(cancellationToken);
             if (validateParent is not null) await validateParent(cancellationToken);
+            // Renew the item/permit AFTER the parent read, immediately before
+            // dispatch or checkpointing. A parent read never grants ownership.
             await item.ValidateAsync(cancellationToken);
         }
         public async Task SaveAsync(ExecutionState state)

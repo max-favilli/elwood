@@ -69,6 +69,26 @@ public sealed partial class DistributedSchedulingTests : IDisposable
     public void Dispose() { if (Directory.Exists(_root)) Directory.Delete(_root, true); }
 
     [Fact]
+    public async Task Item_calls_do_not_wait_on_parent_publication_but_a_committed_stop_blocks_the_next_item()
+    {
+        var calls = 0;
+        var source = new Source((_, _) => { Interlocked.Increment(ref calls); return Task.FromResult(new SourceFetchResult("1")); });
+        var runner = Runner(source);
+        var (id, hints) = await Prepare(runner);
+        await using var writer = await ((IRecoverableStateStore)States).TryClaimAsync(id);
+        Assert.NotNull(writer);
+        // The authoritative snapshot still authorizes work while a publisher
+        // owns the parent. Child checkpoints use their own durable fences.
+        await runner.ExecuteStepAsync(hints.Single(h => h.StepName == "left")).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, calls);
+        var state = (await States.GetExecutionAsync(id))!;
+        state.Status = ExecutionStatus.Failed;
+        await writer!.SaveAsync(state);
+        await runner.ExecuteStepAsync(hints.Single(h => h.StepName == "right"));
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
     public async Task Independent_sources_overlap_without_holding_parent_or_repeating_duplicate_hints()
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

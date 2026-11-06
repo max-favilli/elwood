@@ -80,7 +80,7 @@ public sealed class ThirdReviewTests
     }
 
     [Fact]
-    public async Task ReadOnlyParentGuardsUseTheWriteFenceWithoutAdmissionOrIndexWrites()
+    public async Task AtomicParentReadsObserveCommittedWritesWithoutAdmissionOrIndexMutations()
     {
         using var service = new ReviewBlobService();
         using var tableTransport = new TableWrites(); using var http = new HttpClient(tableTransport);
@@ -92,20 +92,17 @@ public sealed class ThirdReviewTests
         await blob.UploadAsync(BinaryData.FromString("{\"executionId\":\"owned\"}"));
         var store = new AzureExecutionStateStore(service.Container, table, new InMemoryDocumentStore(), retention: ledger);
         var writes = service.Writes;
-        Assert.Null(await store.TryGuardAsync("missing"));
+        Assert.Null(await store.GetExecutionAsync("missing"));
+        await using var writer = await BlobExecutionClaim.TryAcquireAsync(blob, "owned");
         for (var i = 0; i < 10; i++)
         {
-            await using var guard = await store.TryGuardAsync("owned");
-            Assert.NotNull(guard); Assert.False(guard is IExecutionClaim);
-            await guard!.ValidateAsync();
             Assert.Equal("owned", (await store.GetExecutionAsync("owned"))!.ExecutionId);
-            Assert.Null(await store.TryClaimAsync("owned")); // Exactly the writer's lease fence.
         }
         Assert.Equal(writes, service.Writes); Assert.Equal(0, tableTransport.Count);
         Assert.Empty((await ledger.ReadAsync()).Entries);
-        await using var lost = await store.TryGuardAsync("owned");
-        service.LoseLease(blob);
-        await Assert.ThrowsAsync<ExecutionOwnershipLostException>(() => lost!.ValidateAsync());
+        await writer!.SaveAsync(new() { ExecutionId = "owned", Status = ExecutionStatus.Failed });
+        Assert.Equal(ExecutionStatus.Failed, (await store.GetExecutionAsync("owned"))!.Status);
+        Assert.Equal(writes + 1, service.Writes); Assert.Equal(0, tableTransport.Count);
     }
     [Theory]
     [InlineData(429)]
