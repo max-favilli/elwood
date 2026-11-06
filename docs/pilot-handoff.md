@@ -15,9 +15,13 @@ Both profiles use 64 initialized retention partitions and default to a three-ins
 
 The tested M6 file envelope is documented in [capacity-profile.md](capacity-profile.md). The M7 distributed capacity report must be read separately: emulator timings and request counts are not Azure latency, cloud load certification or a monthly bill. Set a consumer spending budget and measure real traffic before increasing concurrency, quotas or scale. Azure Managed Redis is an additional fixed-cost service; [Microsoft's regional pricing](https://azure.microsoft.com/pricing/details/managed-redis/) and the [Redis template](../infra/azure-redis/main.bicep) expose SKU and availability choices. B0 is a starting pilot size, not a promised capacity for every Eagle workload.
 
+The Redis template's cheaper `highAvailability=false` default is for development/test pilots. Production should enable HA and approve its cost; [Microsoft's availability guidance](https://learn.microsoft.com/en-us/azure/redis/plan-tiers-and-capacity#high-availability-and-replica-implications) requires HA for SLA coverage. Elwood's durable recovery does not make a non-HA cache continuously available.
+
 ## Obtain and install
 
 Use the versioned runtime ZIPs and consumer kit from the GitHub release, verify `SHA256SUMS.txt`, and retain `release.json` with deployment records. Alternatively check out the exact tag and run `scripts/package-runtime.ps1`; it refuses a dirty checkout and includes only tracked resources in the kit. Runtime hosts require .NET 10; the installation smoke uses Node.js 22+. NuGet users should reference the matching `Elwood.Pipeline`, `.Azure`, `.Sql`, `.RabbitMq` and `.Redis` candidate versions. The DSL Core stays at 0.7.26; a platform release does not change language semantics.
+
+Use the managed `Elwood.Cli` .NET tool for offline YAML `pipeline` commands. Native CLI downloads support standalone DSL evaluation/scripts/REPL only; use the runtime API or portal for connector execution, durable tests and distributed fan-out. See [the CLI boundary](local-testing.md#offline-cli-boundary).
 
 1. Agree the subscription, dedicated resource group, region and monthly allowance in the consumer session. Inspect quota and current prices. Do not reuse another application's infrastructure without its owner's agreement.
 2. Follow [the Azure installer](../infra/azure-small/README.md) for storage, identities, management token hash, portal origins, Functions and optional RabbitMQ ingress. The deployer needs role-definition and role-assignment permissions, not only Contributor. Keep credentials in the consumer's Key Vault; give the runtime identity access.
@@ -37,7 +41,7 @@ node scripts/verify-installation.mjs --distributed   # Eagle / distributed profi
 
 The smoke creates a uniquely named synthetic pipeline, accepts 32 items, checks pinned completion, item inspection (distributed mode) and retention health, then retires its route. It calls no third-party systems. Synthetic execution history expires after 15 minutes through normal cleanup. Preserve the returned execution/revision IDs and timestamp; inspect physical cleanup after the next retention ticks. A script error or 503 is a failed install check, not something to bypass with `VerificationOnly` or an empty ledger.
 
-The portal remains a separately deployed Next.js application. Use portal commit `05778bae8b38b32a4fea262ec4cf7be3eaab4e07` ([passing CI](https://github.com/max-favilli/elwood-portal/actions/runs/42206850692)) or a later independently verified release. Configure its runtime origin, HTTPS and matching CORS origin according to its README. Existing controls include draft real/mock testing, item/attempt/receipt inspection, selected recovery and separately acknowledged replay. Check session scope with an ordinary operator account, not just the initial wildcard bootstrap account.
+The portal remains a separately deployed Next.js application. Use portal commit `95c39885c584817d8ae9233fca9a0c9202a5353c` ([passing CI](https://github.com/max-favilli/elwood-portal/actions/runs/42224723364)) or a later independently verified release. Configure its runtime origin, HTTPS and matching CORS origin according to its README. Existing controls include draft real/mock testing, item/attempt/receipt inspection, selected recovery and separately acknowledged replay. Check session scope with an ordinary operator account, not just the initial wildcard bootstrap account.
 
 ## Deldo integration
 

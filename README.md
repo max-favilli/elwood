@@ -80,6 +80,8 @@ Download a single binary (no runtime needed):
 
 Or install as a .NET tool: `dotnet tool install --global Elwood.Cli`
 
+Native binaries support DSL `eval`, `run` and `repl`. YAML `pipeline` commands require the managed .NET tool because the native build does not support the reflection-based YAML parser. For the pilot candidate use `--version 0.8.0-rc.1`; the hosted runtime and portal provide full connector/durable testing. See [local testing](docs/local-testing.md).
+
 ```bash
 # Evaluate an expression
 elwood eval "$.users[*] | where u => u.active" --input data.json

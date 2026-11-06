@@ -1,6 +1,6 @@
 # Explicit fan-out sample
 
-This M7.4 sample is available for local draft testing. Production deployment remains disabled until M7.5 supplies item inspection, recovery, retention and admission accounting. The URLs deliberately use reserved `.invalid` hosts; they are not public test services.
+This sample supports local draft testing and the explicitly enabled Azure/Redis distributed profile, including item inspection, recovery, retention and admission accounting. Ordinary deployments reject fan-out. Follow the [pilot handoff](../../pilot-handoff.md) before hosted deployment. The URLs deliberately use reserved `.invalid` hosts; they are not public test services.
 
 Create an async draft with `pipeline.elwood.yaml`, open **Test draft**, select **Mocks**, paste `input.json` and `mocks.json`, then run. The source makes two simulated product lookups; the output maps and delivers each result independently. Its aggregated output is:
 
@@ -16,6 +16,6 @@ Output `fanOut.path` is a separate selector evaluated once against the final IDM
 
 Source `concurrency` and output `fanOut.concurrency` limit owners across the whole distributed stage, not per worker. Default is 1, maximum 1000. Source `maxItems` and output `fanOut.maxItems` default to 10000, maximum 100000; the entire selector is checked before dispatch. Empty arrays produce no calls and an empty result; null/scalars fail. This experimental package also caps selected input and aggregate output at 16 MiB per stage. An aggregate limit failure happens after item processing and does not undo deliveries; receipts remain in the journal. These are protective ceilings, not certified workload sizes.
 
-Fixtures without `items` apply to every item. Supplying `items` requires a fixture for every encountered ordinal; a missing fixture fails without falling through to real systems. Output fixture arrays remain in destination order, with an optional `items` object inside each destination. Connector traces carry `itemOrdinal`. Item-specific inspection and recovery controls are planned in [M7.5](../../item-inspection-recovery-design.md).
+Fixtures without `items` apply to every item. Supplying `items` requires a fixture for every encountered ordinal; a missing fixture fails without falling through to real systems. Output fixture arrays remain in destination order, with an optional `items` object inside each destination. Connector traces carry `itemOrdinal`. Hosted item inspection and recovery controls follow the [implemented contract](../../item-inspection-recovery-design.md).
 
 Retries use the step's `retry` policy separately for each item. Completed items and destinations cannot be repeated by an ordinary retry. If an item exhausts its policy or requires review, the parent stops admitting further calls; already in-flight work can remain uncertain. Until item-level recovery is implemented, the experimental profile cannot use the ordinary whole-execution resume/replay endpoints. A bounded parent stop conservatively marks incomplete expanded stages for review when it cannot prove the absence of a writing call.

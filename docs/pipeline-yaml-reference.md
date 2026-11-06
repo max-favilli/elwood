@@ -14,7 +14,7 @@ Pipeline `ttlSeconds` defaults to `2592000` (30 days), valid range `1`–`315360
 
 This reference includes planned capabilities. The runtime validates configuration instead of silently ignoring unsupported behavior. Unknown keys and unimplemented connector types are errors. Per-source/output retry policy, terminal retention and sync failure responses are implemented in M4; see [durable processing](durable-processing.md) for the supported schema and hosting boundaries. The documented destination aliases `restEndpoint` and `azureFileShare` map to `http` and `fileShare`; specifying both names for the same destination type is an error.
 
-The current executors reject `join` and `outputId`, whose behavior is not implemented. Production hosts still reject source `path` fan-out and output `fanOut` pending M7.5 activation. M7.4 supports both in explicit local real/mock tests and the experimental distributed scheduler; see the [fan-out sample and exact contract](examples/distributed-fanout/README.md). The file-input CLI retains its existing source fan-out behavior and rejects output `fanOut`. The ordinary durable profile serializes steps within an execution; its concurrency fields do not enable distributed work. Runtime HTTP/Blob delivery supports JSON and raw string text/XML; SQL destinations accept JSON. CSV/binary/Parquet output serialization is not implemented; the default file destination supports literal local paths, not Azure connection strings or computed filenames. The filesystem Runtime API registers HTTP, SQL Server procedures and Azure Blob connectors, plus external RabbitMQ and Event Grid ingress. See [M5 connector contracts](connectors.md) for exact fields, defaults, access grants, limits and receipts. SFTP/Azure File Share, Service Bus ingress/delivery and schedules are not enabled in this host; Service Bus/email destination keys are not part of the current schema.
+The current executors reject `join` and `outputId`, whose behavior is not implemented. Source `path` fan-out and output `fanOut` require the explicitly enabled Azure/Redis distributed profile for deployed execution. Both also work in local real/mock tests; see the [fan-out sample and exact contract](examples/distributed-fanout/README.md). The file-input CLI retains its existing source fan-out behavior and rejects output `fanOut`. The ordinary durable profile serializes steps within an execution; its concurrency fields do not enable distributed work. Runtime HTTP/Blob delivery supports JSON and raw string text/XML; SQL destinations accept JSON. CSV/binary/Parquet output serialization is not implemented; the default file destination supports literal local paths, not Azure connection strings or computed filenames. The filesystem Runtime API registers HTTP, SQL Server procedures and Azure Blob connectors, plus external RabbitMQ and Event Grid ingress. See [M5 connector contracts](connectors.md) for exact fields, defaults, access grants, limits and receipts. SFTP/Azure File Share, Service Bus ingress/delivery and schedules are not enabled in this host; Service Bus/email destination keys are not part of the current schema.
 
 Script references are resolved for source maps/paths, HTTP request bodies, SQL parameter values, output paths/maps/IDs, response status codes and destination filenames. Resolving a script does not make an unsupported configuration executable. Evaluation errors and missing scripts fail their step; warnings retain the step's successful status when there is no error and are stored with the step's diagnostics.
 
@@ -258,7 +258,7 @@ sources:
 | `contentType` | string | no | Payload format. Default: `json` |
 | `map` | string | no | `.elwood` script or inline expression |
 | `depends` | string or string[] | no | Source(s) that must complete before this one runs |
-| `path` | string | no | Source fan-out selector; available in offline CLI, local real/mock tests and experimental distributed scheduling. Production deployment remains gated on M7.5 |
+| `path` | string | no | Source fan-out selector; available in offline CLI, local real/mock tests and the explicitly enabled distributed profile. Ordinary deployments reject it |
 | `concurrency` | int | no | Default `1`; distributed stage-wide owner limit with `path` (1–1000). Local real/mock tests execute items sequentially |
 | `maxItems` | int | no | Distributed/local fan-out manifest limit, checked before calls; default 10000, maximum 100000 |
 | `from` | object | for pull | Pull source configuration |
@@ -308,7 +308,7 @@ Sources in the same stage (same dependency level) run concurrently. The IDM is o
 
 ### Source Fan-Out (path)
 
-**Production deployment remains disabled until M7.5.** Source `path` now works in local draft tests and the experimental distributed scheduler. Its selector runs once against the assembled IDM and must return an array. `$slice` is the selected element, `$index` its zero-based ordinal, `$idm` the frozen stage dependencies, and `$` in a source map is the fetched response. Results form an ordered array under the source name. Local tests run sequentially; the distributed stage honors `concurrency`. The offline CLI retains its older source fan-out contract. See the [tested M7.4 sample](examples/distributed-fanout/README.md) for the shared runtime/local contract and limits.
+**Deployed execution requires the distributed profile.** Source `path` works in local draft tests and the explicitly enabled Azure/Redis scheduler; ordinary deployments reject it. Its selector runs once against the assembled IDM and must return an array. `$slice` is the selected element, `$index` its zero-based ordinal, `$idm` the frozen stage dependencies, and `$` in a source map is the fetched response. Results form an ordered array under the source name. Local tests run sequentially; the distributed stage honors `concurrency`. The offline CLI retains its older source fan-out contract. See the [tested M7.4 sample](examples/distributed-fanout/README.md) for the shared runtime/local contract and limits.
 
 When a source has `path`, the IDM is sliced and the source is processed **once per slice**:
 
@@ -686,4 +686,4 @@ Plain data files (no envelope) also work — `$source` gets minimal defaults.
 
 ## Complete Example
 
-See the [sample pipeline](../spec/pipelines/sample-pipeline/) for a working example with YAML, scripts, and test data.
+See the [Deldo sample pipeline](examples/connectors/sample-deldo-stock/) for YAML, scripts and synthetic test data, and the [connector guide](connectors.md) for controlled real-system setup.

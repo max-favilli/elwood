@@ -22,6 +22,13 @@ switch (command)
     case "run":
         return RunScript(args, engine, factory);
     case "pipeline":
+        // YamlDotNet's reflection-based deserializer is not supported by this
+        // native build. The managed tool and runtime hosts retain YAML support.
+        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported)
+        {
+            Console.Error.WriteLine("Pipeline commands require the managed Elwood.Cli .NET tool. Native executables support DSL eval/run/repl only. See docs/local-testing.md.");
+            return 2;
+        }
         return RunPipeline(args, factory);
     case "repl":
         RunRepl(engine, factory);

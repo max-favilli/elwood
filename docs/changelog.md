@@ -9,6 +9,7 @@ Release preparation: versioned runtime ZIPs, consumer installation kit and optio
 - Shared immutable definition cache, authoritative ETag route invalidation, cold-cache recovery and finite Redis expiry.
 - Standalone API Azure consumers, shared Functions configuration, optional Managed Redis Bicep/Key Vault wiring, install smoke and separate Deldo/Eagle consumer instructions.
 - SQL adapter pins the patched PKCS dependency (9.0.21) for the October 2026 Microsoft advisories.
+- Native CLI executables now explain that YAML pipeline commands require the managed .NET tool, instead of returning a misleading YAML deserialization failure. DSL eval/run/repl remain supported and release CI exercises the native binaries.
 
 See [pilot handoff](pilot-handoff.md) for the candidate's evidence, finite limits and consumer-owned native-cloud/business acceptance. Package publication is not itself production certification.
 

@@ -120,7 +120,8 @@ jobs:
             rid: linux-x64
             artifact: elwood-linux-x64
             binary: Elwood.Cli
-          - os: macos-latest
+          # macos-latest is arm64; this published artifact targets Intel x64.
+          - os: macos-15-intel
             rid: osx-x64
             artifact: elwood-macos-x64
             binary: Elwood.Cli
@@ -136,6 +137,11 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Publish AOT
         run: dotnet publish dotnet/src/Elwood.Cli/Elwood.Cli.csproj -c Release -r ${{ matrix.rid }} -p:PublishAot=true
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Verify native CLI behavior
+        run: node scripts/native-cli-smoke.mjs dotnet/src/Elwood.Cli/bin/Release/net10.0/${{ matrix.rid }}/publish/${{ matrix.binary }}
       - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:

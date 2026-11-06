@@ -4,7 +4,7 @@ param cacheName string
 param location string = resourceGroup().location
 @allowed(['Balanced_B0', 'Balanced_B1', 'Balanced_B3', 'Balanced_B5', 'Balanced_B10'])
 param sku string = 'Balanced_B0'
-@description('A second billed node improves availability; journal recovery still protects correctness without it.')
+@description('Enable for production availability/SLA. The cheaper false default is for development/test pilots; durable recovery does not prevent cache downtime.')
 param highAvailability bool = false
 @description('Existing RBAC-enabled Key Vault in this resource group. The deployer must be allowed to create its secret and role assignment.')
 param keyVaultName string
