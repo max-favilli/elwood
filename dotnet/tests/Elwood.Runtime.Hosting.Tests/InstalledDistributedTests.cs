@@ -213,8 +213,16 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         var recoverable = (IRecoverableStateStore)states;
         await using (var claim = await recoverable.TryClaimAsync(id))
         { state.ExpiresAt = DateTime.UtcNow.AddMinutes(-1); await claim!.SaveAsync(state); }
-        for (var i = 0; i < 2000 && await states.GetExecutionAsync(id) is not null; i++)
+        for (var i = 0; i < 2000; i++)
+        {
+            var pendingCleanup = await states.GetExecutionAsync(id);
+            if (pendingCleanup is null) break;
+            if (Environment.GetEnvironmentVariable("ELWOOD_CAPACITY_REPORT_DIR") is { Length: > 0 } cleanupProgress)
+                await File.WriteAllTextAsync(Path.Combine(cleanupProgress, $"cleanup-progress-{itemCount}.json"), JsonSerializer.Serialize(new
+                { pass = i, phase = pendingCleanup.WorkCleanup?.Phase, stageIndex = pendingCleanup.WorkCleanup?.StageIndex,
+                    seconds = watch.Elapsed.TotalSeconds - cleanupStarted, sdkRequests = transactions.Count - cleanupRequests }));
             await second.GetRequiredService<DurableRuntime>().Runner().PruneAsync(timeout.Token, maximumWorkPages: 256);
+        }
         Assert.Null(await states.GetExecutionAsync(id));
         await retention.SweepAsync(timeout.Token);
         await foreach (var blob in blobs.GetBlobContainerClient("states").GetBlobsAsync(prefix: "elwood/work-journal/" + id + "/"))

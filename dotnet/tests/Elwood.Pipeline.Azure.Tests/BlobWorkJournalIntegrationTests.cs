@@ -9,6 +9,45 @@ namespace Elwood.Pipeline.Azure.Tests;
 public sealed class BlobWorkJournalIntegrationTests(AzuriteFixture fixture) : IClassFixture<AzuriteFixture>
 {
     [Fact]
+    public async Task Thousands_of_documents_and_journal_records_drain_in_bounded_cleanup_pages()
+    {
+        var container = fixture.ServiceClient.GetBlobContainerClient("large-cleanup-" + Guid.NewGuid().ToString("N"));
+        await container.CreateAsync();
+        try
+        {
+            var journal = new BlobWorkJournalStore(container, "test");
+            var documents = new AzureExecutionDocumentStore(container, "test");
+            await Parallel.ForEachAsync(Enumerable.Range(0, 2048), new ParallelOptions { MaxDegreeOfParallelism = 8 }, async (i, _) =>
+            {
+                await journal.CreateAsync($"execution/stage/items/{i:D4}", "{}");
+                await documents.StoreAsync($"exec/execution/input/{i:D4}", "{}");
+            });
+            await journal.CreateAsync("another/stage/items/0", "keep");
+            using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+            async Task Drain(Func<int, string?, CancellationToken, Task<StorageCleanupPage>> remove)
+            {
+                var deleted = 0;
+                for (var pass = 0; pass < 20; pass++)
+                {
+                    string? cursor = null; var examined = 0;
+                    do
+                    {
+                        var page = await remove(256, cursor, deadline.Token);
+                        Assert.InRange(page.Examined, 0, 256); Assert.False(page.Busy);
+                        deleted += page.Deleted; examined += page.Examined; cursor = page.NextCursor;
+                    } while (cursor is not null);
+                    if (examined == 0) { Assert.Equal(2048, deleted); return; }
+                }
+                Assert.Fail("Cleanup did not reach a quiet complete pass.");
+            }
+            await Drain((size, cursor, token) => journal.DeleteStagePageAsync("execution", "stage", size, cursor, token));
+            await Drain((size, cursor, token) => documents.DeleteExecutionPageAsync("execution", size, cursor, token));
+            Assert.Equal("keep", await journal.ReadAsync("another/stage/items/0"));
+        }
+        finally { await container.DeleteIfExistsAsync(); }
+    }
+
+    [Fact]
     public async Task Independent_workers_share_atomic_capacity_and_cleanup_can_use_reserved_space_when_full()
     {
         var container = fixture.ServiceClient.GetBlobContainerClient("journal-budget-" + Guid.NewGuid().ToString("N"));

@@ -167,37 +167,37 @@ public sealed class BlobWorkJournalStore(BlobContainerClient container, string s
             prefix: prefix, cancellationToken: cancellationToken).AsPages(continuation, maximumRecords))
         {
             if (page.Values.Count > maximumRecords) throw new WorkJournalException("Provider exceeded the cleanup page limit.");
-            var deleted = 0; var busy = false;
             foreach (var entry in page.Values)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
                 if (!entry.Name.StartsWith(prefix, StringComparison.Ordinal)) throw new WorkJournalException("Cleanup listing escaped its stage.");
+            var deleted = 0; var busy = 0;
+            await Parallel.ForEachAsync(page.Values, new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = cancellationToken }, async (entry, token) =>
+            {
                 var blob = container.GetBlobClient(entry.Name);
                 var historical = entry.Snapshot is not null || entry.VersionId is not null && entry.IsLatestVersion != true;
                 // The current header remains the durable admission tombstone. Old
                 // versions are garbage, including versions from interrupted sweeps.
-                if (preserveHeader && entry.Name == header && !historical) continue;
+                if (preserveHeader && entry.Name == header && !historical) return;
                 try
                 {
                     if (historical)
                     {
                         var version = entry.Snapshot is not null ? blob.WithSnapshot(entry.Snapshot) : blob.WithVersion(entry.VersionId);
-                        if ((await version.DeleteIfExistsAsync(cancellationToken: cancellationToken)).Value) deleted++;
+                        if ((await version.DeleteIfExistsAsync(cancellationToken: token)).Value) Interlocked.Increment(ref deleted);
                     }
                     else
                     {
-                        await using var claim = await BlobExecutionClaim.TryAcquireAsync(blob, entry.Name, cancellationToken: cancellationToken);
-                        if (claim is null) { busy = true; continue; }
-                        await claim.DeleteAsync(); deleted++;
+                        await using var claim = await BlobExecutionClaim.TryAcquireAsync(blob, entry.Name, cancellationToken: token);
+                        if (claim is null) { Interlocked.Exchange(ref busy, 1); return; }
+                        await claim.DeleteAsync(token); Interlocked.Increment(ref deleted);
                     }
                 }
                 catch (RequestFailedException ex) when (ex.Status == 404) { }
                 catch (RequestFailedException ex) when (ex.Status is 409 or 412 && ex.ErrorCode is
-                    "LeaseIdMissing" or "LeaseIdMismatchWithBlobOperation" or "LeaseAlreadyPresent") { busy = true; }
-            }
+                    "LeaseIdMissing" or "LeaseIdMismatchWithBlobOperation" or "LeaseAlreadyPresent") { Interlocked.Exchange(ref busy, 1); }
+            });
             var next = string.IsNullOrEmpty(page.ContinuationToken) ? null : Convert.ToBase64String(
                 System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new CleanupCursor(prefix, page.ContinuationToken)));
-            return new(page.Values.Count, deleted, busy, next);
+            return new(page.Values.Count, deleted, busy != 0, next);
         }
         return new(0, 0, false, null);
     }

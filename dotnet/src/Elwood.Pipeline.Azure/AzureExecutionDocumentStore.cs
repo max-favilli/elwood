@@ -124,24 +124,25 @@ public sealed class AzureExecutionDocumentStore(BlobContainerClient container, s
             prefix: prefix, cancellationToken: cancellationToken).AsPages(continuation, maximumRecords))
         {
             if (page.Values.Count > maximumRecords) throw new InvalidOperationException("Provider exceeded the document cleanup page limit.");
-            var deleted = 0; var busy = false;
+            // Validate the complete bounded page before issuing any deletion.
             foreach (var item in page.Values)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
                 if (!item.Name.StartsWith(prefix, StringComparison.Ordinal)) throw new InvalidOperationException("Document cleanup escaped its execution.");
+            var deleted = 0; var busy = 0;
+            await Parallel.ForEachAsync(page.Values, new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = cancellationToken }, async (item, token) =>
+            {
                 var blob = container.GetBlobClient(item.Name);
                 try
                 {
                     var historical = item.Snapshot is not null || item.VersionId is not null && item.IsLatestVersion != true;
                     var target = item.Snapshot is not null ? blob.WithSnapshot(item.Snapshot) : historical ? blob.WithVersion(item.VersionId) : blob;
                     if ((await target.DeleteIfExistsAsync(historical ? DeleteSnapshotsOption.None : DeleteSnapshotsOption.IncludeSnapshots,
-                        cancellationToken: cancellationToken)).Value) deleted++;
+                        cancellationToken: token)).Value) Interlocked.Increment(ref deleted);
                 }
-                catch (RequestFailedException ex) when (ex.Status is 409 or 412 && ex.ErrorCode is "LeaseIdMissing" or "LeaseIdMismatchWithBlobOperation") { busy = true; }
-            }
+                catch (RequestFailedException ex) when (ex.Status is 409 or 412 && ex.ErrorCode is "LeaseIdMissing" or "LeaseIdMismatchWithBlobOperation") { Interlocked.Exchange(ref busy, 1); }
+            });
             var next = string.IsNullOrEmpty(page.ContinuationToken) ? null : Convert.ToBase64String(
                 System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new CleanupCursor(prefix, page.ContinuationToken)));
-            return new(page.Values.Count, deleted, busy, next);
+            return new(page.Values.Count, deleted, busy != 0, next);
         }
         return new(0, 0, false, null);
     }

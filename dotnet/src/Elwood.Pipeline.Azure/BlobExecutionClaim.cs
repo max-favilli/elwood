@@ -158,10 +158,12 @@ public sealed class BlobExecutionClaim : IExecutionClaim
         await SaveContentAsync(content, headers, budget.Token);
     }
 
-    public async Task DeleteAsync()
+    public Task DeleteAsync() => DeleteAsync(CancellationToken.None);
+
+    internal async Task DeleteAsync(CancellationToken cancellationToken)
     {
         ThrowIfLost();
-        using var request = CancellationTokenSource.CreateLinkedTokenSource(_lostToken);
+        using var request = CancellationTokenSource.CreateLinkedTokenSource(_lostToken, cancellationToken);
         request.CancelAfter(_requestBudget);
         try
         {

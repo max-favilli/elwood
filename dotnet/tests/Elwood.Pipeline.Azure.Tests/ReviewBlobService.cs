@@ -13,6 +13,7 @@ internal sealed class ReviewBlobService : HttpMessageHandler
     private readonly Dictionary<(string Path, string Version), byte[]> _versions = [];
     private readonly Dictionary<(string Path, int Version), Dictionary<string, string>> _metadata = [];
     public Func<HttpRequestMessage, CancellationToken, Task>? BeforeUpload;
+    public Func<HttpRequestMessage, CancellationToken, Task>? BeforeDelete;
     public string? LoseUploadReplyFor;
     private readonly bool _versioning;
     private int _version;
@@ -34,6 +35,8 @@ internal sealed class ReviewBlobService : HttpMessageHandler
         var content = request.Content is null ? null : await request.Content.ReadAsByteArrayAsync(token);
         if (request.Method == HttpMethod.Put && !request.RequestUri.Query.Contains("comp=lease") && BeforeUpload is not null)
             await BeforeUpload(request, token);
+        if (request.Method == HttpMethod.Delete && BeforeDelete is not null)
+            await BeforeDelete(request, token);
         lock (_blobs)
         {
             var query = request.RequestUri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
