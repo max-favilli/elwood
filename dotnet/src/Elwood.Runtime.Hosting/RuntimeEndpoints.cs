@@ -213,9 +213,17 @@ public static class RuntimeEndpoints
             await runtime.Runner(state.PipelineId).ResumeAsync(id, body.AcknowledgeUncertain);
             return Results.Accepted($"/api/executions/{id}", new { executionId = id });
         }).WithMetadata(new ManagementPermission("recover", false));
+        routes.MapGet("/api/executions/{id}/recovery-options", async (string id, IStateStore states, DurableRuntime runtime, HttpContext context) =>
+        {
+            var state = await states.GetExecutionAsync(id);
+            return state is null || !CanReadExecution(context, state) ? Results.NotFound() : Results.Ok(new {
+                replayEnabled = state.WorkProfile is null || state.WorkProfile == DistributedStepScheduler.Profile && runtime.SupportsDistributedWork });
+        }).WithMetadata(new ManagementPermission("read", false));
         routes.MapPost("/api/executions/{id}/replay", async (string id, ReplayRequest body, IStateStore states, IDeploymentStore store, DurableRuntime runtime, HttpContext context) =>
         {
             var state = await RecoveryExecution(id, states, context);
+            if (state.WorkProfile is not null && !runtime.SupportsDistributedWork)
+                throw new RecoveryConflictException("Distributed replay is not enabled in this installation.");
             ParsedPipeline? revision = null;
             if (body.RevisionId is not null && body.RevisionId != state.RevisionId)
             {
@@ -223,10 +231,11 @@ public static class RuntimeEndpoints
                 var bundle = (await store.RevisionsAsync(state.PipelineId)).FirstOrDefault(r => r.RevisionId == body.RevisionId)
                     ?? throw new KeyNotFoundException("Published revision not found for this pipeline.");
                 revision = new PipelineParser().ParseContent(bundle.Content, state.PipelineId, bundle.RevisionId);
-                var errors = RuntimeErrors(revision);
+                var errors = RuntimeErrors(revision, distributed: state.WorkProfile is not null);
                 if (errors.Count > 0) return Results.BadRequest(new { errors });
             }
-            var replay = await runtime.Runner(state.PipelineId).ReplayAsync(id, revision, body.AcknowledgeUncertain, body.ForceProcessing);
+            var replay = await runtime.Runner(state.PipelineId).ReplayAsync(id, revision, body.AcknowledgeUncertain, body.ForceProcessing,
+                body.RequestId is null ? null : new WorkReplayRequest(body.RequestId, body.Scope ?? "", body.AcknowledgeDuplicates));
             return Results.Accepted($"/api/executions/{replay}", new { executionId = replay, replayOf = id });
         }).WithMetadata(new ManagementPermission("recover", false));
         routes.MapPost("/api/v1/trigger/{**path}", async (string path, HttpContext context, IDeploymentStore store) =>
@@ -338,9 +347,9 @@ public static class RuntimeEndpoints
         documentStore: context.RequestServices.GetRequiredService<IDocumentStore>(),
         sourceConnectors: context.RequestServices.GetRequiredService<RuntimeConnectors>().Sources(id, isTest), destinationConnectors: context.RequestServices.GetRequiredService<RuntimeConnectors>().Destinations(id, isTest),
         logger: context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger<SyncExecutor>());
-    static List<string> RuntimeErrors(ParsedPipeline parsed, bool localTest = false)
+    static List<string> RuntimeErrors(ParsedPipeline parsed, bool localTest = false, bool distributed = false)
     {
-        var errors = DeploymentValidation.Errors(parsed, fanOut: localTest);
+        var errors = DeploymentValidation.Errors(parsed, fanOut: localTest || distributed);
         if (parsed.Config.Sources.Any(s => s.From?.FileShare is not null) || parsed.Config.Outputs.Any(o => o.Destinations?.FileShare?.Count > 0))
             errors.Add("Host filesystem connectors are disabled in the management runtime. Use the trusted CLI for local files.");
         return errors;
@@ -353,4 +362,5 @@ record RevisionRequest(string ExpectedRevisionId);
 record DraftRequest(PipelineContent? Content);
 record ExecutionRequest(string PipelineId, JsonElement Payload, PipelineContent? Content, string? ExpectedRevisionId, string? TestMode, MockFixtures? Mocks);
 record ResumeRequest(bool AcknowledgeUncertain = false);
-record ReplayRequest(string? RevisionId = null, bool AcknowledgeUncertain = false, bool ForceProcessing = false);
+record ReplayRequest(string? RevisionId = null, bool AcknowledgeUncertain = false, bool ForceProcessing = false,
+    string? RequestId = null, string? Scope = null, bool AcknowledgeDuplicates = false);

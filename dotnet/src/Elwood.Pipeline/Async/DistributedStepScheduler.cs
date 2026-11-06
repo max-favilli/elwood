@@ -152,6 +152,8 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
                 await journal.RecoverAsync(work.Stage, token: token);
                 await runner.RecoverItemAsync(work.Stage, 0, token);
                 var item = (await journal.ReadPageAsync(work.Stage, 0, 1, token)).Single();
+                work.StatusSummary = new() { StartedAt = journal.Time.GetUtcNow(), Complete = true };
+                work.StatusSummary.Observe(item.Status, journal.Time.GetUtcNow());
                 work.RecoveryIssue = null;
                 if (item.Status == "Completed")
                 {
@@ -265,14 +267,19 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
         work.PermitCursor = (work.PermitCursor + count) % work.Stage.MaxConcurrency;
         var end = Math.Min(work.Stage.ItemCount, work.ItemCursor + count);
         if (work.ItemCursor == 0)
-        { work.ScanHasActive = false; work.ScanHasFailure = false; work.ScanHasReview = false; }
+        { work.ScanHasActive = false; work.ScanHasFailure = false; work.ScanHasReview = false;
+            work.StatusScan = new() { StartedAt = journal.Time.GetUtcNow(), ObservedAt = journal.Time.GetUtcNow() }; }
+        // Older checkpoints can resume part way through a scan without counts. Finish
+        // that pass without inventing observations; the next pass starts a full scan.
         work.RecoveryIssue = null;
         for (var ordinal = work.ItemCursor; ordinal < end; ordinal++)
         {
+            var observed = false;
             try
             {
                 await runner.RecoverItemAsync(work.Stage, ordinal, token);
                 var item = (await journal.ReadPageAsync(work.Stage, ordinal, 1, token)).Single();
+                work.StatusScan?.Observe(item.Status, journal.Time.GetUtcNow()); observed = true;
                 if (item.Status is "Failed" or "AwaitingReview")
                 {
                     if (item.CheckpointReference is not null)
@@ -296,8 +303,11 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
                 }
             }
             catch (Exception) when (token.IsCancellationRequested) { throw; }
-            catch (Exception error) { work.ScanHasActive = true; work.RecoveryIssue = $"Item {ordinal} recovery requires attention ({error.GetType().Name})."; }
+            catch (Exception error) { if (!observed) work.StatusScan?.Observe(null, journal.Time.GetUtcNow());
+                work.ScanHasActive = true; work.RecoveryIssue = $"Item {ordinal} recovery requires attention ({error.GetType().Name})."; }
         }
+        if (end == work.Stage.ItemCount && work.StatusScan is { } scan && scan.Scanned == work.Stage.ItemCount)
+        { scan.Complete = true; work.StatusSummary = scan with { }; }
         work.ItemCursor = end == work.Stage.ItemCount ? 0 : end;
         if (work.ScanHasFailure)
         {
@@ -312,6 +322,9 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
             if (await aggregate.AdvanceAsync(work, step, message.Type, message.StepName, count, token))
             {
                 step.Status = ExecutionStatus.Completed; step.CompletedAt = Now;
+                // Ordered aggregation has now verified every immutable completed item.
+                work.StatusSummary = new() { StartedAt = journal.Time.GetUtcNow(), ObservedAt = journal.Time.GetUtcNow(),
+                    Complete = true, Scanned = work.Stage.ItemCount, Completed = work.Stage.ItemCount };
                 if (step is SourceStepState source) { source.FanOutCount = work.Stage.ItemCount; source.FanOutCompleted = work.Stage.ItemCount; }
                 if (step is OutputStepState output) { output.ItemCount = work.Stage.ItemCount; output.DeliveredCount = work.DeliveredCount; }
             }

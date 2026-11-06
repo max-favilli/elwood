@@ -1,6 +1,6 @@
 # Elwood delivery checklist and work breakdown
 
-Last updated: 16 October 2026. Scope: the `elwood` backend and sibling `elwood-portal` repositories. This is the master progress checklist; [implementation-plan.md](implementation-plan.md) retains the design rationale and historical verification results.
+Last updated: 6 November 2026. Scope: the `elwood` backend and sibling `elwood-portal` repositories. This is the master progress checklist; [implementation-plan.md](implementation-plan.md) retains the design rationale and historical verification results.
 
 Check a box only when its stated behavior is implemented and verified. An unchecked item may be underway; **Active** identifies current work. Add evidence and remaining limitations when checking an item. A completed service probe does not complete a runtime adapter or a milestone. No work runs in the background between chat turns unless explicitly scheduled.
 
@@ -12,7 +12,7 @@ Check a box only when its stated behavior is implemented and verified. An unchec
 - [x] M4 — Durable local execution, retries, recovery and internal retention.
 - [x] M5 — Representative connectors and controlled integration verification.
 - [x] M6 — Code, installer and `v0.7.26` release verified. Complete-day telemetry/cap decision recorded; temporary group deletion confirmed 13 October at 11:59:42 UTC. **Stable reported campaign cost €0.1348 as of 16 October 11:49:29 UTC**, not a settled invoice. Billing reconciliation complete and automation paused; consumer acceptance of observed heartbeat gaps remains open. [Campaign and installer evidence](m6-release-evidence.md).
-- [ ] M7 — **Active, resumed 12 October at the owner's request.** Durable journals, coordination, parent scheduling and explicit fan-out/aggregation (7.4) pass local checks and all CI jobs. Next: implement the [inspection/recovery design](item-inspection-recovery-design.md), retention and quotas (7.5). Host activation and consumer release remain open. [Contract and work breakdown](distributed-work-items.md).
+- [ ] M7 — **Active, resumed 12 October at the owner's request.** Durable journals, coordination, parent scheduling and explicit fan-out/aggregation (7.4) pass local checks and all CI jobs. Inspection/recovery, explicit replay, status counts, retention and quota components are implemented (7.5a–f); next are complete installed-host verification and activation (7.5g). Host activation and consumer release remain open. [Contract and work breakdown](distributed-work-items.md).
 - [ ] Adoption — Eagle SAP and Deldo consumer installation and real-world acceptance; Eagle's concurrent work-item flow also depends on M7.
 
 M1–M5 completion describes their implemented scope, not production/cloud readiness. The first and second independent-review follow-ups are part of that baseline. DSL behavior is outside the M6 implementation scope.
@@ -188,7 +188,7 @@ Depends on the preceding implementation packages.
 - [ ] 7.5 — Complete the [item inspection/recovery design](item-inspection-recovery-design.md). The first implementation package adds journal-backed read endpoints, durable selected retries and portal controls; production activation is still gated on the remaining work below.
   - [x] 7.5a — Typed, pipeline-authorized stage/item/attempt endpoints, bounded filtered pages, ordinal lookup, lazy previews and successful warnings.
   - [x] 7.5b — Persist selected retry intent before child transitions; reconcile interrupted commands, preserve revision/receipts and reject stale attempts. Separate uncertain-write acknowledgement in the portal.
-  - [x] 7.5c — Portal item table, detail/attempt inspection, filtering, retained request IDs after lost responses and terminal polling stop. Existing whole-execution recovery controls are disabled for distributed executions.
+  - [x] 7.5c — Portal item table, detail/attempt inspection, filtering, retained request IDs after lost responses and terminal polling stop. Whole-step resume remains disabled; 7.5f supplies explicit distributed replay.
   - [ ] 7.5d — Close physical retention with admission/accounting verification. The [5 November implementation package](item-inspection-recovery-design.md#bounded-physical-cleanup-package--5-november-2026) adds parent/stage deletion intent, claim drain, bounded restartable journal/document/version/receipt/projection cleanup and independent output obligations. Production registration remains gated on 7.5e/g.
     - [x] Implement and locally verify deletion fences, active-owner drain, restartable parent progress and bounded provider cleanup.
     - [x] Preserve business-output cleanup obligations; use a fresh scoped local document layout instead of ambiguous flattened paths.
@@ -198,7 +198,7 @@ Depends on the preceding implementation packages.
     - [x] Charge document and journal UTF-8 bytes/objects before each upload; preserve uncertain/late-write obligations and finite maintenance capacity.
     - [x] Expose reserved/used work capacity and remaining storage allowances in retention health; reject new work when the configured retention health guard fails. Accounting survives process restart independently of Redis.
     - [ ] Bind and exercise the complete quota/health/retention configuration in the opted-in API/Functions installation alongside 7.5g. The filesystem journal remains a development/test adapter without installation-wide accounting.
-  - [ ] 7.5f — Define and implement distributed replay scope/acknowledgement; add authoritative bounded stage status summaries and installed-host controls.
+  - [x] 7.5f — Whole-execution distributed replay with original/selected published revision, separate duplicate/uncertain-write acknowledgements and stable request receipts; journal-derived bounded stage counts with observation windows. Shared HTTP controls report/reject installations without an explicitly registered distributed runner. [Contract and verification](item-inspection-recovery-design.md#distributed-replay-and-stage-counts--6-november-2026). Actual installation registration remains 7.5g.
   - [ ] 7.5g — Verify cleanup/recovery races and installation opt-in, then register the distributed services in API/Functions and close 7.3/7.5.
 - [ ] 7.6 — Add the shared immutable pipeline/route cache with deployment invalidation and correct cold-cache behavior.
 - [ ] 7.7 — Verify thousands of items across independent workers, duplicate delivery, restart/failover, uncertain writes and retention; measure provider capacity and cost.

@@ -28,10 +28,15 @@ public sealed class RuntimeStepQueue : IStepQueue
     }
 }
 
+// Registered only by a fully configured distributed installation (or a contract fixture).
+public sealed record DistributedExecutionFactory(Func<string?, AsyncExecutor> Create);
+
 public sealed class DurableRuntime(IStateStore states, IDocumentStore documents, IStepQueue queue,
-    ManagementSecurity security, ISecretProvider secrets, RuntimeConnectors connectors, ContentFingerprintStore? fingerprints = null, ExecutionConcurrencyGate? concurrency = null)
+    ManagementSecurity security, ISecretProvider secrets, RuntimeConnectors connectors, ContentFingerprintStore? fingerprints = null, ExecutionConcurrencyGate? concurrency = null,
+    DistributedExecutionFactory? distributed = null)
 {
-    public AsyncExecutor Runner(string? pipelineId = null) => new(states, documents, queue, fingerprints: fingerprints, concurrency: concurrency,
+    public bool SupportsDistributedWork => distributed is not null;
+    public AsyncExecutor Runner(string? pipelineId = null) => distributed?.Create(pipelineId) ?? new(states, documents, queue, fingerprints: fingerprints, concurrency: concurrency,
         secretProvider: pipelineId is null ? new ScopedSecretProvider(secrets, []) : security.Secrets(secrets, pipelineId, false),
         sourceConnectors: connectors.Sources(pipelineId ?? "", false), destinationConnectors: connectors.Destinations(pipelineId ?? "", false));
 }

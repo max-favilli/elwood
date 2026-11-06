@@ -20,7 +20,7 @@ namespace Elwood.Pipeline.Async;
 /// external effects and its checkpoint, in the default profile. The optional experimental
 /// distributed scheduler uses parent claims for control and journal claims for item attempts.
 /// </summary>
-public sealed class AsyncExecutor
+public sealed partial class AsyncExecutor
 {
     private readonly IRecoverableStateStore _states;
     private readonly IDocumentStore _documents;
@@ -58,15 +58,15 @@ public sealed class AsyncExecutor
 
     private async Task<string> StartCoreAsync(ParsedPipeline pipeline, IElwoodValue triggerPayload, string? triggerSourceName = null,
         string? idempotencyKey = null, string? replayOf = null, bool isTest = false, IElwoodValue? triggerMetadata = null, bool durable = true, DateTime? executionDeadlineAt = null,
-        CancellationToken cancellationToken = default, bool forceProcessing = false)
+        CancellationToken cancellationToken = default, bool forceProcessing = false, string? reservedReplayId = null)
     {
         pipeline = PipelineSnapshot.Detach(pipeline);
         if (forceProcessing && replayOf is null) throw new ArgumentException("Forced processing is available only through explicit replay.");
         if (pipeline.Config.Deduplication is { Mode: "skip" } && !isTest && _test is null && _fingerprints is null)
             throw new InvalidOperationException("Content deduplication requires a durable fingerprint store.");
         if (idempotencyKey is { Length: > 200 }) throw new ArgumentException("Idempotency-Key must be at most 200 characters.");
-        var id = string.IsNullOrWhiteSpace(idempotencyKey) ? Guid.NewGuid().ToString() :
-            "event-" + Hash((pipeline.PipelineId ?? pipeline.Config.Name) + "\n" + triggerSourceName + "\n" + idempotencyKey);
+        var id = reservedReplayId ?? (string.IsNullOrWhiteSpace(idempotencyKey) ? Guid.NewGuid().ToString() :
+            "event-" + Hash((pipeline.PipelineId ?? pipeline.Config.Name) + "\n" + triggerSourceName + "\n" + idempotencyKey));
         await using var claim = await _states.TryCreateClaimAsync(id, cancellationToken) ?? throw new RecoveryConflictException("This execution is busy. Retry the request.");
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, claim.OwnershipLost);
         await claim.ValidateAsync(lifetime.Token);
@@ -77,6 +77,8 @@ public sealed class AsyncExecutor
             await claim.ValidateAsync(lifetime.Token);
             if (existing.Deleting || existing.ExpiresAt <= Now) throw new RecoveryConflictException("The idempotency record is expiring. Use a new event key.");
             if (existing.InputHash != Hash(input)) throw new IdempotencyPayloadConflictException();
+            if (reservedReplayId is not null && (existing.ReplayOf != replayOf || existing.RevisionId != pipeline.RevisionId || existing.ForceProcessing != forceProcessing))
+                throw new RecoveryConflictException("Replay identity conflicts with the retained execution.");
             return id;
         }
         var state = new ExecutionState
@@ -480,11 +482,13 @@ public sealed class AsyncExecutor
         await Notify(Ready(state, Stages(pipeline)));
     }
 
-    public async Task<string> ReplayAsync(string id, ParsedPipeline? revision = null, bool acknowledgeUncertain = false, bool forceProcessing = false)
+    public async Task<string> ReplayAsync(string id, ParsedPipeline? revision = null, bool acknowledgeUncertain = false, bool forceProcessing = false,
+        WorkReplayRequest? distributedReplay = null)
     {
         await using var claim = await ClaimExistingAsync(id);
         var state = await _states.GetExecutionAsync(id) ?? throw new KeyNotFoundException("Execution not found.");
-        RejectLegacyRecovery(state);
+        if (state.WorkProfile is not null)
+            return await ReplayWorkAsync(state, claim, revision, acknowledgeUncertain, forceProcessing, distributedReplay);
         if (!state.Durable || state.IsTest || state.Deleting || state.ExpiresAt <= Now || state.Status is ExecutionStatus.Running or ExecutionStatus.Pending or ExecutionStatus.Retrying)
             throw new RecoveryConflictException("Only retained terminal executions can be replayed.");
         if (state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values).Any(s => s.OutcomeUncertain) && !acknowledgeUncertain)

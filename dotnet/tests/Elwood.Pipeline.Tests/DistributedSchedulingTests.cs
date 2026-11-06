@@ -376,8 +376,9 @@ public sealed partial class DistributedSchedulingTests : IDisposable
         public Task<string?> ReadAsync(string key, CancellationToken cancellationToken = default) => inner.ReadAsync(key, cancellationToken);
         public Task<IWorkJournalClaim?> TryClaimAsync(string key, CancellationToken cancellationToken = default) => inner.TryClaimAsync(key, cancellationToken);
     }
-    private sealed class ParentFault(IRecoverableStateStore inner, bool committed) : IRecoverableStateStore
+    private sealed class ParentFault(IRecoverableStateStore inner, bool committed, Func<ExecutionState, bool>? failWhen = null) : IRecoverableStateStore
     {
+        private readonly Func<ExecutionState, bool>? _failWhen = failWhen;
         private bool _failed;
         private readonly bool _committed = committed;
         public async Task<IExecutionClaim?> TryClaimAsync(string id, CancellationToken cancellationToken = default)
@@ -401,7 +402,7 @@ public sealed partial class DistributedSchedulingTests : IDisposable
             public Task ValidateAsync(CancellationToken cancellationToken = default) => inner.ValidateAsync(cancellationToken);
             public async Task SaveAsync(ExecutionState state)
             {
-                if (!owner._failed && state.Sources.TryGetValue("left", out var source) && source is { Status: ExecutionStatus.Completed, Work: not null })
+                if (!owner._failed && (owner._failWhen?.Invoke(state) ?? (state.Sources.TryGetValue("left", out var source) && source is { Status: ExecutionStatus.Completed, Work: not null })))
                 {
                     owner._failed = true;
                     if (owner._committed) await inner.SaveAsync(state);

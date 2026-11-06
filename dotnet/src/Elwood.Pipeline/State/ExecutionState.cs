@@ -42,6 +42,7 @@ public sealed class ExecutionState
     public int WorkRecoveryCursor { get; set; }
     public Async.WorkRetryCommand? PendingWorkRetry { get; set; }
     public int WorkRetryCommands { get; set; }
+    public List<Async.WorkReplayCommand> WorkReplays { get; set; } = [];
     public string? TriggerRef { get; set; }
     public string? TriggerSourceName { get; set; }
     public string? ReplayOf { get; set; }
@@ -115,6 +116,8 @@ public sealed class DistributedStepState
     public bool ScanHasActive { get; set; }
     public bool ScanHasFailure { get; set; }
     public bool ScanHasReview { get; set; }
+    public WorkStatusCounts? StatusScan { get; set; }
+    public WorkStatusCounts? StatusSummary { get; set; }
     public int AggregatedItems { get; set; }
     public int AggregateBytes { get; set; }
     public int DeliveredCount { get; set; }
@@ -122,6 +125,36 @@ public sealed class DistributedStepState
 }
 
 public sealed record WorkDataPage(string Reference, string Sha256, int Count);
+
+/// <summary>Journal observations over a bounded scan, not an atomic live snapshot.</summary>
+public sealed record WorkStatusCounts
+{
+    public DateTimeOffset StartedAt { get; init; }
+    public DateTimeOffset ObservedAt { get; set; }
+    public bool Complete { get; set; }
+    public int Scanned { get; set; }
+    public int Pending { get; set; }
+    public int Running { get; set; }
+    public int Completed { get; set; }
+    public int Failed { get; set; }
+    public int AwaitingReview { get; set; }
+    public int Retrying { get; set; }
+    public int Unknown { get; set; }
+    internal void Observe(string? status, DateTimeOffset now)
+    {
+        Scanned++; ObservedAt = now;
+        switch (status)
+        {
+            case "Pending": Pending++; break;
+            case "Running": Running++; break;
+            case "Completed": Completed++; break;
+            case "Failed": Failed++; break;
+            case "AwaitingReview": AwaitingReview++; break;
+            case "Retrying": Retrying++; break;
+            default: Unknown++; break;
+        }
+    }
+}
 
 public sealed class StepAttempt
 {

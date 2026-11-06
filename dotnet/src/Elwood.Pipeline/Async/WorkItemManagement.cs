@@ -9,7 +9,7 @@ namespace Elwood.Pipeline.Async;
 
 public sealed record WorkStageSummary(string StageId, string StepName, string StepType, string Generation,
     string RevisionId, string Status, int ItemCount, int AggregatedItems, DateTimeOffset Deadline,
-    DateTimeOffset ExpiresAt, string? RecoveryIssue, bool Admitted);
+    DateTimeOffset ExpiresAt, string? RecoveryIssue, bool Admitted, WorkStatusCounts? Counts);
 public sealed record WorkItemRow(int Ordinal, string Status, int Attempt, long Version, bool Uncertain,
     string? Diagnostic, DateTimeOffset? NotBefore, bool CanRetry);
 public sealed record WorkItemPage(string Generation, DateTimeOffset ObservedAt, int Scanned,
@@ -39,7 +39,7 @@ public sealed class WorkItemManagement(DurableWorkJournal journal, IDocumentStor
         return Steps(state).Where(s => s.Step.Work is not null).Take(DistributedStepScheduler.MaximumSteps)
             .Select(s => { var w = s.Step.Work!; return new WorkStageSummary(w.Stage.StageId, s.Name, s.Type,
                 w.Stage.Generation, w.Stage.RevisionId, s.Step.Status.ToString(), w.Stage.ItemCount, w.AggregatedItems,
-                w.Stage.Deadline, w.Stage.ExpiresAt, w.RecoveryIssue, w.Admitted); }).ToArray();
+                w.Stage.Deadline, w.Stage.ExpiresAt, w.RecoveryIssue, w.Admitted, w.StatusSummary ?? w.StatusScan); }).ToArray();
     }
 
     public async Task<WorkItemPage> ItemsAsync(ExecutionState state, string stageId, string? status = null,

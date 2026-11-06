@@ -1,6 +1,6 @@
 # Item inspection and recovery — M7.5 design
 
-Status: **implementation in progress, 5 November 2026**. The read/selected-retry API, portal controls and bounded physical-cleanup coordinator below are implemented for an explicitly configured journal/scheduler. They are **not registered for production use** in API/Functions yet. Admission quotas and late-upload accounting, distributed replay and installed-host verification remain required before enabling the distributed profile. The original design was agreed on 12 October; the current implementation and limits are recorded below.
+Status: **implementation in progress, 6 November 2026**. Read/selected-retry APIs, explicit distributed replay, journal status counts, portal controls, bounded physical cleanup and Azure admission/late-upload accounting are implemented for an explicitly configured journal/scheduler. They are **not registered for production use** in API/Functions yet. Complete installed-host quota/health/retention/cold-Redis verification and registration remain required before enabling the distributed profile. The original design was agreed on 12 October; dated packages below record their respective baselines.
 
 ## Operator workflow
 
@@ -10,7 +10,7 @@ The table supports status filtering and ordinal lookup. A detail drawer shows th
 
 Operators can select current failed/review items and choose **Retry selected items**. The confirmation lists the exact items, their current attempt numbers and the pinned revision. If any outcome is uncertain, a separate acknowledgement explains which external writes may already have happened and may be repeated. A generic confirmation checkbox is insufficient. Completed items cannot be selected or reset. Items with delivered destinations retain their receipts and skip those destinations during the next attempt.
 
-Ordinary retries continue the same execution and original revision. A replay is a separate execution with explicit scope and duplicate-write acknowledgement; it does not reset the original journal. Revision changes belong to replay, never a retry. M7.5 must define the user-facing replay options alongside the existing whole-execution replay controls before connecting those controls to distributed executions.
+Ordinary retries continue the same execution and original revision. A replay is a separate execution with explicit whole-execution scope and duplicate-write acknowledgement; it does not reset the original journal. Revision changes belong to replay, never a retry. The 6 November package below defines the replay options and installed-host capability gate.
 
 ## Management contract
 
@@ -30,7 +30,7 @@ A retry command is durable before queue publication. Repeating its request ID af
 
 The parent claim coordinates reopening a failed/review execution and recording the recovery command. It must not authorize an already completed destination again. Child retries use the journal's fenced expected-attempt contract. Reconcile an interrupted batch from persisted decisions before declaring it accepted or finished; queue messages remain replaceable hints. Tests must interrupt recovery before and after each durable boundary.
 
-Counts and filtered lists may use Redis projections, carrying their observation time. Actions always recheck durable state. Cold, evicted or stale projections use bounded journal scans and reconciliation; they must not force a full scan within one HTTP request. Poll while work or a recovery request is active, and stop for terminal executions; manual refresh remains available.
+Counts currently use bounded journal scans persisted in the parent, carrying their observation interval and coverage. They require no Redis entries and no full scan within an HTTP request. Actions always recheck durable state; counts never authorize recovery. Poll while work or a recovery request is active, and stop for terminal executions; manual refresh remains available.
 
 ## Retention and admission are part of the same gate
 
@@ -122,3 +122,35 @@ Retention health includes reserved items/attempts, used attempts and available o
 Regressions cover concurrent/idempotent and conflicting admission, cross-partition parent closure, restart, attempt exhaustion without another Running transition, rejection before context/input uploads, UTF-8 byte/object limits, lost and late upload replies, resumed admission confirmation, stale generations, independent sweeps racing parent cleanup, and lost cleanup-save replies at full quota. A real Azurite test exercises two independent ledger clients and the reserved header path; versioned-storage behavior uses the deterministic Azure SDK HTTP transport because Azurite does not implement Blob versioning. Installed-host/cold-Redis acceptance and provider load/failover measurement remain open.
 
 Local verification: the full solution builds with zero warnings/errors, including .NET 8 package targets. **330 Pipeline, 61 Azure adapter, 15 Hosting and two Redis transport tests** pass. After the final delayed-sweep generation regression, all **18 focused accounting/retention tests** pass and the runtime/.NET 8 Azure package rebuild passes. All **five API contracts** pass against the rebuilt DLL with `ELWOOD_TEST_RUNTIME_DLL` and `--test-concurrency=1`. An initial parallel contract run, competing with the .NET suites, exhausted the two-second sync budget before the fixture's first upstream call; the isolated rerun passes without changing its assertions. Portal code is unchanged. Real Azurite/Redis verification runs in CI, not against a new live Azure lab.
+
+## Distributed replay and stage counts — 6 November 2026
+
+Replay accepts only `whole-execution` scope. It creates a new durable execution from the retained original trigger payload/metadata, using the original snapshot by default or an explicitly selected published revision of the same pipeline. The selected revision must remain asynchronous and retain the trigger source. Sources run again, so external pull data can differ. Item subsets use **Retry selected items**, which preserves successful deliveries and the original revision; replay creates fresh manifests, generations, checkpoints and delivery receipts without resetting the original journal.
+
+`POST /api/executions/{id}/replay` retains the existing `revisionId`, `acknowledgeUncertain` and `forceProcessing` fields. Distributed executions additionally require:
+
+```json
+{
+  "requestId": "operator-generated-stable-id",
+  "scope": "whole-execution",
+  "acknowledgeDuplicates": true,
+  "acknowledgeUncertain": true,
+  "forceProcessing": false
+}
+```
+
+The portal requires separate confirmations for whole-pipeline scope, repeated completed deliveries, and uncertain writes. Both write acknowledgements are mandatory for distributed replay, even if the parent currently reports no uncertainty: an execution deadline may settle the parent before every in-flight child reports its outcome. File-content suppression still applies unless `forceProcessing` is explicitly selected. A forced replay fences further recovery of the original, as in the existing ordinary profile.
+
+The original parent claim serializes replay with selected retry and deletion. Before child creation it records the request hash and a reserved new execution ID. A repeated request reconciles that same child after an interrupted or lost response; changed options conflict. An accepted receipt returns the original child ID even after that child's retained history is removed, and never recreates it. The new execution goes through normal acceptance, capacity and retention independently. There is no partial journal migration or sharing of delivery receipts.
+
+At most 100 replay commands are retained per original execution. An unaccepted command can create its reserved child for at most ten minutes, shortened to half the selected revision's retention when that is smaller; after that, it may reconcile an existing child but cannot recreate an absent one. This bounds an ambiguous creation window after child history has expired. Another command and selected-item retry wait until the outstanding creation window ends or the original request is reconciled. Resend the original request after a lost response; if the window expired without a retained child, inspect execution history before intentionally submitting a new request ID. The portal retains the request and locks its options while resending. Before HTTP 202 there is no promise of automatic creation by a recovery worker: the caller must resend. Once accepted, the ordinary durable recovery index processes the child even if queue publication was lost.
+
+`GET /api/executions/{id}/recovery-options` checks parent-scoped read permission and reports whether replay is supported by the installed profile. Replay itself checks recovery permission and refuses distributed execution unless the host explicitly supplies `DistributedExecutionFactory`. API and Functions use the same dispatcher. Contract fixtures exercise both absent and explicit registrations; this hook does not activate the profile in either shipped host. Complete quota/health/retention wiring and cold-Redis verification remain 7.5g.
+
+Stage summaries now include counts for Pending, Running, Completed, Failed, AwaitingReview, Retrying and Unknown, plus `scanned`, `complete`, `startedAt` and `observedAt`. The scheduler derives them from its existing shared 64-item recovery budget; management reads do not scan every journal item. Partial scans persist across process replacement. Unreadable/corrupt items count as Unknown, never Pending. A completed scan remains visible with its observation interval while the next scan advances; initial coverage is explicitly partial. Ordered aggregation can publish all-completed counts only after verifying every immutable completed result. Selected retry clears the previous summary before starting a new scan.
+
+These are durable journal observations over an interval, not an atomic current snapshot. Counts do not authorize actions; selected retries still recheck the item and its attempt. Redis eviction has no effect on these summaries. Terminal polling stops, manual refresh remains available, and older executions without observations display counts as unavailable rather than zero. The portal's item-page counts remain separate from the stage summary.
+
+Regression coverage includes original/selected revision replay, unchanged original item records, new generations, both acknowledgements, forbidden scope, changed request options, interruptions before/after intent/child/receipt saves, retained receipt behavior after child deletion, creation-window expiry, parent eligibility and the forced-processing fence. Summary coverage includes a 150-item scan across replacement schedulers and an unreadable final record. Shared HTTP tests cover authorization, disabled installations and stable replay in an explicitly configured fixture. No cloud resources, live installation or throughput certification are claimed by this package.
+
+Local verification: the full solution builds with zero warnings/errors, including .NET 8 and .NET 10 packages. The full Pipeline suite passes **343 tests** before the final eligibility/short-retention cases; the final **19 focused replay/count regressions** pass after those additions. **62 Azure adapter tests**, **16 Hosting tests** and all **five HTTP contracts** pass. Contracts use the rebuilt DLL through `ELWOOD_TEST_RUNTIME_DLL` and run serially. Portal `05bda09`: **120 Node tests**, **24 component tests**, production build/TypeScript and lint pass (three pre-existing hook dependency warnings, no lint errors); [portal CI](https://github.com/max-favilli/elwood-portal/actions/runs/42189453072) is green. Provider integration and final whole-suite totals are verified separately by backend CI.

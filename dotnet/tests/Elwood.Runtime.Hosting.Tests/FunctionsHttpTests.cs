@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Azure.Core;
+using Elwood.Pipeline;
 using Elwood.Pipeline.Async;
 using Elwood.Pipeline.Azure;
 using Elwood.Pipeline.Registry;
@@ -215,6 +216,12 @@ public sealed class FunctionsHttpTests
             const string route = "/api/executions/run/work-stages/source";
             Assert.Equal(401, (await Send(route + "/items", authenticated: false)).Response.StatusCode);
             Assert.Equal(200, (await Send("/api/executions/run/work-stages")).Response.StatusCode);
+            var options = await Send("/api/executions/run/recovery-options"); options.Response.Body.Position = 0;
+            using (var enabled = await JsonDocument.ParseAsync(options.Response.Body))
+                Assert.False(enabled.RootElement.GetProperty("replayEnabled").GetBoolean());
+            Assert.Equal(404, (await Send("/api/executions/denied/recovery-options")).Response.StatusCode);
+            Assert.Equal(409, (await Send("/api/executions/run/replay", new { requestId = "replay", scope = "whole-execution", acknowledgeDuplicates = true, acknowledgeUncertain = true })).Response.StatusCode);
+            Assert.Equal(404, (await Send("/api/executions/denied/replay", new { requestId = "replay" })).Response.StatusCode);
             Assert.Equal(404, (await Send("/api/executions/denied/work-stages/source/items")).Response.StatusCode);
             Assert.Equal(404, (await Send("/api/executions/absent/work-stages/source/items")).Response.StatusCode);
             Assert.Equal(404, (await Send("/api/executions/denied/work-stages/source/retry", new WorkRetryRequest("r", "generation", [new(0, 1)]))).Response.StatusCode);
@@ -226,6 +233,57 @@ public sealed class FunctionsHttpTests
             using var json = await JsonDocument.ParseAsync(result.Response.Body);
             Assert.Equal("accepted", json.RootElement.GetProperty("items")[0].GetProperty("status").GetString());
             Assert.Equal(409, (await Send(route + "/retry", new WorkRetryRequest("retry", "generation", [new(0, 2)]))).Response.StatusCode);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task ExplicitDistributedHostReplaysThroughSharedHttpBoundaryWithStableRequestAndScopeChecks()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "elwood-replay-http-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var settings = Settings(); settings["Elwood:Management:Tokens:0:Permissions:4"] = "recover";
+            var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+            var states = new InMemoryStateStore(); var documents = new InMemoryDocumentStore(); var queue = new RuntimeStepQueue();
+            var journal = new DurableWorkJournal(new FileWorkJournalStore(root), documents);
+            var scheduler = new DistributedStepScheduler(states, documents, queue, journal, new(journal, documents));
+            AsyncExecutor Runner(string? pipeline) => new(states, documents, queue, distributedWork: scheduler);
+            var pipeline = new PipelineParser().ParseContent(new() { Yaml = "name: orders\nmode: async\nsources:\n  - { name: input, trigger: http }\noutputs: []" }, "orders");
+            var id = await Runner("orders").StartAsync(pipeline, Elwood.Json.JsonNodeValueFactory.Instance.Parse("{}"), "input");
+            var original = (await states.GetExecutionAsync(id))!;
+            original.Status = Elwood.Pipeline.State.ExecutionStatus.Completed; original.ExpiresAt = DateTime.UtcNow.AddDays(30);
+            await states.SaveExecutionAsync(original);
+            var services = new ServiceCollection().AddLogging().AddSingleton<IConfiguration>(config)
+                .AddSingleton<TokenCredential>(new DenyNetworkCredential()).AddSingleton<IHostApplicationLifetime>(new Lifetime());
+            services.AddAzureDurableRuntime(config);
+            services.AddSingleton<IStateStore>(states).AddSingleton<IDocumentStore>(documents).AddSingleton(new DistributedExecutionFactory(Runner));
+            await using var provider = services.BuildServiceProvider();
+            var dispatcher = provider.GetRequiredService<RuntimeHttpDispatcher>();
+            async Task<DefaultHttpContext> Send(string route, object? body = null)
+            {
+                var context = new DefaultHttpContext { RequestServices = provider };
+                context.Request.Method = body is null ? "GET" : "POST"; context.Request.Path = $"/api/executions/{id}/{route}"; context.Request.Scheme = "https";
+                context.Connection.RemoteIpAddress = IPAddress.Loopback; context.Request.Headers.Authorization = "Bearer " + Token;
+                context.Response.Body = new MemoryStream();
+                if (body is not null)
+                {
+                    var bytes = JsonSerializer.SerializeToUtf8Bytes(body); context.Request.Body = new MemoryStream(bytes);
+                    context.Request.ContentLength = bytes.Length; context.Request.ContentType = "application/json";
+                    context.Features.Set<IHttpRequestBodyDetectionFeature>(new BodyFeature());
+                }
+                await dispatcher.DispatchAsync(context); context.Response.Body.Position = 0; return context;
+            }
+            using (var enabled = await JsonDocument.ParseAsync((await Send("recovery-options")).Response.Body))
+                Assert.True(enabled.RootElement.GetProperty("replayEnabled").GetBoolean());
+            Assert.Equal(409, (await Send("replay", new { requestId = "request", scope = "selected-items", acknowledgeUncertain = true, acknowledgeDuplicates = true })).Response.StatusCode);
+            Assert.Equal(409, (await Send("replay", new { requestId = "request", scope = "whole-execution", acknowledgeUncertain = true })).Response.StatusCode);
+            var command = new { requestId = "request", scope = "whole-execution", acknowledgeUncertain = true, acknowledgeDuplicates = true };
+            var first = await Send("replay", command); var repeated = await Send("replay", command);
+            Assert.Equal(202, first.Response.StatusCode); Assert.Equal(202, repeated.Response.StatusCode);
+            using var one = await JsonDocument.ParseAsync(first.Response.Body); using var two = await JsonDocument.ParseAsync(repeated.Response.Body);
+            Assert.Equal(one.RootElement.GetProperty("executionId").GetString(), two.RootElement.GetProperty("executionId").GetString());
+            Assert.Equal(2, (await states.ListAllAsync()).Count);
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }

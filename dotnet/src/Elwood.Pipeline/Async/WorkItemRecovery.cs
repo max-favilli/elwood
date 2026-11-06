@@ -116,6 +116,7 @@ public sealed class WorkItemRecovery(IRecoverableStateStore states, DurableWorkJ
             step.Diagnostics.RemoveAll(d => d.Severity == "error" &&
                 (!step.Work!.Expanded || d.ItemOrdinal is { } ordinal && retried.Contains(ordinal)));
             step.Work.ItemCursor = 0; step.Work.ScanHasActive = false; step.Work.ScanHasFailure = false; step.Work.ScanHasReview = false;
+            step.Work.StatusScan = null; step.Work.StatusSummary = null;
             state.Status = ExecutionStatus.Running; state.Errors.Clear(); state.FailureResponseRef = null; state.ResponseStatusCode = null;
         }
         else
@@ -135,7 +136,7 @@ public sealed class WorkItemRecovery(IRecoverableStateStore states, DurableWorkJ
         if (state.PendingWorkRetry is null && state.Status is not (ExecutionStatus.Failed or ExecutionStatus.AwaitingReview))
             throw new RecoveryConflictException("Wait for the execution to settle before requesting selected retries.");
         if (state.WorkProfile != DistributedStepScheduler.Profile || !state.Durable || state.IsTest || state.Deleting ||
-            state.SupersededByForcedReplay || state.RecoveryCapacityExhausted || state.Status is ExecutionStatus.Completed or ExecutionStatus.Skipped || state.LifetimeExpiresAt <= now.UtcDateTime ||
+            state.SupersededByForcedReplay || state.WorkReplays.Any(r => !r.Accepted && r.CreateBefore > now) || state.RecoveryCapacityExhausted || state.Status is ExecutionStatus.Completed or ExecutionStatus.Skipped || state.LifetimeExpiresAt <= now.UtcDateTime ||
             state.LifetimeExpiresAt is null || stage.Deadline <= now || stage.Generation != generation)
             throw new RecoveryConflictException("Execution, generation or recovery deadline no longer permits this retry.");
     }
