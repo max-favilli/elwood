@@ -28,7 +28,9 @@ jobs:
       - name: Runtime API contract
         run: node --test scripts/runtime-api.test.mjs scripts/durable-runtime.test.mjs scripts/connectors-api.test.mjs scripts/sync-cancellation.test.mjs
       - name: Compile native Azure infrastructure
-        run: az bicep build --file infra/azure-small/main.bicep --outfile /tmp/elwood-azure.json
+        run: |
+          az bicep build --file infra/azure-small/main.bicep --outfile /tmp/elwood-azure.json
+          az bicep build --file infra/azure-redis/main.bicep --outfile /tmp/elwood-redis.json
 
   connectors:
     name: SQL, Blob and RabbitMQ connectors
@@ -88,7 +90,15 @@ jobs:
       - name: Distributed work-item coordination (real Redis)
         run: dotnet test dotnet/tests/Elwood.Pipeline.Redis.Tests --filter "Category=Integration" --verbosity normal
       - name: Installed distributed host (Redis and Azurite)
+        env:
+          ELWOOD_CAPACITY_REPORT_DIR: artifacts/distributed-capacity
         run: dotnet test dotnet/tests/Elwood.Runtime.Hosting.Tests --filter "Category=Integration" --verbosity normal
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: distributed-capacity
+          path: artifacts/distributed-capacity
+          if-no-files-found: ignore
 
   typescript:
     name: TypeScript

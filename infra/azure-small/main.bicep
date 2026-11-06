@@ -11,9 +11,13 @@ param managementTokenSha256 string
 param portalOrigins array = []
 @allowed(['storage', 'serviceBus'])
 param queueProvider string = 'storage'
-@allowed(['guarded', 'files-25m'])
+@allowed(['guarded', 'files-25m', 'distributed'])
 @description('files-25m reserves 4 GiB per active worker and uses partitioned retention accounting. Requires a fresh installation or explicit offline migration.')
 param capacityProfile string = 'guarded'
+@description('Enable explicit item fan-out. Requires a Redis connection secret and the partitioned retention layout.')
+param enableDistributedWork bool = false
+@description('Versionless Key Vault secret URI containing a TLS StackExchange.Redis connection string. Empty disables the optional shared cache.')
+param redisConnectionSecretUri string = ''
 @minValue(1)
 @maxValue(1000)
 @description('On-demand ceiling per independently scaling function group, not a monetary cap.')
@@ -55,6 +59,8 @@ module runtime 'runtime.bicep' = {
     portalOrigins: portalOrigins
     queueProvider: queueProvider
     capacityProfile: capacityProfile
+    enableDistributedWork: enableDistributedWork
+    redisConnectionSecretUri: redisConnectionSecretUri
     maximumInstanceCount: maximumInstanceCount
     retentionAlertActionGroups: retentionAlertActionGroups
     secretReferences: secretReferences

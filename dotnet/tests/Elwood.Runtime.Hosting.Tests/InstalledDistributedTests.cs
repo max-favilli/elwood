@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using Azure.Core;
+using Azure.Core.Pipeline;
 using Azure.Data.Tables;
 using Azure.Storage.Blobs;
 using Azure.Storage.Queues;
@@ -37,17 +38,23 @@ namespace Elwood.Runtime.Hosting.Tests;
 [Trait("Category", "Integration")]
 public sealed class InstalledDistributedTests(ITestOutputHelper output)
 {
-    [Fact]
-    public async Task Independent_installed_workers_share_accounting_recover_cold_Redis_and_clean_expired_work()
+    [Theory]
+    [InlineData(8)]
+    [InlineData(2048)]
+    public async Task Independent_installed_workers_share_accounting_recover_cold_Redis_and_clean_expired_work(int itemCount)
     {
         await using var storage = new AzuriteBuilder().WithImage("mcr.microsoft.com/azure-storage/azurite:3.35.0")
             .WithCommand("--skipApiVersionCheck").Build();
         await using var redis = new RedisBuilder().WithImage("redis:7.4-alpine").Build();
         await Task.WhenAll(storage.StartAsync(), redis.StartAsync());
-        var blobs = new BlobServiceClient(storage.GetConnectionString());
+        var transactions = new RequestCounter();
+        var blobOptions = new BlobClientOptions(); blobOptions.AddPolicy(transactions, HttpPipelinePosition.PerRetry);
+        var blobs = new BlobServiceClient(storage.GetConnectionString(), blobOptions);
         foreach (var name in new[] { "states", "documents", "catalog", "outputs" }) await blobs.GetBlobContainerClient(name).CreateAsync();
-        var table = new TableClient(storage.GetConnectionString(), "RuntimeIndex"); await table.CreateAsync();
-        var queueClient = new QueueClient(storage.GetConnectionString(), "work", new() { MessageEncoding = QueueMessageEncoding.Base64 });
+        var tableOptions = new TableClientOptions(); tableOptions.AddPolicy(transactions, HttpPipelinePosition.PerRetry);
+        var table = new TableClient(storage.GetConnectionString(), "RuntimeIndex", tableOptions); await table.CreateAsync();
+        var queueOptions = new QueueClientOptions { MessageEncoding = QueueMessageEncoding.Base64 }; queueOptions.AddPolicy(transactions, HttpPipelinePosition.PerRetry);
+        var queueClient = new QueueClient(storage.GetConnectionString(), "work", queueOptions);
         await queueClient.CreateAsync();
         using var cache = await ConnectionMultiplexer.ConnectAsync(redis.GetConnectionString() + ",allowAdmin=true");
         var control = blobs.GetBlobContainerClient("catalog");
@@ -118,9 +125,10 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         var pipeline = new PipelineParser().ParseContent(bundle!.Content, "orders", bundle.RevisionId);
         var runner = first.GetRequiredService<DurableRuntime>().Runner("orders");
         var watch = Stopwatch.StartNew();
-        var id = await runner.StartAsync(pipeline, JsonNodeValueFactory.Instance.Parse("[1,2,3,4,5,6,7,8]"), "input");
+        var startedRequests = transactions.Count;
+        var id = await runner.StartAsync(pipeline, JsonNodeValueFactory.Instance.Parse(JsonSerializer.Serialize(Enumerable.Range(0, itemCount))), "input");
         var states = first.GetRequiredService<IStateStore>();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(25));
         var duplicates = new ConcurrentBag<string>();
         // Independent hosts and duplicate hints operate against the same real
         // storage leases; no in-process lock coordinates them.
@@ -136,9 +144,9 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
                 }, timeout.Token)) return;
         }
         var lost = false;
-        for (var round = 0; round < 80; round++)
+        for (var round = 0; round < 400; round++)
         {
-            await Task.WhenAll(Consume(first), Consume(second));
+            await Task.WhenAll(Enumerable.Range(0, 8).Select(i => Consume(i % 2 == 0 ? first : second)));
             if (!lost && calls.Count > 0)
             {
                 await cache.GetServer(cache.GetEndPoints().Single()).FlushDatabaseAsync(); lost = true;
@@ -148,21 +156,31 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         }
         var state = (await states.GetExecutionAsync(id))!;
         Assert.Equal(ExecutionStatus.Completed, state.Status); Assert.True(lost);
-        Assert.Equal(8, calls.Count); Assert.All(calls.Values, count => Assert.Equal(1, count));
+        Assert.Equal(itemCount, calls.Count); Assert.All(calls.Values, count => Assert.Equal(1, count));
         foreach (var hint in duplicates.Take(5)) await second.GetRequiredService<QueuedExecutionDispatcher>().DispatchAsync(hint);
         Assert.All(calls.Values, count => Assert.Equal(1, count));
         var stage = state.Outputs["deliver"].Work!.Stage;
-        await second.GetRequiredService<DurableWorkJournal>().ReadPageAsync(stage, 0);
-        Assert.All(await second.GetRequiredService<RedisWorkJournalProjection>().ReadPageAsync(stage, 0), item => Assert.Equal("Completed", item!.Status));
+        for (var page = 0; page < itemCount; page += 128)
+        {
+            await second.GetRequiredService<DurableWorkJournal>().ReadPageAsync(stage, page);
+            Assert.All(await second.GetRequiredService<RedisWorkJournalProjection>().ReadPageAsync(stage, page), item => Assert.Equal("Completed", item!.Status));
+        }
         var capacity = await second.GetRequiredService<BlobRetentionLedger>().CapacityAsync();
-        Assert.Equal(8, capacity.ReservedWorkItems); Assert.Equal(8, capacity.UsedWorkAttempts);
-        output.WriteLine($"Installed distributed execution: {watch.Elapsed.TotalSeconds:F2}s; 8 deliveries; attempts {capacity.UsedWorkAttempts}; minimum remaining partition objects {capacity.AvailableObjects}.");
+        Assert.Equal(itemCount, capacity.ReservedWorkItems); Assert.Equal(itemCount, capacity.UsedWorkAttempts);
+        var health = await retention.HealthAsync();
+        var measurement = new { environment = "GitHub/Linux Docker Azurite and Redis; not Azure performance or billing", itemCount,
+            seconds = watch.Elapsed.TotalSeconds, sdkRequests = transactions.Count - startedRequests,
+            health.RegisteredBytes, health.RegisteredObjects, capacity.UsedWorkAttempts, capacity.AvailableObjects,
+            peakProcessBytes = Process.GetCurrentProcess().PeakWorkingSet64 };
+        output.WriteLine(JsonSerializer.Serialize(measurement));
+        if (Environment.GetEnvironmentVariable("ELWOOD_CAPACITY_REPORT_DIR") is { Length: > 0 } reports)
+        { Directory.CreateDirectory(reports); await File.WriteAllTextAsync(Path.Combine(reports, $"installed-{itemCount}.json"), JsonSerializer.Serialize(measurement)); }
 
         // Force history expiry under the same fenced state API used by cleanup.
         var recoverable = (IRecoverableStateStore)states;
         await using (var claim = await recoverable.TryClaimAsync(id))
         { state.ExpiresAt = DateTime.UtcNow.AddMinutes(-1); await claim!.SaveAsync(state); }
-        for (var i = 0; i < 100 && await states.GetExecutionAsync(id) is not null; i++)
+        for (var i = 0; i < 2000 && await states.GetExecutionAsync(id) is not null; i++)
             await second.GetRequiredService<DurableRuntime>().Runner().PruneAsync(timeout.Token);
         Assert.Null(await states.GetExecutionAsync(id));
         await foreach (var blob in blobs.GetBlobContainerClient("states").GetBlobsAsync(prefix: "elwood/work-journal/" + id + "/"))
@@ -174,6 +192,9 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         await using var restarted = Host();
         await Assert.ThrowsAsync<InvalidOperationException>(() => restarted.GetRequiredService<BlobRetentionLedger>().CapacityAsync());
     }
+
+    private sealed class RequestCounter : HttpPipelineSynchronousPolicy
+    { private long _count; public long Count => Interlocked.Read(ref _count); public override void OnSendingRequest(HttpMessage message) => Interlocked.Increment(ref _count); }
 
     private sealed class NoCloudCredential : TokenCredential
     {

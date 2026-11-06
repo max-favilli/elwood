@@ -12,7 +12,7 @@ resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   sku: { name: 'B1', tier: 'Basic', capacity: 1 }
   properties: { reserved: true }
 }
-var elwood = toObject(filter(settings.values, s => startsWith(s.name, 'Elwood')), s => replace(s.name, '__', ':'), s => s.value)
+var elwood = toObject(filter(settings.values, s => startsWith(s.name, 'Elwood') && s.name != 'Elwood__Redis__ConnectionString'), s => replace(s.name, '__', ':'), s => s.value)
 resource app 'Microsoft.Web/sites@2024-04-01' = {
   name: appName
   location: location
@@ -28,7 +28,7 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
       appCommandLine: 'dotnet Elwood.Runtime.Azure.Ingress.dll'
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'
-      appSettings: concat(filter(settings.values, s => startsWith(s.name, 'ELWOOD_SECRET_')), [
+      appSettings: concat(filter(settings.values, s => startsWith(s.name, 'ELWOOD_SECRET_') || s.name == 'Elwood__Redis__ConnectionString'), [
         { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
         { name: 'ELWOOD_RUNTIME_CONFIG_JSON', value: string(elwood) }
         { name: 'WEBSITE_RUN_FROM_PACKAGE', value: '1' }

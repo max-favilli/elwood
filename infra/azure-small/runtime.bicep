@@ -23,8 +23,10 @@ param portalOrigins array
 param managementTokenSha256 string
 @allowed(['storage', 'serviceBus'])
 param queueProvider string = 'storage'
-@allowed(['guarded', 'files-25m'])
+@allowed(['guarded', 'files-25m', 'distributed'])
 param capacityProfile string = 'guarded'
+param enableDistributedWork bool = false
+param redisConnectionSecretUri string = ''
 @minValue(1)
 @maxValue(1000)
 param maximumInstanceCount int = 3
@@ -135,6 +137,8 @@ var baseSettings = concat([
         { name: 'ElwoodServiceBus__clientId', value: identity.properties.clientId }
         { name: 'Elwood__Azure__QueueProvider', value: queueProvider }
         { name: 'Elwood__Azure__CapacityProfile', value: capacityProfile }
+        { name: 'Elwood__Distributed__Enabled', value: string(enableDistributedWork) }
+        { name: 'Elwood__Redis__Enabled', value: string(!empty(redisConnectionSecretUri)) }
         { name: 'DOTNET_GCHeapHardLimitPercent', value: largeFiles ? '0x55' : '0x4B' } // Large transforms need margin beyond the standalone 3 GiB probe.
         { name: 'DOTNET_GCConserveMemory', value: largeFiles ? '9' : '0' }
         { name: 'AzureFunctionsJobHost__extensions__queues__batchSize', value: largeFiles ? '1' : '4' }
@@ -173,13 +177,17 @@ var baseSettings = concat([
         { name: 'Elwood__RabbitMqIngressEnabled', value: string(enableRabbitMqIngress) }
       ], largeFiles ? [{ name: 'DOTNET_GCHeapHardLimit', value: '0xD9999999' }] : [], originSettings) // Explicit 3.4 GiB ceiling, independent of host-reported physical memory.
 var keyVaultSettings = [for secret in secretReferences: { name: secret.name, value: '@Microsoft.KeyVault(SecretUri=${secret.secretUri})' }]
-var extraSettings = concat(additionalSettings.?values ?? [], keyVaultSettings)
+var extraSettings = concat(additionalSettings.?values ?? [], keyVaultSettings, empty(redisConnectionSecretUri) ? [] : [
+  { name: 'Elwood__Redis__ConnectionString', value: '@Microsoft.KeyVault(SecretUri=${redisConnectionSecretUri})' }
+])
 var allSettings = concat(filter(baseSettings, s => !contains(map(extraSettings, extra => extra.name), s.name)), extraSettings)
 
 // App Service settings updates reject hyphens in keys. Keep binding settings
 // native and encode Elwood's pipeline-keyed configuration in one secure setting.
-var runtimeSettings = concat(filter(allSettings, s => !startsWith(s.name, 'Elwood__')), [
-  { name: 'ELWOOD_RUNTIME_CONFIG_JSON', value: string(toObject(filter(allSettings, s => startsWith(s.name, 'Elwood__')), s => replace(s.name, '__', ':'), s => s.value)) }
+// Key Vault references must remain individual settings; App Service does not
+// resolve references nested inside a JSON string. This key has no hyphen.
+var runtimeSettings = concat(filter(allSettings, s => !startsWith(s.name, 'Elwood__') || s.name == 'Elwood__Redis__ConnectionString'), [
+  { name: 'ELWOOD_RUNTIME_CONFIG_JSON', value: string(toObject(filter(allSettings, s => startsWith(s.name, 'Elwood__') && s.name != 'Elwood__Redis__ConnectionString'), s => replace(s.name, '__', ':'), s => s.value)) }
 ])
 
 resource app 'Microsoft.Web/sites@2024-04-01' = {
@@ -209,7 +217,7 @@ resource app 'Microsoft.Web/sites@2024-04-01' = {
       }
       scaleAndConcurrency: {
         maximumInstanceCount: maximumInstanceCount
-        instanceMemoryMB: largeFiles ? 4096 : 512
+        instanceMemoryMB: largeFiles ? 4096 : (capacityProfile == 'distributed' ? 2048 : 512)
         triggers: { http: { perInstanceConcurrency: largeFiles ? 1 : 2 } }
       }
     }

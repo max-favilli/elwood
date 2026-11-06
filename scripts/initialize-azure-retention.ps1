@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory)][string]$SubscriptionId,
     [Parameter(Mandatory)][string]$StorageAccount,
     [ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$')][string]$StorageNamespace = 'elwood',
-    [ValidateSet('guarded','files-25m')][string]$CapacityProfile = 'guarded',
+    [ValidateSet('guarded','files-25m','distributed')][string]$CapacityProfile = 'guarded',
     [string]$ControlContainer = 'control', [string]$StateContainer = 'state',
     [string]$DocumentContainer = 'documents', [string]$OutputContainer = 'outputs'
 )
@@ -25,13 +25,13 @@ New-Item -ItemType Directory -Path $scratch | Out-Null
 try {
     $snapshot = Join-Path $scratch 'empty.json'
     [IO.File]::WriteAllText($snapshot, '{"formatVersion":1,"entries":{},"lastSweepAt":null,"windowStartedAt":"0001-01-01T00:00:00+00:00","windowWrites":0,"windowBytes":0}')
-    $names = if ($CapacityProfile -eq 'files-25m') { (0..63 | ForEach-Object { 'retention/{0:D2}.json' -f $_ }) + @('retention/health.json') } else { @('output-retention.json') }
+    $names = if ($CapacityProfile -ne 'guarded') { (0..63 | ForEach-Object { 'retention/{0:D2}.json' -f $_ }) + @('retention/health.json') } else { @('output-retention.json') }
     foreach ($name in $names) {
         Invoke-Azure (@('storage','blob','upload','--container-name',$ControlContainer,'--name',"$StorageNamespace/$name",'--file',$snapshot,'--if-none-match','*','--content-type','application/json','-o','none') + $common)
         Write-Output "Initialized $StorageNamespace/$name"
     }
     $layout = Join-Path $scratch 'layout.txt'
-    [IO.File]::WriteAllText($layout, $(if ($CapacityProfile -eq 'files-25m') { 'partitions64-v1' } else { 'single-v1' }))
+    [IO.File]::WriteAllText($layout, $(if ($CapacityProfile -ne 'guarded') { 'partitions64-v1' } else { 'single-v1' }))
     Invoke-Azure (@('storage','blob','upload','--container-name',$ControlContainer,'--name',"$StorageNamespace/retention-layout.txt",'--file',$layout,'--if-none-match','*','--content-type','text/plain','-o','none') + $common)
     Write-Output 'Initialization complete. Start workers and require a successful retention sweep before readiness.'
 } finally {
