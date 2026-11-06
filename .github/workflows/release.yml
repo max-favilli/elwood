@@ -14,7 +14,8 @@ jobs:
 
   nuget:
     name: Publish NuGet
-    needs: test
+    # Publishing is irreversible; finish native behavior and bundle checks first.
+    needs: [test, native-binaries, runtime-bundles]
     runs-on: ubuntu-latest
     env:
       NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
@@ -64,7 +65,7 @@ jobs:
 
   npm:
     name: Publish npm
-    needs: test
+    needs: [test, native-binaries, runtime-bundles]
     runs-on: ubuntu-latest
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -112,7 +113,6 @@ jobs:
 
   native-binaries:
     name: Native AOT (${{ matrix.os }})
-    needs: test
     strategy:
       matrix:
         include:
@@ -150,7 +150,6 @@ jobs:
 
   runtime-bundles:
     name: Runtime and consumer installation kit
-    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
