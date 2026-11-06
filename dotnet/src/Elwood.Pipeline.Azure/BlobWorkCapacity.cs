@@ -53,5 +53,12 @@ public sealed class BlobWorkCapacity(BlobRetentionLedger ledger, BlobContainerCl
     public Task ReserveAttemptAsync(WorkStage stage, CancellationToken token = default)
         => ledger.UseWorkAttemptAsync(Id(stage.ExecutionId, stage.StageId), stage.Generation, token);
     public Task CloseAsync(string executionId, CancellationToken token = default) => ledger.CloseWorkAsync(SafePath.Id(executionId), token);
-    public Task CompleteCleanupAsync(string executionId, CancellationToken token = default) => ledger.CompleteWorkCleanupAsync(SafePath.Id(executionId), token);
+    public async Task CompleteCleanupAsync(string executionId, CancellationToken token = default)
+    {
+        executionId = SafePath.Id(executionId);
+        // Closure is verified first. A failed partition cleanup is safe to retry;
+        // the parent tombstone remains until all partitions acknowledge it.
+        await ledger.CompleteWorkCleanupAsync(executionId, token);
+        await ledger.ReleaseCleanedWorkDocumentsAsync(executionId, token);
+    }
 }

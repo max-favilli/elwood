@@ -209,7 +209,9 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         // its original deadline. The independent sweep releases that bounded
         // reservation afterward (clock-driven expiry is covered by WorkCapacityTests).
         var ledger = first.GetRequiredService<BlobRetentionLedger>();
-        var closed = Assert.Single((await ledger.ReadAsync()).Entries.Values, e => e.Kind == "work" && e.ExecutionId == id);
+        var remaining = (await ledger.ReadAsync()).Entries.Values.Where(e => e.ExecutionId == id).ToArray();
+        Assert.DoesNotContain(remaining, e => e.Kind is "document" or "journal" && e.ConfirmedBeforeCleanup);
+        var closed = Assert.Single(remaining, e => e.Kind == "work");
         Assert.True(closed.AdmissionClosed); Assert.True(closed.CleanupRequested);
         Assert.Equal(stage.Deadline.AddDays(1), closed.ExpiresAt);
         Assert.Equal(itemCount, (await ledger.CapacityAsync()).ReservedWorkItems);
@@ -219,7 +221,8 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
             await File.WriteAllTextAsync(Path.Combine(cleanupReports, $"cleanup-{itemCount}.json"), JsonSerializer.Serialize(new
             { itemCount, seconds = watch.Elapsed.TotalSeconds - cleanupStarted, sdkRequests = transactions.Count - cleanupRequests,
                 parentAndPhysicalHistoryRemoved = true, closedReservationExpiresAt = closed.ExpiresAt,
-                reservedItemsUntilFenceExpires = itemCount }));
+                reservedItemsUntilFenceExpires = itemCount,
+                remainingObligationsByKind = remaining.GroupBy(e => e.Kind).ToDictionary(g => g.Key, g => g.Count()) }));
 
         // Missing initialized state must fail closed, including after restart.
         await maintenance.DisposeAsync();

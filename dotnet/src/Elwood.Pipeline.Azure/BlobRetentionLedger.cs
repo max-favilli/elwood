@@ -34,6 +34,9 @@ public sealed record BlobRetentionEntry
     public string? Error { get; set; }
     public DateTimeOffset? LastAttemptAt { get; set; }
     public bool CleanupRequested { get; set; }
+    // Captured before the physical execution-prefix sweep, never by a late
+    // upload confirmation. Only these obligations can be released in bulk.
+    public bool ConfirmedBeforeCleanup { get; set; }
     public WorkCapacityRequest? Work { get; init; }
     public long ReservedAttempts { get; init; }
     public long UsedAttempts { get; set; }
@@ -169,7 +172,21 @@ public abstract class BlobRetentionLedger(TimeProvider? timeProvider = null, int
     public virtual Task ExpireDocumentsAsync(string executionId, CancellationToken token = default) => ChangeAsync(state =>
     {
         foreach (var entry in state.Entries.Values.Where(e => e.Kind is "document" or "checkpoint" or "journal" && e.ExecutionId == executionId))
-        { entry.ExpiresAt = Now; entry.CleanupRequested = true; }
+        {
+            entry.ExpiresAt = Now; entry.CleanupRequested = true;
+            if (entry.Kind is "document" or "journal" && entry.ETag is not null)
+                entry.ConfirmedBeforeCleanup = true;
+        }
+    }, token);
+
+    // The caller has completed restartable, version-aware physical cleanup of
+    // both execution prefixes. Pending/late uploads retain independent cleanup
+    // obligations; checkpoint versions and business outputs are not covered.
+    public virtual Task ReleaseCleanedWorkDocumentsAsync(string executionId, CancellationToken token = default) => ChangeAsync(state =>
+    {
+        foreach (var entry in state.Entries.Values.Where(e => e.ExecutionId == executionId &&
+            e.Kind is "document" or "journal" && e.CleanupRequested && e.ConfirmedBeforeCleanup).ToArray())
+            state.Entries.Remove(entry.Id);
     }, token);
 
     // Stage admission and its finite item/attempt allowance are a single durable

@@ -124,11 +124,15 @@ public sealed class WorkCapacityTests
         await capacity.CloseAsync("execution");
         await ledger.ExpireDocumentsAsync("execution");
         Assert.Equal(0, (await store.DeleteExecutionPageAsync("execution")).Deleted);
+        await capacity.CompleteCleanupAsync("execution");
         await ledger.RemoveReservationAsync("execution", (await ledger.ReadAsync()).Entries["execution-execution"].Generation);
         release.TrySetResult(); Assert.True(await upload);
         var obligation = (await ledger.ReadAsync()).Entries.Values.Single(e => e.Kind == "journal");
         Assert.True(obligation.CleanupRequested); Assert.True(obligation.ExpiresAt <= clock.Now);
         Assert.NotNull(obligation.ETag);
+        Assert.False(obligation.ConfirmedBeforeCleanup);
+        await capacity.CompleteCleanupAsync("execution");
+        Assert.NotNull(await ledger.FindEntryAsync(obligation.Id));
         var cleanup = new BlobOutputRetention(ledger, uri => service.Container.GetBlobClient(new BlobUriBuilder(uri).BlobName), clock);
         Assert.Equal(1, await cleanup.SweepAsync());
         Assert.Null(await store.ReadAsync("execution/stage/" + record));
@@ -136,6 +140,53 @@ public sealed class WorkCapacityTests
         var left = new List<BlobItem>();
         await foreach (var blob in service.Container.GetBlobsAsync(states: BlobStates.Version, prefix: "elwood/work-journal/execution/")) left.Add(blob);
         Assert.Empty(left);
+    }
+
+    [Fact]
+    public async Task Completed_prefix_cleanup_releases_confirmed_accounting_across_partitions_but_preserves_other_obligations()
+    {
+        using var service = new ReviewBlobService(versioning: true); var clock = new Clock();
+        var parts = Enumerable.Range(0, 64).Select(_ => new Ledger(clock)).ToArray();
+        var ledger = new PartitionedBlobRetentionLedger(i => parts[i], new Ledger(clock));
+        await Parent(ledger, clock);
+        var capacity = new BlobWorkCapacity(ledger, service.Container, timeProvider: clock);
+        await capacity.ReserveAsync(Request(clock));
+        var documents = new AzureExecutionDocumentStore(service.Container, retention: ledger, timeProvider: clock);
+        var journal = new BlobWorkJournalStore(service.Container, retention: ledger, timeProvider: clock);
+        for (var i = 0; i < 130; i++)
+        {
+            await documents.StoreAsync($"exec/execution/items/{i}", "{}");
+            await journal.CreateAsync($"execution/stage/items/{i}", "{}");
+        }
+        await documents.StoreAsync("exec/another/items/0", "{}");
+        foreach (var kind in new[] { "output", "checkpoint", "document", "journal" })
+            await ledger.RegisterAsync(new() { Id = "preserve-" + kind, Kind = kind, ExecutionId = "execution",
+                BlobUri = "https://unit.test/control/" + kind, RegisteredAt = clock.Now, ExpiresAt = clock.Now.AddDays(30), Bytes = 1,
+                ETag = kind == "checkpoint" ? "leased" : null });
+        await capacity.CloseAsync("execution");
+        // Captures confirmed uploads before physical removal. Confirmation after
+        // this barrier must remain independently owned even if cleanup completes.
+        await ledger.ExpireDocumentsAsync("execution");
+        await ledger.ConfirmUploadAsync("preserve-document", "late", null, clock.Now.AddDays(30));
+        await ledger.ConfirmUploadAsync("preserve-journal", "late", null, clock.Now.AddDays(30));
+        // Do not restart the document prefix here: that would deliberately take a
+        // new barrier. The production cleanup starts its first page with Expire.
+        foreach (var entry in (await ledger.ReadAsync()).Entries.Values.Where(e => e.ConfirmedBeforeCleanup))
+        {
+            var blob = service.Container.GetBlobClient(new BlobUriBuilder(new Uri(entry.BlobUri)).BlobName);
+            await blob.DeleteIfExistsAsync();
+            await foreach (var item in service.Container.GetBlobsAsync(states: BlobStates.Version, prefix: blob.Name))
+                if (item.Name == blob.Name && item.VersionId is not null) await blob.WithVersion(item.VersionId).DeleteIfExistsAsync();
+        }
+        await capacity.CompleteCleanupAsync("execution");
+        await capacity.CompleteCleanupAsync("execution"); // Restart after a lost completion reply.
+        var remaining = (await ledger.ReadAsync()).Entries.Values;
+        Assert.DoesNotContain(remaining, e => e.ConfirmedBeforeCleanup);
+        Assert.Equal(7, remaining.Count); // Parent, work fence, another execution and four unrelated/pending obligations.
+        Assert.Contains(remaining, e => e.ExecutionId == "another");
+        foreach (var kind in new[] { "output", "checkpoint", "document", "journal" })
+            Assert.Contains(remaining, e => e.Id == "preserve-" + kind);
+        Assert.True(remaining.Single(e => e.Kind == "work").AdmissionClosed);
     }
 
     [Fact]

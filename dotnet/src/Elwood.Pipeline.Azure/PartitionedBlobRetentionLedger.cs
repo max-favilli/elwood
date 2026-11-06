@@ -75,6 +75,8 @@ public sealed class PartitionedBlobRetentionLedger : BlobRetentionLedger
     public override async Task SweptAsync(CancellationToken token = default)
     { await Verify(token); await _health.SweptAsync(token); }
     public override Task ExpireDocumentsAsync(string executionId, CancellationToken token = default) => Each(p => p.ExpireDocumentsAsync(executionId, token), token);
+    public override Task ReleaseCleanedWorkDocumentsAsync(string executionId, CancellationToken token = default)
+        => Each(p => p.ReleaseCleanedWorkDocumentsAsync(executionId, token), token);
     public override async Task<string> ReserveWorkAsync(BlobRetentionEntry entry, CancellationToken token = default)
     {
         await Verify(token);
