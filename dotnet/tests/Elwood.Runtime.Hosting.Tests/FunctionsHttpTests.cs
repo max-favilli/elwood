@@ -39,6 +39,46 @@ public sealed class FunctionsHttpTests
     }
 
     private const string Token = "synthetic-management-token";
+
+    [Fact]
+    public async Task Http_readiness_uses_the_admission_policy_boundary_and_still_requires_healthy_retention()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "elwood-readiness-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var settings = Settings(); settings["Elwood:VerificationOnly"] = "false";
+            var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+            var services = new ServiceCollection().AddLogging().AddSingleton<IConfiguration>(config)
+                .AddSingleton<TokenCredential>(new DenyNetworkCredential()).AddSingleton<IHostApplicationLifetime>(new Lifetime());
+            services.AddAzureDurableRuntime(config);
+            var ledger = new FileBlobRetentionLedger(root); await ledger.SweptAsync();
+            services.AddSingleton<BlobRetentionLedger>(ledger);
+            services.AddSingleton(new BlobOutputRetention(ledger, _ => throw new InvalidOperationException("No physical objects in this fixture.")));
+            var checks = 0; var policyHealthy = true;
+            services.AddSingleton(new RetentionPolicyVerifier(_ =>
+            { checks++; return policyHealthy ? Task.CompletedTask : Task.FromException(new IOException("Policy probe failed.")); }));
+            await using var provider = services.BuildServiceProvider();
+            async Task<int> Send(string path)
+            {
+                var context = new DefaultHttpContext { RequestServices = provider };
+                context.Request.Scheme = "https"; context.Request.Method = "GET"; context.Request.Path = path;
+                context.Request.Headers.Authorization = "Bearer " + Token; context.Response.Body = new MemoryStream();
+                await provider.GetRequiredService<RuntimeHttpDispatcher>().DispatchAsync(context);
+                return context.Response.StatusCode;
+            }
+            Assert.Equal(200, await Send("/api/readiness"));
+            Assert.Equal(200, await Send("/api/retention"));
+            Assert.Equal(2, checks);
+            await ledger.RegisterAsync(new() { Id = "failed", BlobUri = "https://unit.test/output", Bytes = 1,
+                RegisteredAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(1), Error = "Cleanup failed." });
+            Assert.Equal(503, await Send("/api/readiness"));
+            await ledger.RemovedAsync("failed"); policyHealthy = false;
+            Assert.Equal(503, await Send("/api/readiness"));
+            Assert.Equal(4, checks);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
     internal static Dictionary<string, string?> Settings() => new()
     {
         ["Elwood:VerificationOnly"] = "true",

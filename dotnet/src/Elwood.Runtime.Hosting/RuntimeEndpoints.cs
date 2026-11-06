@@ -16,6 +16,14 @@ namespace Elwood.Runtime.Api;
 
 public static class RuntimeEndpoints
 {
+    // Admission and HTTP readiness must use the same native policy boundary.
+    // Embedded hosts can substitute the ARM probe while retaining real ledger
+    // and cache health checks; production registration delegates to the probe.
+    private static Task VerifyRetentionPolicy(IServiceProvider services, CancellationToken token)
+        => services.GetService<RetentionPolicyVerifier>()?.VerifyAsync(token)
+            ?? services.GetService<Elwood.Pipeline.Azure.AzureRetentionReadiness>()?.CheckAsync(token)
+            ?? Task.CompletedTask;
+
     public static void Register(RuntimeRouteCollection routes)
     {
         WorkItemEndpoints.Register(routes);
@@ -26,11 +34,8 @@ public static class RuntimeEndpoints
                 return Results.Json(new { status = "verification-only", message = "Cloud release verification is incomplete; synthetic testing only." }, statusCode: 503);
             if (context.RequestServices.GetService<StackExchange.Redis.IConnectionMultiplexer>() is { IsConnected: false })
                 return Results.Json(new { status = "unavailable", message = "Shared cache connection is unavailable. Durable recovery remains enabled." }, statusCode: 503);
-            if (context.RequestServices.GetService<Elwood.Pipeline.Azure.AzureRetentionReadiness>() is { } readiness)
-            {
-                try { await readiness.CheckAsync(context.RequestAborted); }
-                catch { return Results.Json(new { status = "unavailable", message = "Storage retention verification failed. Consult the authenticated retention endpoint and runtime logs." }, statusCode: 503); }
-            }
+            try { await VerifyRetentionPolicy(context.RequestServices, context.RequestAborted); }
+            catch { return Results.Json(new { status = "unavailable", message = "Storage retention verification failed. Consult the authenticated retention endpoint and runtime logs." }, statusCode: 503); }
             if (context.RequestServices.GetService<Elwood.Pipeline.Azure.BlobOutputRetention>() is { } outputRetention &&
                 !(await outputRetention.HealthAsync(context.RequestAborted)).Healthy)
                 return Results.Json(new { status = "unavailable", message = "Storage retention has failed or is overdue." }, statusCode: 503);
@@ -46,7 +51,7 @@ public static class RuntimeEndpoints
         {
             var retention = context.RequestServices.GetService<Elwood.Pipeline.Azure.BlobOutputRetention>();
             var readiness = context.RequestServices.GetService<Elwood.Pipeline.Azure.AzureRetentionReadiness>();
-            if (readiness is not null) { try { await readiness.CheckAsync(context.RequestAborted); } catch { } }
+            try { await VerifyRetentionPolicy(context.RequestServices, context.RequestAborted); } catch { }
             return retention is null ? Results.Json(new { error = "Output retention is not configured." }, statusCode: 503)
                 : Results.Ok(new { storage = await retention.HealthAsync(context.RequestAborted), policy = readiness is null ? null : new { readiness.LastSuccessAt, readiness.Error } });
         }).WithMetadata(new ManagementPermission("read", false));
