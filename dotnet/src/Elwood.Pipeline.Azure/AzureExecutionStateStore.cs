@@ -374,9 +374,9 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
             // Covers a crash around acceptance registration, or provider lifecycle
             // removal after a prolonged outage. Never release a live checkpoint's
             // capacity reservation, even if its retained lifetime has elapsed.
-            var registered = await _retention.ReadAsync();
-            foreach (var entry in registered.Entries.Values.Where(e => e.Kind == "execution" && e.RegisteredAt < _time.GetUtcNow().AddMinutes(-10))
-                .OrderBy(e => e.LastAttemptAt).ThenBy(e => e.Id, StringComparer.Ordinal).Take(_pageSize))
+            var registered = await _retention.ReadMaintenancePageAsync(RetentionMaintenanceKind.ExecutionReservations,
+                _time.GetUtcNow(), Math.Min(_pageSize, RetentionMaintenance.MaximumPageSize));
+            foreach (var entry in registered)
             {
                 try
                 {

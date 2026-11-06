@@ -47,15 +47,20 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
 
     public async Task<int> SweepAsync(CancellationToken token = default)
     {
-        var state = await ledger.ReadAsync(token); var removed = 0; string? sweepFailure = null;
+        var entries = await ledger.ReadMaintenancePageAsync(RetentionMaintenanceKind.Artifacts, Now,
+            RetentionMaintenance.MaximumPageSize, token); var removed = 0; string? sweepFailure = null;
+        var parents = new HashSet<string>(StringComparer.Ordinal);
+        // At most one point read per parent in the bounded page. A retained
+        // parent always takes precedence over the independent artifact sweep.
+        foreach (var id in entries.Where(e => e.ExecutionId is not null).Select(e => e.ExecutionId!).Distinct())
+            if (await ledger.FindEntryAsync("execution-" + id, token) is not null) parents.Add(id);
         var absentCheckpoints = new Dictionary<string, string>();
         // Many checkpoint obligations can name one deleted parent. Prove the
         // base AND every version/snapshot are absent once per URI, then release
         // that observed set in partition batches. A stale writer cannot recreate
         // a deleted parent: its checkpoint PUT requires the old lease and ETag.
-        foreach (var group in state.Entries.Values.Where(e => e.Kind == "checkpoint" && e.ExpiresAt <= Now &&
-            e.ExecutionId is not null && !state.Entries.ContainsKey("execution-" + e.ExecutionId))
-            .OrderBy(e => e.LastAttemptAt).ThenBy(e => e.ExpiresAt).GroupBy(e => e.BlobUri).Take(100))
+        foreach (var group in entries.Where(e => e.Kind == "checkpoint" &&
+            e.ExecutionId is not null && !parents.Contains(e.ExecutionId)).GroupBy(e => e.BlobUri))
         {
             token.ThrowIfCancellationRequested();
             try
@@ -74,17 +79,26 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
         {
             try { removed += await ledger.RemovedIfGenerationsAsync(absentCheckpoints, token); }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-            catch (Exception ex) { sweepFailure = "Checkpoint accounting cleanup failed: " + ex.GetType().Name; }
+            catch (Exception ex)
+            {
+                sweepFailure = "Checkpoint accounting cleanup failed: " + ex.GetType().Name;
+                // A failed first page must not hide all later due records.
+                foreach (var (id, generation) in absentCheckpoints)
+                {
+                    try { await ledger.RecordSweepAttemptAsync(id, generation, sweepFailure, token); }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                    catch { /* The failed sweep remains unhealthy and is retried. */ }
+                }
+            }
         }
         // Failed items move behind untouched items on the next bounded sweep.
-        foreach (var entry in state.Entries.Values.Where(e => e.Kind != "execution" && e.ExpiresAt <= Now && !absentCheckpoints.ContainsKey(e.Id))
-            .OrderBy(e => e.LastAttemptAt).ThenBy(e => e.ExpiresAt).Take(100))
+        foreach (var entry in entries.Where(e => !absentCheckpoints.ContainsKey(e.Id)))
         {
             token.ThrowIfCancellationRequested();
             // Parent pruning owns current journal records and its deletion header.
             // Independent obligations take over only after that parent reservation
             // is gone; otherwise an expiry sweep could strand resumable cleanup.
-            var parentRetained = entry.ExecutionId is not null && state.Entries.ContainsKey("execution-" + entry.ExecutionId);
+            var parentRetained = entry.ExecutionId is not null && parents.Contains(entry.ExecutionId);
             try
             {
                 if (entry.Kind == "work" && parentRetained) { await ledger.RecordSweepAttemptAsync(entry.Id, entry.Generation, entry.Error, token); continue; }
@@ -128,8 +142,7 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
                 // request lifetime. Native lifecycle is a second backstop for late uploads.
                 if (entry.ETag is not null || entry.RegisteredAt.AddDays(1) <= Now)
                 {
-                    if (entry.Kind == "work") { if (await ledger.RemovedIfGenerationAsync(entry.Id, entry.Generation, token)) removed++; }
-                    else { await ledger.RemovedAsync(entry.Id, token); removed++; }
+                    if (await ledger.RemovedIfGenerationAsync(entry.Id, entry.Generation, token)) removed++;
                 }
                 else if (entry.Kind == "work") await ledger.RecordSweepAttemptAsync(entry.Id, entry.Generation, null, token);
                 else await ledger.UpdateAsync(entry.Id, e => { e.LastAttemptAt = Now; e.Error = null; }, token);
@@ -159,19 +172,18 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
 
     public async Task<BlobRetentionHealth> HealthAsync(CancellationToken token = default)
     {
-        BlobRetentionSnapshot state; BlobCapacityHealth capacity;
-        try { state = await ledger.ReadAsync(token); capacity = await ledger.CapacityAsync(token); }
+        BlobRetentionHealth health;
+        try { health = await ledger.ReadHealthAsync(Now, token); }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             return new(false, null, 0, 0, 0, null, [new("ledger", "Retention ledger unavailable: " + ex.GetType().Name, Now)]);
         }
-        var overdue = state.Entries.Values.Where(e => e.ReconciliationDeadline < Now.AddMinutes(-15)).ToArray();
-        return new(_sweepFailure is null && state.LastSweepAt is not null && overdue.Length == 0 && !state.Entries.Values.Any(e => e.Error is not null), state.LastSweepAt,
-            state.Entries.Values.Sum(e => e.ObjectSlots), state.Entries.Values.Sum(e => e.Bytes), overdue.Length,
-            overdue.Select(e => (DateTimeOffset?)e.ReconciliationDeadline).Min(),
-            state.Entries.Values.Where(e => e.Error is not null).Select(e => new BlobRetentionFailure(e.Id, e.Error!, e.LastAttemptAt))
-                .Concat(_sweepFailure is null ? [] : new[] { new BlobRetentionFailure("sweep", _sweepFailure, Now) }).Take(20).ToArray(), capacity);
+        return _sweepFailure is null ? health : health with
+        {
+            Healthy = false,
+            Failures = new[] { new BlobRetentionFailure("sweep", _sweepFailure, Now) }.Concat(health.Failures).Take(20).ToArray()
+        };
     }
 }
 

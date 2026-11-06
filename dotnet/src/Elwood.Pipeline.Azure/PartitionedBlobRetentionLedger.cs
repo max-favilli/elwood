@@ -112,6 +112,36 @@ public sealed class PartitionedBlobRetentionLedger : BlobRetentionLedger
         return new(pages.Sum(p => p.ReservedWorkItems), pages.Sum(p => p.ReservedWorkAttempts), pages.Sum(p => p.UsedWorkAttempts),
             pages.Min(p => p.AvailableObjects), pages.Min(p => p.AvailableBytes), pages.Min(p => p.AvailableWorkItems), pages.Min(p => p.AvailableWorkAttempts));
     }
+    public override async Task<IReadOnlyList<BlobRetentionEntry>> ReadMaintenancePageAsync(
+        RetentionMaintenanceKind kind, DateTimeOffset now, int limit = 100, CancellationToken token = default)
+    {
+        RetentionMaintenance.Validate(kind, limit);
+        // Merge only a bounded top page from each fixed partition. No combined
+        // installation snapshot is built, even when every partition is full.
+        var candidates = new List<BlobRetentionEntry>(); var gate = new object();
+        await Each(async p =>
+        {
+            var page = await p.ReadMaintenancePageAsync(kind, now, limit, token);
+            lock (gate)
+            {
+                candidates.AddRange(page);
+                candidates = RetentionMaintenance.Select(candidates, kind, now, limit).ToList();
+            }
+        }, token);
+        return candidates;
+    }
+    public override async Task<BlobRetentionHealth> ReadHealthAsync(DateTimeOffset now, CancellationToken token = default)
+    {
+        var pages = new List<BlobRetentionHealth>();
+        await Each(async p => { var page = await p.ReadHealthAsync(now, token); lock (pages) pages.Add(page); }, token);
+        var lastSweep = (await _health.ReadHealthAsync(now, token)).LastSweepAt;
+        var capacities = pages.Select(p => p.Capacity ?? throw new InvalidOperationException("Partition capacity summary is missing.")).ToArray();
+        var capacity = new BlobCapacityHealth(capacities.Sum(p => p.ReservedWorkItems), capacities.Sum(p => p.ReservedWorkAttempts), capacities.Sum(p => p.UsedWorkAttempts),
+            capacities.Min(p => p.AvailableObjects), capacities.Min(p => p.AvailableBytes), capacities.Min(p => p.AvailableWorkItems), capacities.Min(p => p.AvailableWorkAttempts));
+        return new(lastSweep is not null && pages.All(p => p.OverdueObjects == 0 && p.Failures.Length == 0), lastSweep,
+            pages.Sum(p => p.RegisteredObjects), pages.Sum(p => p.RegisteredBytes), pages.Sum(p => p.OverdueObjects),
+            pages.Min(p => p.OldestExpiry), pages.SelectMany(p => p.Failures).Take(20).ToArray(), capacity);
+    }
 }
 
 /// <summary>Layout is immutable for an installation. Switching requires an explicit, offline migration.</summary>

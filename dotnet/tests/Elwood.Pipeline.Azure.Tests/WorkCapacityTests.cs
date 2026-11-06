@@ -189,7 +189,7 @@ public sealed class WorkCapacityTests
     }
 
     [Fact]
-    public async Task One_sweep_releases_all_checkpoint_obligations_for_an_absent_parent_without_touching_live_versions()
+    public async Task Bounded_sweeps_release_checkpoint_obligations_for_an_absent_parent_without_touching_live_versions()
     {
         using var service = new ReviewBlobService(versioning: true); var clock = new Clock();
         var parts = Enumerable.Range(0, 64).Select(_ => new Ledger(clock)).ToArray();
@@ -208,7 +208,8 @@ public sealed class WorkCapacityTests
             RegisteredAt = clock.Now, ExpiresAt = clock.Now.AddDays(30), Bytes = 10 });
         clock.Now += TimeSpan.FromHours(2);
         var sweep = new BlobOutputRetention(ledger, uri => service.Container.GetBlobClient(new BlobUriBuilder(uri).BlobName), clock);
-        Assert.Equal(400, await sweep.SweepAsync());
+        Assert.Equal(256, await sweep.SweepAsync());
+        Assert.Equal(144, await sweep.SweepAsync());
         Assert.Equal(3, (await ledger.ReadAsync()).Entries.Count);
         Assert.Equal("live", (await live.DownloadContentAsync()).Value.Content.ToString());
         Assert.NotNull(await ledger.FindEntryAsync("business-output"));

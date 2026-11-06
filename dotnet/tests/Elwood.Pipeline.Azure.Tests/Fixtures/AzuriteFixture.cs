@@ -1,4 +1,5 @@
 using Azure.Storage.Blobs;
+using Azure.Data.Tables;
 using Testcontainers.Azurite;
 
 namespace Elwood.Pipeline.Azure.Tests.Fixtures;
@@ -24,6 +25,7 @@ public sealed class AzuriteFixture : IAsyncLifetime
         .Build();
 
     public BlobServiceClient ServiceClient { get; private set; } = null!;
+    public TableClient Table(string name, TableClientOptions? options = null) => new(_container.GetConnectionString(), name, options);
 
     public async Task InitializeAsync()
     {

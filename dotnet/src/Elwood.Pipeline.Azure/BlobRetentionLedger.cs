@@ -79,6 +79,26 @@ public abstract class BlobRetentionLedger(TimeProvider? timeProvider = null, int
     protected DateTimeOffset Now => (timeProvider ?? TimeProvider.System).GetUtcNow();
     public abstract Task<BlobRetentionSnapshot> ReadAsync(CancellationToken token = default);
     protected abstract Task ChangeAsync(Action<BlobRetentionSnapshot> change, CancellationToken token);
+    // Runtime maintenance uses this bounded contract. ReadAsync is retained for
+    // small-ledger compatibility/export; scalable providers must override these
+    // methods with indexed queries and counters, never a full snapshot scan.
+    public virtual async Task<IReadOnlyList<BlobRetentionEntry>> ReadMaintenancePageAsync(
+        RetentionMaintenanceKind kind, DateTimeOffset now, int limit = 100, CancellationToken token = default)
+    {
+        RetentionMaintenance.Validate(kind, limit);
+        return RetentionMaintenance.Select((await ReadAsync(token)).Entries.Values, kind, now, limit);
+    }
+
+    public virtual async Task<BlobRetentionHealth> ReadHealthAsync(DateTimeOffset now, CancellationToken token = default)
+    {
+        var state = await ReadAsync(token);
+        var overdue = state.Entries.Values.Where(e => e.ReconciliationDeadline < now.AddMinutes(-15)).ToArray();
+        return new(state.LastSweepAt is not null && overdue.Length == 0 && !state.Entries.Values.Any(e => e.Error is not null), state.LastSweepAt,
+            state.Entries.Values.Sum(e => e.ObjectSlots), state.Entries.Values.Sum(e => e.Bytes), overdue.Length,
+            overdue.Select(e => (DateTimeOffset?)e.ReconciliationDeadline).Min(),
+            state.Entries.Values.Where(e => e.Error is not null).Take(20)
+                .Select(e => new BlobRetentionFailure(e.Id, e.Error!, e.LastAttemptAt)).ToArray(), CapacityOf(state.Entries.Values));
+    }
     public virtual async Task<BlobRetentionEntry?> FindEntryAsync(string id, CancellationToken token = default)
         => (await ReadAsync(token)).Entries.GetValueOrDefault(id);
     public virtual async Task<BlobRetentionEntry?> FindWorkAsync(string executionId, string? stageId, CancellationToken token = default)
@@ -88,8 +108,9 @@ public abstract class BlobRetentionLedger(TimeProvider? timeProvider = null, int
             : state.Entries.GetValueOrDefault(BlobWorkCapacity.Id(executionId, stageId));
     }
     public virtual async Task<BlobCapacityHealth> CapacityAsync(CancellationToken token = default)
+        => CapacityOf((await ReadAsync(token)).Entries.Values);
+    private BlobCapacityHealth CapacityOf(ICollection<BlobRetentionEntry> entries)
     {
-        var entries = (await ReadAsync(token)).Entries.Values;
         return new(entries.Sum(e => (long)(e.Work?.ItemCount ?? 0)), entries.Sum(e => e.ReservedAttempts), entries.Sum(e => e.UsedAttempts),
             Math.Max(0, maxObjects - entries.Sum(e => e.ObjectSlots)), Math.Max(0, maxBytes - entries.Sum(e => e.Bytes)),
             Math.Max(0, maxWorkItems - entries.Sum(e => (long)(e.Work?.ItemCount ?? 0))), Math.Max(0, maxWorkAttempts - entries.Sum(e => e.ReservedAttempts)));

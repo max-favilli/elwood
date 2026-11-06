@@ -1,0 +1,35 @@
+{
+  "sourceCommit": "f7bec8784e71485a95b8fbd2ab0af25cb58b404a",
+  "ciRun": "https://github.com/max-favilli/elwood/actions/runs/42222307607",
+  "processing": "passed",
+  "cleanup": "timed out at the overall 60-minute budget; full test failed",
+  "measurement": {
+    "environment": "GitHub/Linux Docker Azurite and Redis; not Azure performance or billing",
+    "itemCount": 2048,
+    "seconds": 3162.4110567,
+    "sdkRequests": 926445,
+    "sdkOperations": {
+      "blob/GET": 559832,
+      "table/POST": 5493,
+      "blob/lease-acquire": 43959,
+      "blob/PUT": 128807,
+      "blob/lease-release": 11504,
+      "blob/lease-renew": 126876,
+      "blob/HEAD": 24179,
+      "queue/PUT": 0,
+      "queue/POST": 5376,
+      "queue/DELETE": 5376,
+      "table/GET": 266,
+      "table/PUT": 1,
+      "queue/GET": 7455,
+      "table/DELETE": 7321
+    },
+    "redisUsedBytes": 4669624,
+    "managedHeapBudgetBytes": 1610612736,
+    "RegisteredBytes": 99855001,
+    "RegisteredObjects": 42707,
+    "UsedWorkAttempts": 2048,
+    "AvailableObjects": 1304,
+    "peakProcessBytes": 606064640
+  }
+}

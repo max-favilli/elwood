@@ -2,6 +2,8 @@
 
 Release candidate preparation is in progress. Use a published tag and its passing evidence, not an arbitrary `main` checkout. This document will name the published assets when release verification completes.
 
+**Eagle production gate:** the owner has now supplied volumes far above this profile's retained-metadata capacity, including individual executions above 6,600 outputs. The [Eagle capacity package](eagle-capacity-plan.md) is required before live adoption. The existing distributed profile and measurements below are a bounded functional test profile, not approval to provision it for the full Eagle workload.
+
 Elwood owns orchestration, transformations, delivery history, recovery and retention. The consumer owns its Azure subscription, resource group, networking, business database, third-party connections and deployment approval. This repository does not provision permanent resources for either pilot. SQL stores the consumer's catalog/business data; Elwood state uses Blob/Table, scheduling uses Storage Queue or Service Bus, and Redis supplies shared definitions and reconstructible item status.
 
 ## Choose the pilot profile
@@ -89,6 +91,8 @@ Consumer acceptance: genuine RabbitMQ disconnection/redelivery; durable acceptan
 The partitioned profile defaults to 2,048 reserved objects and 16 GiB per partition, 1,000 registrations and 1 GiB uploaded per hour per partition, 100,000 work items and 1,000,000 reserved attempts per parent partition. Every journal version and retained document consumes accounting; counts are not merely current Blob counts. A stage reserves 100 potential attempts per item. The installation cannot borrow capacity across partitions. `/api/retention` reports the tightest remaining partition allowance, so total free storage alone does not prove another batch fits.
 
 These finite limits intentionally stop unlimited growth. Do not raise `MaxObjects` above the supported 2,048/partition to bypass the 4 MiB control-ledger bound. For sustained workloads that exceed the measured retention runway, shorten an explicitly approved pipeline history policy, reduce batch/frequency, or add a separately scoped installation; larger-scale metadata storage is a separate capacity design. Never delete live ledgers, journals or Redis keys to pretend deliveries completed.
+
+For scale context, the first completed 2,048-item delivery measurement registered **42,707 accounting objects**, about one third of the installation's nominal 131,072 slots. Partition distribution, other executions and hourly admission limits reduce usable headroom further. This supports a bounded functional trial; the production volumes supplied on 6 November require the [Eagle capacity package](eagle-capacity-plan.md). The 30-day default is unchanged. See the [measured run and its cleanup failure](evidence/m7-pilot/processing-f7bec87.json) and [current verification status](m7-pilot-evidence.md).
 
 When short history expires before the original execution deadline, physical item cleanup keeps a closed admission reservation until that deadline plus one day. It remains counted against capacity until the independent sweep removes it; this prevents stale workers from reopening deleted work. A missing parent therefore does not imply that every retention obligation is already released.
 

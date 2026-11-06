@@ -224,7 +224,14 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
             await second.GetRequiredService<DurableRuntime>().Runner().PruneAsync(timeout.Token, maximumWorkPages: 256);
         }
         Assert.Null(await states.GetExecutionAsync(id));
-        await retention.SweepAsync(timeout.Token);
+        // Independent accounting cleanup also uses bounded pages. A large
+        // execution may have more checkpoint versions than one sweep admits.
+        var ledger = first.GetRequiredService<BlobRetentionLedger>();
+        for (var pass = 0; pass < 64; pass++)
+        {
+            await retention.SweepAsync(timeout.Token);
+            if (!(await ledger.ReadAsync(timeout.Token)).Entries.Values.Any(e => e.ExecutionId == id && e.Kind == "checkpoint")) break;
+        }
         await foreach (var blob in blobs.GetBlobContainerClient("states").GetBlobsAsync(prefix: "elwood/work-journal/" + id + "/"))
             Assert.Fail("An expired execution left journal blob " + blob.Name);
         await foreach (var blob in blobs.GetBlobContainerClient("documents").GetBlobsAsync(prefix: "elwood/exec/" + id + "/"))
@@ -232,7 +239,6 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         // Forced early parent expiry does not erase the admission fence before
         // its original deadline. The independent sweep releases that bounded
         // reservation afterward (clock-driven expiry is covered by WorkCapacityTests).
-        var ledger = first.GetRequiredService<BlobRetentionLedger>();
         var remaining = (await ledger.ReadAsync()).Entries.Values.Where(e => e.ExecutionId == id).ToArray();
         Assert.DoesNotContain(remaining, e => e.Kind is "document" or "journal" && e.ConfirmedBeforeCleanup);
         Assert.DoesNotContain(remaining, e => e.Kind == "checkpoint");

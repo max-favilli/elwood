@@ -1,0 +1,42 @@
+{
+  "sourceCommit": "52d19043adfcdec5cfa1f0235cddead32ae7f6db",
+  "ciRun": "https://github.com/max-favilli/elwood/actions/runs/42232415646",
+  "processing": "passed",
+  "cleanup": "timed out at the overall 60-minute budget during document cleanup; full test failed",
+  "measurement": {
+    "environment": "GitHub/Linux Docker Azurite and Redis; not Azure performance or billing",
+    "itemCount": 2048,
+    "seconds": 2998.4328283,
+    "sdkRequests": 943148,
+    "sdkOperations": {
+      "blob/GET": 575194,
+      "table/POST": 5568,
+      "blob/lease-acquire": 44256,
+      "blob/PUT": 129037,
+      "blob/lease-release": 11515,
+      "blob/lease-renew": 127037,
+      "blob/HEAD": 24231,
+      "queue/PUT": 0,
+      "queue/POST": 5410,
+      "queue/DELETE": 5410,
+      "table/GET": 301,
+      "table/PUT": 1,
+      "queue/GET": 7767,
+      "table/DELETE": 7421
+    },
+    "redisUsedBytes": 4675960,
+    "managedHeapBudgetBytes": 1610612736,
+    "RegisteredBytes": 100490730,
+    "RegisteredObjects": 42762,
+    "UsedWorkAttempts": 2048,
+    "AvailableObjects": 1328,
+    "peakProcessBytes": 560009216
+  },
+  "lastCleanupProgress": {
+    "pass": 4,
+    "phase": "documents",
+    "stageIndex": 1,
+    "seconds": 498.5688605,
+    "sdkRequests": 13630
+  }
+}

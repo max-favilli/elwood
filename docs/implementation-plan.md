@@ -38,6 +38,8 @@ M7 covers the Eagle requirement clarified during M6: one integration may fan out
 
 Redis provides shared coordination and cached status. Durable manifests, checkpoints and storage-enforced ownership remain authoritative for recovery when Redis loses data. Pipeline revisions stay pinned; uncertain external writes follow the pipeline's automatic/manual retry policy. Source fan-out preserves item identity, while output fan-out is explicit and does not change the existing meaning of output `path`. No DSL behavior changes are required.
 
+The production volumes supplied on 6 November expose an additional M7.7 delivery requirement: the fixed Blob-ledger accounting profile cannot retain the Eagle workload for 30 days, and the largest observed execution exceeds 6,600 outputs. Implement the [scalable accounting, backpressure and capacity package](eagle-capacity-plan.md) before claiming Eagle production readiness. The 2,048-item correctness campaign is a regression baseline, not sufficient adoption capacity.
+
 | Package | Current state | Remaining delivery |
 |---|---|---|
 | 7.1 Coordination contract and Redis adapter | Complete as an experimental component; real Redis protocol tests pass | Production activation depends on the following packages |
