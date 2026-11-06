@@ -41,6 +41,12 @@ public sealed record BlobRetentionEntry
     public long ReservedAttempts { get; init; }
     public long UsedAttempts { get; set; }
     public bool AdmissionClosed { get; set; }
+    // An unconfirmed upload remains charged during its bounded late-write grace,
+    // even when an early cleanup request has already removed any visible object.
+    [JsonIgnore]
+    public DateTimeOffset ReconciliationDeadline => Kind is "document" or "journal" or "output" &&
+        ETag is null && RegisteredAt.AddDays(1) > ExpiresAt
+        ? RegisteredAt.AddDays(1) : ExpiresAt;
     [JsonIgnore]
     public string OwnershipId => Kind == "work" ? Id + "-" + Generation : Id;
 }
@@ -115,7 +121,7 @@ public abstract class BlobRetentionLedger(TimeProvider? timeProvider = null, int
         if (entry.Bytes < 0 || entry.ObjectSlots < 1 || entry.ExpiresAt <= Now || entry.ExpiresAt > Now.AddDays(373)) throw new ArgumentException("Invalid retention obligation.");
         if (state.Entries.Values.Sum(e => e.ObjectSlots) > maxObjects - entry.ObjectSlots || state.Entries.Values.Sum(e => e.Bytes) > maxBytes - entry.Bytes)
             throw new InvalidOperationException("Blob retention admission limit reached. Cleanup must reclaim capacity before another write.");
-        if (state.Entries.Values.Any(e => e.ExpiresAt < Now.AddMinutes(-15)))
+        if (state.Entries.Values.Any(e => e.ReconciliationDeadline < Now.AddMinutes(-15)))
             throw new InvalidOperationException("Blob retention is overdue. Repair cleanup before accepting further writes.");
         if (state.WindowStartedAt <= Now.AddHours(-1)) { state.WindowStartedAt = Now; state.WindowWrites = 0; state.WindowBytes = 0; }
         if (state.WindowWrites >= maxWritesPerHour) throw new InvalidOperationException("Blob hourly write limit reached.");
@@ -133,6 +139,18 @@ public abstract class BlobRetentionLedger(TimeProvider? timeProvider = null, int
     }, token);
 
     public virtual Task RemovedAsync(string id, CancellationToken token = default) => ChangeAsync(state => state.Entries.Remove(id), token);
+    public virtual async Task<int> RemovedIfGenerationsAsync(IReadOnlyDictionary<string, string> candidates, CancellationToken token = default)
+    {
+        var removed = 0;
+        await ChangeAsync(state =>
+        {
+            removed = 0;
+            foreach (var (id, generation) in candidates)
+                if (state.Entries.TryGetValue(id, out var entry) && entry.Generation == generation)
+                { state.Entries.Remove(id); removed++; }
+        }, token);
+        return removed;
+    }
     public virtual async Task<bool> RemovedIfGenerationAsync(string id, string generation, CancellationToken token = default)
     {
         var removed = false;

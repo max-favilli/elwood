@@ -88,6 +88,8 @@ These finite limits intentionally stop unlimited growth. Do not raise `MaxObject
 
 When short history expires before the original execution deadline, physical item cleanup keeps a closed admission reservation until that deadline plus one day. It remains counted against capacity until the independent sweep removes it; this prevents stale workers from reopening deleted work. A missing parent therefore does not imply that every retention obligation is already released.
 
+Scheduled distributed cleanup drains multiple restartable pages within a two-minute work budget per pass; a busy owner or provider outage yields to a later tick. Confirmed document/journal accounting is released only after physical cleanup. Checkpoint accounting is released in batches only after the parent and its versions/snapshots are absent. Unconfirmed uploads retain their finite, charged one-day reconciliation grace; a late confirmation cannot extend an existing cleanup request.
+
 Native lifecycle/RBAC, Managed Redis SKU availability, private networking, real cloud load/failover and both business-system acceptance runs belong to the consumer deployments. Passing component/emulator tests does not replace these installation checks. Send failures back with release/commit, execution/revision and stage/item IDs, a redacted error, timestamps and the smoke result; never send tokens, connection strings or real customer payloads.
 
 ## Prompts for the two consumer sessions

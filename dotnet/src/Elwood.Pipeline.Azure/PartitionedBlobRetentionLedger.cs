@@ -62,6 +62,14 @@ public sealed class PartitionedBlobRetentionLedger : BlobRetentionLedger
     { await Verify(token); await For(id).UpdateAsync(id, update, token); }
     public override async Task RemovedAsync(string id, CancellationToken token = default)
     { await Verify(token); await For(id).RemovedAsync(id, token); }
+    public override async Task<int> RemovedIfGenerationsAsync(IReadOnlyDictionary<string, string> candidates, CancellationToken token = default)
+    {
+        await Verify(token); var removed = 0;
+        await Parallel.ForEachAsync(candidates.GroupBy(p => For(p.Key)),
+            new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = token }, async (group, ct) =>
+                Interlocked.Add(ref removed, await group.Key.RemovedIfGenerationsAsync(group.ToDictionary(p => p.Key, p => p.Value), ct)));
+        return removed;
+    }
     public override async Task<bool> RemovedIfGenerationAsync(string id, string generation, CancellationToken token = default)
     { await Verify(token); return await For(id).RemovedIfGenerationAsync(id, generation, token); }
     public override async Task RecordSweepAttemptAsync(string id, string generation, string? error, CancellationToken token = default)

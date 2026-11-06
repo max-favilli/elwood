@@ -24,6 +24,9 @@ public sealed class WorkCapacityTests
         private byte[] _state = Encode(new());
         private readonly object _gate = new();
         public Func<Task>? AfterRead;
+        public bool FailBatchRemoval;
+        public override Task<int> RemovedIfGenerationsAsync(IReadOnlyDictionary<string, string> candidates, CancellationToken token = default)
+            => FailBatchRemoval ? Task.FromException<int>(new IOException("Synthetic accounting outage.")) : base.RemovedIfGenerationsAsync(candidates, token);
         public override async Task<BlobRetentionSnapshot> ReadAsync(CancellationToken token = default)
         {
             BlobRetentionSnapshot snapshot; Func<Task>? after;
@@ -140,6 +143,89 @@ public sealed class WorkCapacityTests
         var left = new List<BlobItem>();
         await foreach (var blob in service.Container.GetBlobsAsync(states: BlobStates.Version, prefix: "elwood/work-journal/execution/")) left.Add(blob);
         Assert.Empty(left);
+    }
+
+    [Fact]
+    public async Task Failed_checkpoint_accounting_batch_does_not_starve_independent_output_cleanup()
+    {
+        using var service = new ReviewBlobService(); var clock = new Clock(); var ledger = new Ledger(clock) { FailBatchRemoval = true };
+        foreach (var kind in new[] { "checkpoint", "output" })
+            await ledger.RegisterAsync(new() { Id = kind, Kind = kind, ExecutionId = "gone",
+                BlobUri = service.Container.GetBlobClient("elwood/" + kind).Uri.ToString(), RegisteredAt = clock.Now,
+                ExpiresAt = clock.Now.AddHours(1), Bytes = 10, ETag = "confirmed" });
+        clock.Now += TimeSpan.FromHours(2);
+        var sweep = new BlobOutputRetention(ledger, uri => service.Container.GetBlobClient(new BlobUriBuilder(uri).BlobName), clock);
+        Assert.Equal(1, await sweep.SweepAsync());
+        Assert.Null(await ledger.FindEntryAsync("output"));
+        Assert.NotNull(await ledger.FindEntryAsync("checkpoint"));
+        Assert.False((await sweep.HealthAsync()).Healthy);
+        ledger.FailBatchRemoval = false;
+        Assert.Equal(1, await sweep.SweepAsync());
+        Assert.True((await sweep.HealthAsync()).Healthy);
+    }
+
+    [Fact]
+    public async Task Unconfirmed_late_write_grace_stays_charged_without_falsely_reporting_cleanup_overdue()
+    {
+        using var service = new ReviewBlobService(); var clock = new Clock(); var ledger = new Ledger(clock, objects: 2);
+        await ledger.RegisterAsync(new() { Id = "pending", Kind = "document", ExecutionId = "gone",
+            BlobUri = service.Container.GetBlobClient("elwood/exec/gone/pending").Uri.ToString(),
+            RegisteredAt = clock.Now, ExpiresAt = clock.Now.AddDays(1), Bytes = 10 });
+        await ledger.ExpireDocumentsAsync("gone");
+        clock.Now += TimeSpan.FromMinutes(30);
+        var sweep = new BlobOutputRetention(ledger, uri => service.Container.GetBlobClient(new BlobUriBuilder(uri).BlobName), clock);
+        Assert.Equal(0, await sweep.SweepAsync());
+        Assert.True((await sweep.HealthAsync()).Healthy);
+        Assert.Equal(1, (await ledger.CapacityAsync()).AvailableObjects);
+        await ledger.RegisterAsync(new() { BlobUri = "https://unit.test/control/new", RegisteredAt = clock.Now,
+            ExpiresAt = clock.Now.AddDays(30), Bytes = 10 });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ledger.RegisterAsync(new() { BlobUri = "https://unit.test/control/full",
+            RegisteredAt = clock.Now, ExpiresAt = clock.Now.AddDays(30), Bytes = 10 }));
+        clock.Now += TimeSpan.FromDays(1);
+        Assert.False((await sweep.HealthAsync()).Healthy);
+        Assert.Equal(1, await sweep.SweepAsync());
+        Assert.True((await sweep.HealthAsync()).Healthy);
+        Assert.Null(await ledger.FindEntryAsync("pending"));
+    }
+
+    [Fact]
+    public async Task One_sweep_releases_all_checkpoint_obligations_for_an_absent_parent_without_touching_live_versions()
+    {
+        using var service = new ReviewBlobService(versioning: true); var clock = new Clock();
+        var parts = Enumerable.Range(0, 64).Select(_ => new Ledger(clock)).ToArray();
+        var ledger = new PartitionedBlobRetentionLedger(i => parts[i], new Ledger(clock));
+        await Parent(ledger, clock);
+        for (var i = 0; i < 400; i++)
+            await ledger.RegisterAsync(new() { Id = "checkpoint-" + i, Kind = "checkpoint", ExecutionId = "gone",
+                BlobUri = service.Container.GetBlobClient("elwood/states/gone.json").Uri.ToString(),
+                RegisteredAt = clock.Now, ExpiresAt = clock.Now.AddHours(1), Bytes = 10, ETag = "leased" });
+        var live = service.Container.GetBlobClient("elwood/states/execution.json");
+        await ledger.RegisterAsync(new() { Id = "live-checkpoint", Kind = "checkpoint", ExecutionId = "execution",
+            BlobUri = live.Uri.ToString(), RegisteredAt = clock.Now, ExpiresAt = clock.Now.AddHours(1), Bytes = 10, ETag = "leased" });
+        await live.UploadAsync(BinaryData.FromString("live"), new BlobUploadOptions
+            { Metadata = new Dictionary<string, string> { [BlobOutputRetention.OwnerMetadata] = "live-checkpoint" } });
+        await ledger.RegisterAsync(new() { Id = "business-output", Kind = "output", BlobUri = "https://unit.test/control/output",
+            RegisteredAt = clock.Now, ExpiresAt = clock.Now.AddDays(30), Bytes = 10 });
+        clock.Now += TimeSpan.FromHours(2);
+        var sweep = new BlobOutputRetention(ledger, uri => service.Container.GetBlobClient(new BlobUriBuilder(uri).BlobName), clock);
+        Assert.Equal(400, await sweep.SweepAsync());
+        Assert.Equal(3, (await ledger.ReadAsync()).Entries.Count);
+        Assert.Equal("live", (await live.DownloadContentAsync()).Value.Content.ToString());
+        Assert.NotNull(await ledger.FindEntryAsync("business-output"));
+    }
+
+    [Fact]
+    public async Task Batched_absence_reconciliation_cannot_remove_a_replaced_registration_generation()
+    {
+        var clock = new Clock(); var ledger = new Ledger(clock);
+        var entry = new BlobRetentionEntry { Id = "checkpoint", Kind = "checkpoint", ExecutionId = "gone",
+            BlobUri = "https://unit.test/control/gone", RegisteredAt = clock.Now, ExpiresAt = clock.Now.AddDays(1), Bytes = 1, ETag = "leased" };
+        await ledger.RegisterAsync(entry);
+        var observed = new Dictionary<string, string> { [entry.Id] = entry.Generation };
+        await ledger.RemovedAsync(entry.Id);
+        await ledger.RegisterAsync(entry with { Generation = Guid.NewGuid().ToString("N") });
+        Assert.Equal(0, await ledger.RemovedIfGenerationsAsync(observed));
+        Assert.NotNull(await ledger.FindEntryAsync(entry.Id));
     }
 
     [Fact]

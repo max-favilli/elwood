@@ -35,7 +35,7 @@ public sealed class ExecutionFunctions(QueuedExecutionDispatcher dispatcher, Dur
         {
             try
             {
-                var deleted = await runtime.Runner().PruneAsync(token);
+                var deleted = await runtime.Runner().PruneAsync(token, maximumWorkPages: 256);
                 logger.LogInformation("Retention removed {ExecutionCount} expired executions.", deleted);
             }
             finally { await outputs.SweepAsync(token); }

@@ -532,14 +532,19 @@ public sealed partial class AsyncExecutor
         throw new RecoveryConflictException("An attempt is still running.");
     }
 
-    public async Task<int> PruneAsync(CancellationToken cancellationToken = default)
+    public Task<int> PruneAsync(CancellationToken cancellationToken = default) => PruneAsync(cancellationToken, 1);
+
+    public async Task<int> PruneAsync(CancellationToken cancellationToken, int maximumWorkPages)
     {
+        if (maximumWorkPages is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(maximumWorkPages));
         if (_documents is not IExecutionDocumentStore documents) throw new InvalidOperationException("Retention requires execution-scoped document deletion.");
+        var workBudget = System.Diagnostics.Stopwatch.StartNew();
         var deleted = 0;
         var failures = new List<Exception>();
         foreach (var snapshot in await _states.ListRetainedAsync())
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (maximumWorkPages > 1 && workBudget.Elapsed >= TimeSpan.FromMinutes(2)) break;
             if (snapshot.WorkProfile is not null && (snapshot.WorkProfile != DistributedStepScheduler.Profile || _workRetention is null)) continue;
             if (!snapshot.Deleting && !(snapshot.ExpiresAt <= Now)) continue;
             try
@@ -550,7 +555,21 @@ public sealed partial class AsyncExecutor
                 if (state is null || state.Status is ExecutionStatus.Running or ExecutionStatus.Retrying or ExecutionStatus.Pending || !(state.ExpiresAt <= Now)) continue;
                 if (!state.Deleting) { state.Deleting = true; await claim.SaveAsync(state); } // One restartable tombstone, including cleanup retries.
                 await claim.ValidateAsync(cancellationToken);
-                if (state.WorkProfile is not null && !await _workRetention!.AdvanceAsync(state, claim, cancellationToken)) continue;
+                if (state.WorkProfile is not null)
+                {
+                    var drained = false;
+                    for (var page = 0; page < maximumWorkPages; page++)
+                    {
+                        var before = CleanupPosition(state.WorkCleanup);
+                        drained = await _workRetention!.AdvanceAsync(state, claim, cancellationToken);
+                        // Installed hosts drain multiple bounded pages per timer
+                        // invocation. Do not spin on a busy owner, or spend the
+                        // whole five-minute host budget on this maintenance pass.
+                        if (drained || !state.WorkCleanup!.RemovedRecords && CleanupPosition(state.WorkCleanup) == before ||
+                            workBudget.Elapsed >= TimeSpan.FromMinutes(2)) break;
+                    }
+                    if (!drained) continue;
+                }
                 if (state.FingerprintKey is not null && _fingerprints is not null)
                     await _fingerprints.ReleasePendingAsync(state.FingerprintKey, state.ExecutionId, cancellationToken);
                 if (state.WorkProfile is null) await documents.DeleteExecutionAsync(state.ExecutionId);
@@ -575,6 +594,9 @@ public sealed partial class AsyncExecutor
         if (failures.Count > 0) throw new AggregateException($"Retention removed {deleted} execution(s); {failures.Count} cleanup(s) failed and will be retried.", failures);
         return deleted;
     }
+
+    private static (string?, int?, int?, bool?, WorkStageCleanupCursor?) CleanupPosition(WorkCleanupProgress? progress)
+        => (progress?.Phase, progress?.StageIndex, progress?.ProjectionOrdinal, progress?.StageDrained, progress?.Cursor);
 
     internal async Task<PipelineResult> RunToCompletion(string id, CancellationToken cancellationToken = default, CancellationToken budgetCancellation = default, bool responseOutputOnly = false)
     {

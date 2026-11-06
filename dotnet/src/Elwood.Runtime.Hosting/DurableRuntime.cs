@@ -99,7 +99,7 @@ public sealed class ExecutionRetentionWorker(DurableRuntime runtime, ILogger<Exe
             catch (Exception ex) { logger.LogError(ex, "Output retention sweep failed; obligations remain registered."); }
             try
             {
-                var deleted = await runtime.Runner().PruneAsync(stoppingToken);
+                var deleted = await runtime.Runner().PruneAsync(stoppingToken, maximumWorkPages: 256);
                 if (deleted > 0) logger.LogInformation("Retention removed {ExecutionCount} expired execution(s) and their documents.", deleted);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }

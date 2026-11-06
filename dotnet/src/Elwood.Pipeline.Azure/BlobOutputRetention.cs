@@ -48,8 +48,36 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
     public async Task<int> SweepAsync(CancellationToken token = default)
     {
         var state = await ledger.ReadAsync(token); var removed = 0; string? sweepFailure = null;
+        var absentCheckpoints = new Dictionary<string, string>();
+        // Many checkpoint obligations can name one deleted parent. Prove the
+        // base AND every version/snapshot are absent once per URI, then release
+        // that observed set in partition batches. A stale writer cannot recreate
+        // a deleted parent: its checkpoint PUT requires the old lease and ETag.
+        foreach (var group in state.Entries.Values.Where(e => e.Kind == "checkpoint" && e.ExpiresAt <= Now &&
+            e.ExecutionId is not null && !state.Entries.ContainsKey("execution-" + e.ExecutionId))
+            .OrderBy(e => e.LastAttemptAt).ThenBy(e => e.ExpiresAt).GroupBy(e => e.BlobUri).Take(100))
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                using var budget = CancellationTokenSource.CreateLinkedTokenSource(token); budget.CancelAfter(TimeSpan.FromSeconds(30));
+                var blob = resolve(new Uri(group.Key)); var exists = false;
+                await foreach (var item in blob.GetParentBlobContainerClient().GetBlobsAsync(states: BlobStates.Version | BlobStates.Snapshots,
+                    prefix: blob.Name, cancellationToken: budget.Token))
+                    if (item.Name == blob.Name) { exists = true; break; }
+                if (!exists) foreach (var entry in group) absentCheckpoints.Add(entry.Id, entry.Generation);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch { /* Normal per-obligation cleanup below records failures and retries. */ }
+        }
+        if (absentCheckpoints.Count != 0)
+        {
+            try { removed += await ledger.RemovedIfGenerationsAsync(absentCheckpoints, token); }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (Exception ex) { sweepFailure = "Checkpoint accounting cleanup failed: " + ex.GetType().Name; }
+        }
         // Failed items move behind untouched items on the next bounded sweep.
-        foreach (var entry in state.Entries.Values.Where(e => e.Kind != "execution" && e.ExpiresAt <= Now)
+        foreach (var entry in state.Entries.Values.Where(e => e.Kind != "execution" && e.ExpiresAt <= Now && !absentCheckpoints.ContainsKey(e.Id))
             .OrderBy(e => e.LastAttemptAt).ThenBy(e => e.ExpiresAt).Take(100))
         {
             token.ThrowIfCancellationRequested();
@@ -138,10 +166,10 @@ public sealed class BlobOutputRetention(BlobRetentionLedger ledger, Func<Uri, Bl
         {
             return new(false, null, 0, 0, 0, null, [new("ledger", "Retention ledger unavailable: " + ex.GetType().Name, Now)]);
         }
-        var overdue = state.Entries.Values.Where(e => e.ExpiresAt < Now.AddMinutes(-15)).ToArray();
+        var overdue = state.Entries.Values.Where(e => e.ReconciliationDeadline < Now.AddMinutes(-15)).ToArray();
         return new(_sweepFailure is null && state.LastSweepAt is not null && overdue.Length == 0 && !state.Entries.Values.Any(e => e.Error is not null), state.LastSweepAt,
             state.Entries.Values.Sum(e => e.ObjectSlots), state.Entries.Values.Sum(e => e.Bytes), overdue.Length,
-            overdue.Select(e => (DateTimeOffset?)e.ExpiresAt).Min(),
+            overdue.Select(e => (DateTimeOffset?)e.ReconciliationDeadline).Min(),
             state.Entries.Values.Where(e => e.Error is not null).Select(e => new BlobRetentionFailure(e.Id, e.Error!, e.LastAttemptAt))
                 .Concat(_sweepFailure is null ? [] : new[] { new BlobRetentionFailure("sweep", _sweepFailure, Now) }).Take(20).ToArray(), capacity);
     }

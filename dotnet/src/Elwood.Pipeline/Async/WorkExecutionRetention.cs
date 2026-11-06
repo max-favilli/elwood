@@ -11,10 +11,13 @@ public sealed class WorkCleanupProgress
     public int ProjectionOrdinal { get; set; }
     public bool StageDrained { get; set; }
     public WorkStageCleanupCursor? Cursor { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool RemovedRecords { get; set; }
 }
 
 /// <summary>
-/// One bounded cleanup unit per retained parent per maintenance tick. Callers hold
+/// One bounded cleanup unit per call. Hosts can drain several units within a
+/// finite page/time budget per maintenance tick. Callers hold
 /// the parent claim, persist Deleting first, and delete the parent only after true.
 /// Output delivery obligations live outside both internal namespaces and survive it.
 /// </summary>
@@ -36,6 +39,7 @@ public sealed class WorkExecutionRetention(DurableWorkJournal journal, IBoundedE
         // acquired its manifest. It survives deletion of the parent and journal.
         if (journal.Capacity is not null) await journal.Capacity.CloseAsync(state.ExecutionId, token);
         var progress = state.WorkCleanup ??= new();
+        progress.RemovedRecords = false;
         var stages = state.Sources.Values.Cast<StepState>().Concat(state.Outputs.Values)
             .Where(s => s.Work is not null).Select(s => s.Work!).OrderBy(w => w.Stage.StageId, StringComparer.Ordinal).ToArray();
         if (stages.Length > DistributedStepScheduler.MaximumSteps || stages.Select(s => s.Stage.StageId).Distinct().Count() != stages.Length ||
@@ -60,6 +64,7 @@ public sealed class WorkExecutionRetention(DurableWorkJournal journal, IBoundedE
                             var result = await journal.PruneStagePageAsync(work.Stage, pageSize, progress.Cursor, token,
                                 new DateTimeOffset(DateTime.SpecifyKind(state.ExpiresAt.Value, DateTimeKind.Utc)));
                             progress.Cursor = result.Next; progress.StageDrained = result.Drained;
+                            progress.RemovedRecords = result.Deleted != 0;
                         }
                     }
                     else if (projection is not null && progress.ProjectionOrdinal < work.Stage.ItemCount)
@@ -96,6 +101,7 @@ public sealed class WorkExecutionRetention(DurableWorkJournal journal, IBoundedE
 
     private static bool AdvancePage(WorkCleanupProgress progress, StorageCleanupPage page)
     {
+        progress.RemovedRecords = page.Deleted != 0;
         var busy = progress.Cursor?.SawBusy == true || page.Busy;
         var changed = progress.Cursor?.SawDeletion == true || page.Deleted != 0;
         if (page.NextCursor is null && !busy && !changed) { progress.Cursor = null; return true; }

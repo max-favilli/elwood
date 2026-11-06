@@ -48,6 +48,29 @@ public sealed class WorkExecutionRetentionTests : IDisposable
     }
 
     [Fact]
+    public async Task Installed_maintenance_drains_multiple_pages_without_waiting_one_timer_tick_per_page()
+    {
+        await Execution(); _clock.Now = _clock.Now.AddSeconds(2);
+        Assert.Equal(1, await Executor().PruneAsync(default, maximumWorkPages: 256));
+        Assert.Null(await States.GetExecutionAsync("execution"));
+        Assert.False(Directory.Exists(Path.Combine(_root, "journal/execution")));
+        Assert.False(Directory.Exists(Path.Combine(_root, "documents/exec/execution")));
+    }
+
+    [Fact]
+    public async Task Busy_cleanup_stays_restartable_and_does_not_starve_another_parent_in_the_same_pass()
+    {
+        var busy = await Execution("busy"); await Execution("ready");
+        await using var owner = (await Journal.TryStartAsync(busy, 0, "worker", "claim"))!;
+        _clock.Now = _clock.Now.AddSeconds(2);
+        Assert.Equal(1, await Executor().PruneAsync(default, maximumWorkPages: 256));
+        Assert.Null(await States.GetExecutionAsync("ready"));
+        Assert.True((await States.GetExecutionAsync("busy"))!.Deleting);
+        await owner.DisposeAsync();
+        Assert.Equal(1, await Executor().PruneAsync(default, maximumWorkPages: 256));
+    }
+
+    [Fact]
     public async Task Terminal_expiry_closes_items_then_removes_documents_receipts_journal_and_parent_across_restarts()
     {
         var stage = await Execution();

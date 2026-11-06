@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Azure.Core;
 using Azure.Core.Pipeline;
@@ -80,10 +83,12 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         configValues["Elwood:Distributed:Enabled"] = "true";
         configValues["Elwood:Redis:ConnectionString"] = "test.invalid:6380,ssl=true";
         configValues["Elwood:Durable:Workers"] = "4";
+        configValues["Elwood:Management:Tokens:0:Pipelines:0"] = "*";
+        configValues["Elwood:Management:Tokens:0:Permissions:4"] = "recover";
         var config = new ConfigurationBuilder().AddInMemoryCollection(configValues).Build();
-        ServiceProvider Host()
+        void Configure(IServiceCollection services)
         {
-            var services = new ServiceCollection().AddLogging().AddSingleton<IConfiguration>(config)
+            services.AddLogging().AddSingleton<IConfiguration>(config)
                 .AddSingleton<TokenCredential>(new NoCloudCredential());
             services.AddAzureDurableRuntime(config);
             services.AddSingleton(blobs).AddSingleton(table).AddSingleton<IConnectionMultiplexer>(cache);
@@ -97,8 +102,8 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
             // Azurite cannot simulate ARM lifecycle/RBAC/versioning. No production
             // configuration selects the above probe replacement. Runtime health,
             // initialized ledgers, finite quotas and cleanup stay enabled.
-            return services.BuildServiceProvider();
         }
+        ServiceProvider Host() { var services = new ServiceCollection(); Configure(services); return services.BuildServiceProvider(); }
         await using var first = Host(); await using var second = Host();
         Assert.True(first.GetRequiredService<DurableRuntime>().SupportsDistributedWork);
         Assert.IsType<BlobWorkJournalStore>(first.GetRequiredService<IWorkJournalStore>());
@@ -130,7 +135,11 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         var startedOperations = transactions.Snapshot();
         var id = await runner.StartAsync(pipeline, JsonNodeValueFactory.Instance.Parse(JsonSerializer.Serialize(Enumerable.Range(0, itemCount))), "input");
         var states = first.GetRequiredService<IStateStore>();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(25));
+        // This is a correctness/capacity measurement on a shared CI runner, not
+        // an Azure throughput SLA. Preserve the measured timings and failed
+        // 25-minute runs; allow the complete batch and retention to finish.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(60));
+        var lastDeliveryCount = 0; var lastProgressAt = watch.Elapsed;
         var duplicates = new ConcurrentBag<string>();
         // Independent hosts and duplicate hints operate against the same real
         // storage leases; no in-process lock coordinates them.
@@ -164,6 +173,9 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
             await second.GetRequiredService<DurableRuntime>().Runner().RecoverAsync(timeout.Token);
             var observed = (await states.GetExecutionAsync(id))!;
             if (observed.Status == ExecutionStatus.Completed) break;
+            if (calls.Count != lastDeliveryCount) { lastDeliveryCount = calls.Count; lastProgressAt = watch.Elapsed; }
+            Assert.True(calls.Count == itemCount || watch.Elapsed - lastProgressAt < TimeSpan.FromMinutes(10),
+                $"No new delivery for ten minutes at {calls.Count}/{itemCount}; the longer measurement budget must not hide a stalled runner.");
             Assert.True(observed.Status is ExecutionStatus.Running or ExecutionStatus.Retrying,
                 $"Execution stopped after {calls.Count}/{itemCount} calls: {observed.Status}; {string.Join("; ", observed.Errors)}");
         }
@@ -199,8 +211,9 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         await using (var claim = await recoverable.TryClaimAsync(id))
         { state.ExpiresAt = DateTime.UtcNow.AddMinutes(-1); await claim!.SaveAsync(state); }
         for (var i = 0; i < 2000 && await states.GetExecutionAsync(id) is not null; i++)
-            await second.GetRequiredService<DurableRuntime>().Runner().PruneAsync(timeout.Token);
+            await second.GetRequiredService<DurableRuntime>().Runner().PruneAsync(timeout.Token, maximumWorkPages: 256);
         Assert.Null(await states.GetExecutionAsync(id));
+        await retention.SweepAsync(timeout.Token);
         await foreach (var blob in blobs.GetBlobContainerClient("states").GetBlobsAsync(prefix: "elwood/work-journal/" + id + "/"))
             Assert.Fail("An expired execution left journal blob " + blob.Name);
         await foreach (var blob in blobs.GetBlobContainerClient("documents").GetBlobsAsync(prefix: "elwood/exec/" + id + "/"))
@@ -211,6 +224,7 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         var ledger = first.GetRequiredService<BlobRetentionLedger>();
         var remaining = (await ledger.ReadAsync()).Entries.Values.Where(e => e.ExecutionId == id).ToArray();
         Assert.DoesNotContain(remaining, e => e.Kind is "document" or "journal" && e.ConfirmedBeforeCleanup);
+        Assert.DoesNotContain(remaining, e => e.Kind == "checkpoint");
         var closed = Assert.Single(remaining, e => e.Kind == "work");
         Assert.True(closed.AdmissionClosed); Assert.True(closed.CleanupRequested);
         Assert.Equal(stage.Deadline.AddDays(1), closed.ExpiresAt);
@@ -223,6 +237,56 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
                 parentAndPhysicalHistoryRemoved = true, closedReservationExpiresAt = closed.ExpiresAt,
                 reservedItemsUntilFenceExpires = itemCount,
                 remainingObligationsByKind = remaining.GroupBy(e => e.Kind).ToDictionary(g => g.Key, g => g.Count()) }));
+
+        if (itemCount == 8)
+        {
+            // Exercise the shipped consumer client through the production HTTPS
+            // dispatcher and hosted queue worker, not an in-process HTTP mock.
+            using var key = RSA.Create(2048);
+            var certificateRequest = new CertificateRequest("CN=Elwood installation test", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            var names = new SubjectAlternativeNameBuilder(); names.AddIpAddress(IPAddress.Loopback);
+            certificateRequest.CertificateExtensions.Add(names.Build());
+            certificateRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+            using var certificate = certificateRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddDays(1));
+            var publicCertificatePath = Path.Combine(Path.GetTempPath(), "elwood-installation-" + Guid.NewGuid().ToString("N") + ".pem");
+            await File.WriteAllTextAsync(publicCertificatePath, certificate.ExportCertificatePem());
+            try
+            {
+                var apiBuilder = WebApplication.CreateBuilder();
+                apiBuilder.WebHost.ConfigureKestrel(server => server.Listen(IPAddress.Loopback, 0, endpoint => endpoint.UseHttps(certificate)));
+                Configure(apiBuilder.Services);
+                apiBuilder.Services.AddHostedService<AzureExecutionWorker>();
+                apiBuilder.Services.AddHostedService<ExecutionRetentionWorker>();
+                await using var api = apiBuilder.Build();
+                api.Run(context => api.Services.GetRequiredService<RuntimeHttpDispatcher>().DispatchAsync(context));
+                await api.StartAsync(timeout.Token);
+                var origin = api.Services.GetRequiredService<Microsoft.AspNetCore.Hosting.Server.IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+                var root = new DirectoryInfo(AppContext.BaseDirectory);
+                while (root is not null && !File.Exists(Path.Combine(root.FullName, "scripts/verify-installation.mjs"))) root = root.Parent;
+                Assert.NotNull(root);
+                var start = new ProcessStartInfo("node") { WorkingDirectory = root.FullName, UseShellExecute = false,
+                    RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+                start.ArgumentList.Add("scripts/verify-installation.mjs"); start.ArgumentList.Add("--distributed");
+                start.Environment["ELWOOD_RUNTIME_URL"] = origin;
+                start.Environment["ELWOOD_MANAGEMENT_TOKEN"] = "synthetic-management-token";
+                // Trust only this fixture's public certificate; TLS verification stays enabled.
+                start.Environment["NODE_EXTRA_CA_CERTS"] = publicCertificatePath;
+                using var client = Process.Start(start)!;
+                var stdout = client.StandardOutput.ReadToEndAsync(); var stderr = client.StandardError.ReadToEndAsync();
+                try { await client.WaitForExitAsync(timeout.Token); }
+                finally { if (!client.HasExited) client.Kill(entireProcessTree: true); }
+                var report = await stdout; Assert.True(client.ExitCode == 0, await stderr);
+                using var result = JsonDocument.Parse(report);
+                Assert.Equal("passed", result.RootElement.GetProperty("result").GetString());
+                Assert.True(result.RootElement.GetProperty("distributed").GetBoolean());
+                Assert.Null(await deployments.GetActiveAsync(result.RootElement.GetProperty("pipelineId").GetString()!));
+                output.WriteLine("Shipped distributed installation client passed over verified local HTTPS: " + report);
+                if (Environment.GetEnvironmentVariable("ELWOOD_CAPACITY_REPORT_DIR") is { Length: > 0 } smokeReports)
+                    await File.WriteAllTextAsync(Path.Combine(smokeReports, "distributed-installation-client.json"), report);
+                await api.StopAsync(timeout.Token);
+            }
+            finally { File.Delete(publicCertificatePath); }
+        }
 
         // Missing initialized state must fail closed, including after restart.
         await maintenance.DisposeAsync();
