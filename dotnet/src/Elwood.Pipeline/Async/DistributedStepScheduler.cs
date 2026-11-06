@@ -53,12 +53,16 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
                 plan.Inputs.Count, plan.Concurrency, deadline, expiry), token);
             await claim.ValidateAsync(token);
             var prepared = await runner.PrepareAsync(state.ExecutionId, parsed, message.Type, message.StepName, ExecutionOperations.Json(idm), bindSlice: plan.Expanded);
-            var references = new List<string>();
-            foreach (var input in plan.Inputs)
-            {
-                token.ThrowIfCancellationRequested();
-                references.Add(await runner.CreateInputAsync(prepared, input));
-            }
+            var references = new string[plan.Inputs.Count];
+            // Bound storage concurrency while preserving manifest order. Large
+            // fan-outs must not spend one network round-trip per item serially
+            // before their recoverable admission intent can be saved.
+            await Parallel.ForEachAsync(Enumerable.Range(0, references.Length),
+                new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = token }, async (i, ct) =>
+                {
+                    await claim.ValidateAsync(ct);
+                    references[i] = await runner.CreateInputAsync(prepared, plan.Inputs[i]);
+                });
             var inputs = JsonSerializer.Serialize(references);
             var reference = await documents.StoreAsync($"exec/{state.ExecutionId}/work-manifest/{Guid.NewGuid():N}", inputs);
             step.Work = new()

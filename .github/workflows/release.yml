@@ -31,11 +31,13 @@ jobs:
           dotnet pack dotnet/src/Elwood.Json/Elwood.Json.csproj -c Release
           dotnet pack dotnet/src/Elwood.Pipeline/Elwood.Pipeline.csproj -c Release
           dotnet pack dotnet/src/Elwood.Pipeline.Azure/Elwood.Pipeline.Azure.csproj -c Release
+          dotnet pack dotnet/src/Elwood.Pipeline.Sql/Elwood.Pipeline.Sql.csproj -c Release
+          dotnet pack dotnet/src/Elwood.Pipeline.RabbitMq/Elwood.Pipeline.RabbitMq.csproj -c Release
+          dotnet pack dotnet/src/Elwood.Pipeline.Redis/Elwood.Pipeline.Redis.csproj -c Release
           dotnet pack dotnet/src/Elwood.Cli/Elwood.Cli.csproj -c Release
           dotnet pack dotnet/src/Elwood.Xlsx/Elwood.Xlsx.csproj -c Release
           dotnet pack dotnet/src/Elwood.Parquet/Elwood.Parquet.csproj -c Release
       - name: Publish Core first
-        if: ${{ env.NUGET_API_KEY != '' }}
         run: |
           dotnet nuget push dotnet/src/Elwood.Core/bin/Release/*.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
           VERSION=$(dotnet msbuild dotnet/src/Elwood.Core/Elwood.Core.csproj -getProperty:Version)
@@ -53,6 +55,9 @@ jobs:
           dotnet nuget push dotnet/src/Elwood.Json/bin/Release/*.nupkg            --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
           dotnet nuget push dotnet/src/Elwood.Pipeline/bin/Release/*.nupkg        --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
           dotnet nuget push dotnet/src/Elwood.Pipeline.Azure/bin/Release/*.nupkg  --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push dotnet/src/Elwood.Pipeline.Sql/bin/Release/*.nupkg    --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push dotnet/src/Elwood.Pipeline.RabbitMq/bin/Release/*.nupkg --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push dotnet/src/Elwood.Pipeline.Redis/bin/Release/*.nupkg  --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
           dotnet nuget push dotnet/src/Elwood.Cli/bin/Release/*.nupkg             --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
           dotnet nuget push dotnet/src/Elwood.Xlsx/bin/Release/*.nupkg            --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
           dotnet nuget push dotnet/src/Elwood.Parquet/bin/Release/*.nupkg         --api-key $NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
@@ -137,9 +142,30 @@ jobs:
           name: ${{ matrix.artifact }}
           path: dotnet/src/Elwood.Cli/bin/Release/net10.0/${{ matrix.rid }}/publish/${{ matrix.binary }}
 
+  runtime-bundles:
+    name: Runtime and consumer installation kit
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Package versioned runtime hosts and tracked installation resources
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: ./scripts/package-runtime.ps1 -Version $env:RELEASE_TAG.TrimStart('v') -OutputDirectory artifacts/runtime
+      - uses: actions/upload-artifact@v5
+        with:
+          name: elwood-runtime-bundles
+          path: |
+            artifacts/runtime/*.zip
+            artifacts/runtime/SHA256SUMS.txt
+
   github-release:
     name: Create GitHub Release
-    needs: [native-binaries, nuget, npm]
+    needs: [native-binaries, nuget, npm, runtime-bundles]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -156,12 +182,16 @@ jobs:
           cp artifacts/elwood-macos-x64/Elwood.Cli release/elwood-macos-x64
           cp artifacts/elwood-win-x64/Elwood.Cli.exe release/elwood-win-x64.exe
           chmod +x release/elwood-linux-x64 release/elwood-macos-x64
+          cp artifacts/elwood-runtime-bundles/* release/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: |
             release/elwood-linux-x64
             release/elwood-macos-x64
             release/elwood-win-x64.exe
+            release/*.zip
+            release/SHA256SUMS.txt

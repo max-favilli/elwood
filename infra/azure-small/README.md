@@ -31,6 +31,14 @@ The default `maximumInstanceCount` is 3, with no always-ready allocation. Azure 
 
 Keep the default three-instance ceiling for initial adoption. A disposable one-instance trial produced intermittent readiness timeouts; the hosted management/queue/replay smoke passed after restoring three. Lower ceilings require separate verification and are not certified by this install check. This observation does not establish the cause of the reduced-ceiling failures.
 
+## Distributed and shared-cache profiles
+
+The [Deldo/Eagle handoff](../../docs/pilot-handoff.md) describes the pilot candidate. `capacityProfile=distributed` selects 2 GiB workers and the 64-partition retention layout; set `enableDistributedWork=true` and `redisConnectionSecretUri` explicitly. `files-25m` keeps its 4 GiB/one-execution memory policy and can use the same Redis definition cache without enabling item fan-out. Native defaults remain unchanged when these options are omitted.
+
+The optional [Redis template](../azure-redis/main.bicep) takes an existing Key Vault and runtime principal ID, creates a separately billed Managed Redis instance and stores its TLS connection as a secret. Approve its regional cost before deployment. It uses `NoEviction`, finite Elwood key TTLs and authenticated public access; private networking requires consumer VNet/DNS configuration. This new template is compile-verified, not a claim of a live Managed Redis deployment. Both API/Functions registration and cold-cache/cleanup semantics are verified against Redis/Azurite in CI.
+
+After native deployment/bootstrap, require readiness 200 and run `node scripts/verify-installation.mjs --distributed` with the private runtime URL/token environment variables described in the handoff. Redis connection references remain individual settings in both runtime and RabbitMQ ingress, because App Service does not resolve a Key Vault reference nested inside JSON.
+
 ## Installation
 
 Use .NET 10 SDK and Azure CLI/Bicep. Obtain approval for the subscription, resource group, region and costs. West Europe was verified. If CLI authentication expires, the owner signs in; automation must not initiate an interactive login.

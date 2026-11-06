@@ -1,5 +1,17 @@
 # Changelog
 
+## Pipeline 0.8.0-rc.1 — pilot candidate (6 November 2026)
+
+Release preparation: versioned runtime ZIPs, consumer installation kit and optional SQL/RabbitMQ/Redis packages accompany this candidate. Core remains 0.7.26 and the TypeScript DSL version is unchanged; no DSL behavior changes are included.
+
+- Explicit distributed Azure/Redis host opt-in with durable manifests, fenced item permits, checkpoints, selected retry, acknowledged whole-execution replay and journal-backed inspection/counts.
+- Accounted internal journals/documents, 30-day configurable retention, bounded cleanup, capacity limits and fail-closed health admission. Ordinary whole-file flows retain their existing semantics.
+- Shared immutable definition cache, authoritative ETag route invalidation, cold-cache recovery and finite Redis expiry.
+- Standalone API Azure consumers, shared Functions configuration, optional Managed Redis Bicep/Key Vault wiring, install smoke and separate Deldo/Eagle consumer instructions.
+- SQL adapter pins the patched PKCS dependency (9.0.21) for the October 2026 Microsoft advisories.
+
+See [pilot handoff](pilot-handoff.md) for the candidate's evidence, finite limits and consumer-owned native-cloud/business acceptance. Package publication is not itself production certification.
+
 ## 2026-10-12 — Native installer review and .NET release (v0.7.26)
 
 - Correct retention bootstrap to pass Azure CLI's combined `--include dv` flag. Existing/missing ledgers still fail closed; bootstrap is only for an empty namespace.

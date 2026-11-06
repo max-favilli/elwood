@@ -1,11 +1,17 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <Version>0.8.0-rc.1</Version>
+    <PackageId>Elwood.Pipeline.Redis</PackageId>
+    <Authors>Massimiliano Favilli</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/max-favilli/elwood</RepositoryUrl>
+    <Description>Optional Elwood.Pipeline.Redis adapter for the Elwood integration runtime.</Description>
     <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
-    <IsPackable>false</IsPackable>
-    <Description>Experimental provider-neutral Redis work-item coordination. Not enabled in production hosts.</Description>
+    <IsPackable>true</IsPackable>
+    
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="StackExchange.Redis" Version="2.*" />

@@ -1,5 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <Version>0.8.0-rc.1</Version>
+    <PackageId>Elwood.Pipeline.Sql</PackageId>
+    <Authors>Massimiliano Favilli</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/max-favilli/elwood</RepositoryUrl>
+    <Description>Optional Elwood.Pipeline.Sql adapter for the Elwood integration runtime.</Description>
     <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><LangVersion>latest</LangVersion>
   </PropertyGroup>

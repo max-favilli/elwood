@@ -8,9 +8,9 @@
 
     <!-- NuGet package metadata -->
     <PackageId>Elwood.Pipeline.Azure</PackageId>
-    <Version>0.7.26</Version>
+    <Version>0.8.0-rc.1</Version>
     <Authors>Massimiliano Favilli</Authors>
-    <Description>Azure storage adapters for the Elwood pipeline runtime — Redis state store, Azure Blob document store, and Redis-backed pipeline registry. Optional adapter package for cloud deployments.</Description>
+    <Description>Durable Azure Blob, Table, Queue and Service Bus adapters, retention accounting and deployment storage for Elwood pipelines.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/max-favilli/elwood</PackageProjectUrl>
     <RepositoryUrl>https://github.com/max-favilli/elwood</RepositoryUrl>

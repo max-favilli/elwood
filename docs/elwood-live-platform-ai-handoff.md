@@ -2,6 +2,8 @@
 
 Prepared 6 October 2026 for a project that will adopt Elwood **after its integration platform is released**.
 
+For concrete pilot installation and current supported behavior, use the [versioned Deldo/Eagle handoff](pilot-handoff.md). This earlier document describes the vision; it does not supersede the release-specific limits or installation checks.
+
 **How to read this document:** this is the intended release contract and integration design guide, not a claim that the platform is already production-ready. The transformation language is already used in production; the surrounding integration platform is being completed through six milestones. Descriptions below use the target live behavior. Concrete HTTP examples follow the current schema; check them against the version actually released before deploying. Native cloud packages, SQL, external RabbitMQ and some authentication/interface details still require their release-specific documentation. Do not invent YAML fields for those capabilities.
 
 ## 1. What Elwood is
