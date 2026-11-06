@@ -239,7 +239,7 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
             public override void OnSendingRequest(HttpMessage message)
             {
                 Interlocked.Increment(ref owner._count);
-                var operation = message.Request.TryGetHeader("x-ms-lease-action", out var action)
+                var operation = message.Request.Headers.TryGetValue("x-ms-lease-action", out var action)
                     ? "lease-" + action : message.Request.Method.ToString();
                 owner._operations.AddOrUpdate(service + "/" + operation, 1, (_, value) => value + 1);
             }
