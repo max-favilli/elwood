@@ -197,7 +197,15 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
             Assert.Fail("An expired execution left journal blob " + blob.Name);
         await foreach (var blob in blobs.GetBlobContainerClient("documents").GetBlobsAsync(prefix: "elwood/exec/" + id + "/"))
             Assert.Fail("An expired execution left document " + blob.Name);
-        Assert.Equal(0, (await first.GetRequiredService<BlobRetentionLedger>().CapacityAsync()).ReservedWorkItems);
+        // Forced early parent expiry does not erase the admission fence before
+        // its original deadline. The independent sweep releases that bounded
+        // reservation afterward (clock-driven expiry is covered by WorkCapacityTests).
+        var ledger = first.GetRequiredService<BlobRetentionLedger>();
+        var closed = Assert.Single((await ledger.ReadAsync()).Entries.Values, e => e.Kind == "work" && e.ExecutionId == id);
+        Assert.True(closed.AdmissionClosed); Assert.True(closed.CleanupRequested);
+        Assert.Equal(stage.Deadline.AddDays(1), closed.ExpiresAt);
+        Assert.Equal(itemCount, (await ledger.CapacityAsync()).ReservedWorkItems);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => first.GetRequiredService<IWorkCapacity>().VerifyAsync(stage));
         Assert.All(await first.GetRequiredService<RedisWorkJournalProjection>().ReadPageAsync(stage, 0), Assert.Null);
 
         // Missing initialized state must fail closed, including after restart.

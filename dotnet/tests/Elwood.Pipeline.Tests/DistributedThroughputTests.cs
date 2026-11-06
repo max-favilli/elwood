@@ -3,6 +3,7 @@ using Elwood.Pipeline.Async;
 using Elwood.Pipeline.Connectors;
 using Elwood.Pipeline.Registry;
 using Elwood.Pipeline.State;
+using Elwood.Pipeline.Storage;
 
 namespace Elwood.Pipeline.Tests;
 
@@ -16,7 +17,12 @@ public sealed partial class DistributedSchedulingTests
         var (id, hints) = await PrepareExpanded(runner, Expanded(), 20);
         await runner.ExecuteStepAsync(hints[0]); _queue.Drain();
         var cursor = (await States.GetExecutionAsync(id))!.Sources["details"].Work!.ItemCursor;
-        for (var i = 0; i < 10; i++) await runner.ExecuteStepAsync(hints[0]);
+        // A duplicate cannot wait behind unrelated parent work merely to discover
+        // that its item already completed. It must not acquire another permit.
+        await using var parent = await ((IRecoverableStateStore)States).TryClaimAsync(id);
+        Assert.NotNull(parent);
+        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        for (var i = 0; i < 10; i++) await runner.ExecuteStepAsync(hints[0], budget.Token);
         Assert.Empty(_queue.Drain());
         Assert.Equal(cursor, (await States.GetExecutionAsync(id))!.Sources["details"].Work!.ItemCursor);
     }

@@ -20,7 +20,7 @@ namespace Elwood.Pipeline.Azure;
 /// state in one conditional Blob upload. Readers verify hints against that identity.
 /// Stale hints can be removed; a committed checkpoint cannot lose its only hint.
 /// </summary>
-public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifactMaintenance, IStorageFailureClassifier
+public sealed class AzureExecutionStateStore : IRecoverableStateStore, IExecutionGuardStore, IArtifactMaintenance, IStorageFailureClassifier
 {
     public bool IsTransient(Exception exception) => AzureTransportFault.IsTransient(exception);
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -62,6 +62,24 @@ public sealed class AzureExecutionStateStore : IRecoverableStateStore, IArtifact
 
     public Task<IExecutionClaim?> TryCreateClaimAsync(string executionId, CancellationToken cancellationToken = default)
         => ClaimAsync(executionId, true, cancellationToken);
+
+    public async Task<IExecutionGuard?> TryGuardAsync(string executionId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var lease = await BlobExecutionClaim.TryAcquireAsync(Blob(executionId), executionId, cancellationToken: cancellationToken);
+            return lease is null ? null : new ReadGuard(lease);
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404) { return null; }
+    }
+
+    private sealed class ReadGuard(BlobExecutionClaim lease) : IExecutionGuard
+    {
+        public string ExecutionId => lease.ExecutionId;
+        public CancellationToken OwnershipLost => lease.OwnershipLost;
+        public Task ValidateAsync(CancellationToken cancellationToken = default) => lease.ValidateAsync(cancellationToken);
+        public ValueTask DisposeAsync() => lease.DisposeAsync();
+    }
 
     private async Task<IExecutionClaim?> ClaimAsync(string executionId, bool create, CancellationToken cancellationToken)
     {

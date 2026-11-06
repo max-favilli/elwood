@@ -86,7 +86,16 @@ public sealed partial class DistributedSchedulingTests : IDisposable
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            await using var claim = await ((IRecoverableStateStore)States).TryClaimAsync(id);
+            // A duplicate notification can briefly validate the parent. The
+            // invariant is that blocked connector calls do not retain that claim.
+            IExecutionClaim? available = null;
+            using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (available is null && !budget.IsCancellationRequested)
+            {
+                available = await ((IRecoverableStateStore)States).TryClaimAsync(id);
+                if (available is null) await Task.Delay(10);
+            }
+            await using var claim = available;
             Assert.NotNull(claim); // Connectors are running, but the parent is free.
             var active = (await States.GetExecutionAsync(id))!;
             Assert.Empty(active.Sources["left"].Attempts); // Per-item checkpoint writes do not rewrite the parent.

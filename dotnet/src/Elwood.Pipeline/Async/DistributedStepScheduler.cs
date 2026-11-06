@@ -118,17 +118,24 @@ public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDoc
         var step = Step(state, message); var work = step?.Work;
         if (work is null || !work.Admitted || message.WorkGeneration != work.Stage.Generation || message.WorkOrdinal is not { } ordinal || ordinal < 0 || ordinal >= work.Stage.ItemCount ||
             step!.Status == ExecutionStatus.Completed) return false;
+        // Reject settled/busy notifications before contending on parent ownership.
+        // This read grants no permission: TryStartAsync rechecks eligibility under
+        // the durable permit and item claims before any connector can run.
+        var hintedItem = (await journal.ReadPageAsync(work.Stage, ordinal, 1, token)).Single();
+        if (hintedItem.Status is not ("Pending" or "Retrying") || hintedItem.NotBefore > journal.Time.GetUtcNow()) return false;
         // Guard every pre-call/checkpoint boundary. A stop that follows admission
         // may leave an already dispatched call uncertain; it never permits the
         // next call. Child ownership remains the durable journal's responsibility.
         return await runner.ExecuteAsync(work.Stage, ordinal, "worker-" + Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"), token,
             async ct =>
             {
-                IExecutionClaim? parent;
-                while ((parent = await states.TryClaimAsync(message.ExecutionId, ct)) is null)
+                IExecutionGuard? parent;
+                async Task<IExecutionGuard?> Guard() => states is IExecutionGuardStore guards
+                    ? await guards.TryGuardAsync(message.ExecutionId, ct) : await states.TryClaimAsync(message.ExecutionId, ct);
+                while ((parent = await Guard()) is null)
                 {
                     if (await states.GetExecutionAsync(message.ExecutionId) is null) throw new WorkJournalException("Parent execution was removed.");
-                    await Task.Delay(20, ct);
+                    await Task.Delay(Random.Shared.Next(75, 151), ct);
                 }
                 await using (parent)
                 {

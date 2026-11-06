@@ -7,11 +7,21 @@ namespace Elwood.Pipeline.Storage;
 /// identity, never a mutable lookup of whichever worker currently owns the execution.
 /// Documents referenced by state must also use immutable identities in cloud adapters.
 /// </summary>
-public interface IExecutionClaim : IAsyncDisposable
+public interface IExecutionGuard : IAsyncDisposable
 {
     string ExecutionId { get; }
     CancellationToken OwnershipLost { get; }
     Task ValidateAsync(CancellationToken cancellationToken = default);
+}
+
+/// <summary>An optional read-only claim using the same fence as parent writes, without admission/index mutations.</summary>
+public interface IExecutionGuardStore
+{
+    Task<IExecutionGuard?> TryGuardAsync(string executionId, CancellationToken cancellationToken = default);
+}
+
+public interface IExecutionClaim : IExecutionGuard
+{
     Task SaveAsync(ExecutionState state);
     Task DeleteAsync();
 }

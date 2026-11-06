@@ -78,6 +78,35 @@ public sealed class ThirdReviewTests
             return Task.FromResult(result);
         }
     }
+
+    [Fact]
+    public async Task ReadOnlyParentGuardsUseTheWriteFenceWithoutAdmissionOrIndexWrites()
+    {
+        using var service = new ReviewBlobService();
+        using var tableTransport = new TableWrites(); using var http = new HttpClient(tableTransport);
+        var table = new TableClient(new Uri("https://unit.test/test"), new TableClientOptions
+        { Transport = new HttpClientTransport(http), Retry = { MaxRetries = 0 } });
+        var ledger = new AzureBlobRetentionLedger(service.Container.GetBlobClient("ledger.json"));
+        await ledger.InitializeAsync();
+        var blob = service.Container.GetBlobClient("elwood/states/owned.json");
+        await blob.UploadAsync(BinaryData.FromString("{\"executionId\":\"owned\"}"));
+        var store = new AzureExecutionStateStore(service.Container, table, new InMemoryDocumentStore(), retention: ledger);
+        var writes = service.Writes;
+        Assert.Null(await store.TryGuardAsync("missing"));
+        for (var i = 0; i < 10; i++)
+        {
+            await using var guard = await store.TryGuardAsync("owned");
+            Assert.NotNull(guard); Assert.False(guard is IExecutionClaim);
+            await guard!.ValidateAsync();
+            Assert.Equal("owned", (await store.GetExecutionAsync("owned"))!.ExecutionId);
+            Assert.Null(await store.TryClaimAsync("owned")); // Exactly the writer's lease fence.
+        }
+        Assert.Equal(writes, service.Writes); Assert.Equal(0, tableTransport.Count);
+        Assert.Empty((await ledger.ReadAsync()).Entries);
+        await using var lost = await store.TryGuardAsync("owned");
+        service.LoseLease(blob);
+        await Assert.ThrowsAsync<ExecutionOwnershipLostException>(() => lost!.ValidateAsync());
+    }
     [Theory]
     [InlineData(429)]
     [InlineData(500)]
