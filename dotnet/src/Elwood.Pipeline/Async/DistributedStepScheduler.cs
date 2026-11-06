@@ -6,9 +6,9 @@ using Elwood.Pipeline.Storage;
 namespace Elwood.Pipeline.Async;
 
 /// <summary>
-/// Experimental runtime bridge: parent claims protect admission/publication only;
-/// the durable journal owns connector attempts. Hosts do not register this until
-/// item retention, accounting and operator endpoints are available.
+/// Explicit distributed runtime bridge: parent claims protect admission/publication;
+/// read guards protect parent validation and the journal owns connector attempts.
+/// Installed hosts register this with item retention, accounting and operator endpoints.
 /// </summary>
 public sealed class DistributedStepScheduler(IRecoverableStateStore states, IDocumentStore documents,
     IStepQueue queue, DurableWorkJournal journal, WorkItemStepExecutor runner)

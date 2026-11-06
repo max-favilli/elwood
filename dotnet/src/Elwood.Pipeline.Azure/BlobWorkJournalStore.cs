@@ -7,8 +7,8 @@ using Elwood.Pipeline.Storage;
 namespace Elwood.Pipeline.Azure;
 
 /// <summary>
-/// Experimental durable work journal, fenced by renewable service leases.
-/// Host registration awaits installed-profile retention/admission verification.
+/// Durable work journal, fenced by renewable service leases.
+/// The installed distributed profile supplies its retention/admission ledger.
 /// A separate namespace prevents accidental use of the legacy Redis state adapter.
 /// </summary>
 public sealed class BlobWorkJournalStore(BlobContainerClient container, string storageNamespace = "elwood",

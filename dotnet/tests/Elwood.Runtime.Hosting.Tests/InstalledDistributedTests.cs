@@ -48,12 +48,12 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         await using var redis = new RedisBuilder().WithImage("redis:7.4-alpine").Build();
         await Task.WhenAll(storage.StartAsync(), redis.StartAsync());
         var transactions = new RequestCounter();
-        var blobOptions = new BlobClientOptions(); blobOptions.AddPolicy(transactions, HttpPipelinePosition.PerRetry);
+        var blobOptions = new BlobClientOptions(); blobOptions.AddPolicy(transactions.Policy("blob"), HttpPipelinePosition.PerRetry);
         var blobs = new BlobServiceClient(storage.GetConnectionString(), blobOptions);
         foreach (var name in new[] { "states", "documents", "catalog", "outputs" }) await blobs.GetBlobContainerClient(name).CreateAsync();
-        var tableOptions = new TableClientOptions(); tableOptions.AddPolicy(transactions, HttpPipelinePosition.PerRetry);
+        var tableOptions = new TableClientOptions(); tableOptions.AddPolicy(transactions.Policy("table"), HttpPipelinePosition.PerRetry);
         var table = new TableClient(storage.GetConnectionString(), "RuntimeIndex", tableOptions); await table.CreateAsync();
-        var queueOptions = new QueueClientOptions { MessageEncoding = QueueMessageEncoding.Base64 }; queueOptions.AddPolicy(transactions, HttpPipelinePosition.PerRetry);
+        var queueOptions = new QueueClientOptions { MessageEncoding = QueueMessageEncoding.Base64 }; queueOptions.AddPolicy(transactions.Policy("queue"), HttpPipelinePosition.PerRetry);
         var queueClient = new QueueClient(storage.GetConnectionString(), "work", queueOptions);
         await queueClient.CreateAsync();
         using var cache = await ConnectionMultiplexer.ConnectAsync(redis.GetConnectionString() + ",allowAdmin=true");
@@ -127,6 +127,7 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         var runner = first.GetRequiredService<DurableRuntime>().Runner("orders");
         var watch = Stopwatch.StartNew();
         var startedRequests = transactions.Count;
+        var startedOperations = transactions.Snapshot();
         var id = await runner.StartAsync(pipeline, JsonNodeValueFactory.Instance.Parse(JsonSerializer.Serialize(Enumerable.Range(0, itemCount))), "input");
         var states = first.GetRequiredService<IStateStore>();
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(25));
@@ -178,8 +179,11 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         var capacity = await second.GetRequiredService<BlobRetentionLedger>().CapacityAsync();
         Assert.Equal(itemCount, capacity.ReservedWorkItems); Assert.Equal(itemCount, capacity.UsedWorkAttempts);
         var health = await retention.HealthAsync();
+        var redisMemory = (await cache.GetServer(cache.GetEndPoints().Single()).InfoAsync("memory"))
+            .SelectMany(group => group).Single(pair => pair.Key == "used_memory").Value;
         var measurement = new { environment = "GitHub/Linux Docker Azurite and Redis; not Azure performance or billing", itemCount,
             seconds = watch.Elapsed.TotalSeconds, sdkRequests = transactions.Count - startedRequests,
+            sdkOperations = transactions.Since(startedOperations), redisUsedBytes = long.Parse(redisMemory, System.Globalization.CultureInfo.InvariantCulture),
             health.RegisteredBytes, health.RegisteredObjects, capacity.UsedWorkAttempts, capacity.AvailableObjects,
             peakProcessBytes = Process.GetCurrentProcess().PeakWorkingSet64 };
         output.WriteLine(JsonSerializer.Serialize(measurement));
@@ -187,6 +191,7 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         { Directory.CreateDirectory(reports); await File.WriteAllTextAsync(Path.Combine(reports, $"installed-{itemCount}.json"), JsonSerializer.Serialize(measurement)); }
 
         // Force history expiry under the same fenced state API used by cleanup.
+        var cleanupStarted = watch.Elapsed.TotalSeconds; var cleanupRequests = transactions.Count;
         var recoverable = (IRecoverableStateStore)states;
         await using (var claim = await recoverable.TryClaimAsync(id))
         { state.ExpiresAt = DateTime.UtcNow.AddMinutes(-1); await claim!.SaveAsync(state); }
@@ -207,6 +212,11 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         Assert.Equal(itemCount, (await ledger.CapacityAsync()).ReservedWorkItems);
         await Assert.ThrowsAsync<InvalidOperationException>(() => first.GetRequiredService<IWorkCapacity>().VerifyAsync(stage));
         Assert.All(await first.GetRequiredService<RedisWorkJournalProjection>().ReadPageAsync(stage, 0), Assert.Null);
+        if (Environment.GetEnvironmentVariable("ELWOOD_CAPACITY_REPORT_DIR") is { Length: > 0 } cleanupReports)
+            await File.WriteAllTextAsync(Path.Combine(cleanupReports, $"cleanup-{itemCount}.json"), JsonSerializer.Serialize(new
+            { itemCount, seconds = watch.Elapsed.TotalSeconds - cleanupStarted, sdkRequests = transactions.Count - cleanupRequests,
+                parentAndPhysicalHistoryRemoved = true, closedReservationExpiresAt = closed.ExpiresAt,
+                reservedItemsUntilFenceExpires = itemCount }));
 
         // Missing initialized state must fail closed, including after restart.
         await maintenance.DisposeAsync();
@@ -216,8 +226,25 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
         await Assert.ThrowsAsync<InvalidOperationException>(() => restarted.GetRequiredService<RetentionAdmissionGuard>().CheckAsync(default));
     }
 
-    private sealed class RequestCounter : HttpPipelineSynchronousPolicy
-    { private long _count; public long Count => Interlocked.Read(ref _count); public override void OnSendingRequest(HttpMessage message) => Interlocked.Increment(ref _count); }
+    private sealed class RequestCounter
+    {
+        private long _count; public long Count => Interlocked.Read(ref _count);
+        private readonly ConcurrentDictionary<string, long> _operations = new();
+        public Dictionary<string, long> Snapshot() => new(_operations);
+        public Dictionary<string, long> Since(Dictionary<string, long> before) => _operations.ToDictionary(
+            pair => pair.Key, pair => pair.Value - before.GetValueOrDefault(pair.Key));
+        public HttpPipelineSynchronousPolicy Policy(string service) => new CounterPolicy(this, service);
+        private sealed class CounterPolicy(RequestCounter owner, string service) : HttpPipelineSynchronousPolicy
+        {
+            public override void OnSendingRequest(HttpMessage message)
+            {
+                Interlocked.Increment(ref owner._count);
+                var operation = message.Request.TryGetHeader("x-ms-lease-action", out var action)
+                    ? "lease-" + action : message.Request.Method.ToString();
+                owner._operations.AddOrUpdate(service + "/" + operation, 1, (_, value) => value + 1);
+            }
+        }
+    }
 
     private sealed class Maintenance : IAsyncDisposable
     {

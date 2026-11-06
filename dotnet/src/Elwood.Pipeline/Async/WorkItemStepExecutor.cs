@@ -15,9 +15,9 @@ public sealed record PreparedWorkStep(string ExecutionId, string StageId, string
 public sealed record WorkStepOutcome(string DocumentReference, string DocumentSha256, SourceStepState? Source, OutputStepState? Output);
 
 /// <summary>
-/// Experimental item runner using the ordinary connector/evaluation operations.
-/// DistributedStepScheduler supplies parent scheduling/guards. Hosts still need item
-/// retention and operator endpoints before activation. No API/Functions route registers it.
+/// Item runner using the ordinary connector/evaluation operations.
+/// DistributedStepScheduler supplies parent scheduling/guards. The explicit installed
+/// profile supplies scoped connectors, durable accounting, retention and operator endpoints.
 /// </summary>
 public sealed class WorkItemStepExecutor(
     DurableWorkJournal journal, IDocumentStore documents,

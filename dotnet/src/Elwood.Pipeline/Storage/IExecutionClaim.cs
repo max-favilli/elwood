@@ -3,9 +3,8 @@ using Elwood.Pipeline.State;
 namespace Elwood.Pipeline.Storage;
 
 /// <summary>
-/// Ownership of one execution. Save/delete must use this claim's original fencing
-/// identity, never a mutable lookup of whichever worker currently owns the execution.
-/// Documents referenced by state must also use immutable identities in cloud adapters.
+/// Exclusive parent ownership for read validation. A renewable guard fences and
+/// cancels its holder on ownership loss; it grants no state mutation methods.
 /// </summary>
 public interface IExecutionGuard : IAsyncDisposable
 {
@@ -20,6 +19,7 @@ public interface IExecutionGuardStore
     Task<IExecutionGuard?> TryGuardAsync(string executionId, CancellationToken cancellationToken = default);
 }
 
+/// <summary>Save/delete use this claim's original fencing identity; cloud documents remain immutable.</summary>
 public interface IExecutionClaim : IExecutionGuard
 {
     Task SaveAsync(ExecutionState state);
