@@ -152,7 +152,8 @@ public sealed class InstalledDistributedTests(ITestOutputHelper output)
             {
                 Directory.CreateDirectory(progressDirectory);
                 await File.WriteAllTextAsync(Path.Combine(progressDirectory, $"progress-{itemCount}.json"), JsonSerializer.Serialize(new
-                { round, completedCalls = calls.Count, itemCount, seconds = watch.Elapsed.TotalSeconds, sdkRequests = transactions.Count - startedRequests }));
+                { round, completedCalls = calls.Count, itemCount, seconds = watch.Elapsed.TotalSeconds, sdkRequests = transactions.Count - startedRequests,
+                    sdkOperations = transactions.Since(startedOperations) }));
             }
             await Task.WhenAll(Enumerable.Range(0, 8).Select(i => Consume(i % 2 == 0 ? first : second)));
             if (!lost && calls.Count > 0)

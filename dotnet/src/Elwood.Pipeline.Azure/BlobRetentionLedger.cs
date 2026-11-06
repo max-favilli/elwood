@@ -271,16 +271,32 @@ public sealed class AzureBlobRetentionLedger(BlobClient blob, TimeProvider? time
     Func<CancellationToken, Task>? verifyLayout = null, int maxWorkItems = 100000, long maxWorkAttempts = 1000000)
     : BlobRetentionLedger(timeProvider, maxObjects, maxBytes, maxWritesPerHour, maxBytesPerHour, maxWorkItems, maxWorkAttempts)
 {
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private sealed record VerifiedSnapshot(BlobRetentionSnapshot State, ETag ETag, byte[] Bytes);
+    private VerifiedSnapshot? _cached;
+
+    // Entries have mutable housekeeping fields. Never expose the cached objects
+    // to readers or a mutation that may fail its conditional write.
+    private static BlobRetentionSnapshot Copy(BlobRetentionSnapshot value) => new()
+    {
+        FormatVersion = value.FormatVersion, LastSweepAt = value.LastSweepAt,
+        WindowStartedAt = value.WindowStartedAt, WindowWrites = value.WindowWrites, WindowBytes = value.WindowBytes,
+        Entries = value.Entries.ToDictionary(p => p.Key, p => p.Value with { })
+    };
     /// <summary>Explicit operator/test bootstrap only. Never called by admission or recovery.</summary>
     public Task InitializeAsync(CancellationToken token = default) => blob.UploadAsync(BinaryData.FromBytes(Encode(new())),
         new BlobUploadOptions { Conditions = new() { IfNoneMatch = ETag.All }, HttpHeaders = new() { ContentType = "application/json" } }, token);
 
-    private async Task<(BlobRetentionSnapshot State, ETag? ETag)> Read(CancellationToken token)
+    // Called under _gate. Every read still contacts authoritative storage. A
+    // missing, corrupt or inaccessible ledger is never served from this cache.
+    private async Task<VerifiedSnapshot> Read(CancellationToken token)
     {
         if (verifyLayout is not null) await verifyLayout(token);
         try
         {
-            var response = await blob.DownloadStreamingAsync(cancellationToken: token);
+            var response = await blob.DownloadStreamingAsync(new BlobDownloadOptions
+                { Conditions = _cached is null ? null : new() { IfNoneMatch = _cached.ETag } }, token);
+            if (response.GetRawResponse().Status == 304 && _cached is not null) return _cached;
             await using var stream = response.Value.Content;
             if (response.Value.Details.ContentLength > MaximumLedgerBytes) throw new InvalidOperationException("Retention ledger size limit exceeded.");
             using var memory = new MemoryStream(); var buffer = new byte[81920]; int count;
@@ -289,33 +305,64 @@ public sealed class AzureBlobRetentionLedger(BlobClient blob, TimeProvider? time
                 if (memory.Length + count > MaximumLedgerBytes) throw new InvalidOperationException("Retention ledger size limit exceeded.");
                 memory.Write(buffer, 0, count);
             }
-            return (Decode(memory.ToArray()), response.Value.Details.ETag);
+            var bytes = memory.ToArray();
+            return _cached = new(Decode(bytes), response.Value.Details.ETag, bytes);
         }
+        catch (RequestFailedException ex) when (ex.Status == 304 && _cached is not null) { return _cached; }
         catch (RequestFailedException ex) when (ex.Status == 404)
         { throw new InvalidOperationException("Retention ledger is missing. Initialize a new installation explicitly, or restore the ledger; admission is blocked.", ex); }
     }
-    public override async Task<BlobRetentionSnapshot> ReadAsync(CancellationToken token = default) => (await Read(token)).State;
+    public override async Task<BlobRetentionSnapshot> ReadAsync(CancellationToken token = default)
+    {
+        await _gate.WaitAsync(token);
+        try { return Copy((await Read(token)).State); }
+        finally { _gate.Release(); }
+    }
+    public override async Task<BlobRetentionEntry?> FindEntryAsync(string id, CancellationToken token = default)
+    {
+        await _gate.WaitAsync(token);
+        try { return (await Read(token)).State.Entries.GetValueOrDefault(id) is { } entry ? entry with { } : null; }
+        finally { _gate.Release(); }
+    }
+    public override async Task<BlobRetentionEntry?> FindWorkAsync(string executionId, string? stageId, CancellationToken token = default)
+    {
+        await _gate.WaitAsync(token);
+        try
+        {
+            var entries = (await Read(token)).State.Entries;
+            var entry = stageId is null ? entries.Values.FirstOrDefault(e => e.Kind == "work" && e.ExecutionId == executionId)
+                : entries.GetValueOrDefault(BlobWorkCapacity.Id(executionId, stageId));
+            return entry is null ? null : entry with { };
+        }
+        finally { _gate.Release(); }
+    }
     protected override async Task ChangeAsync(Action<BlobRetentionSnapshot> change, CancellationToken token)
     {
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token); budget.CancelAfter(TimeSpan.FromSeconds(30));
-        for (var attempt = 0; attempt < 12; attempt++)
+        await _gate.WaitAsync(budget.Token);
+        try
         {
-            var (state, etag) = await Read(budget.Token);
-            var before = Encode(state); change(state); var after = Encode(state);
-            if (before.AsSpan().SequenceEqual(after)) return;
-            try
+            for (var attempt = 0; attempt < 12; attempt++)
             {
-                await blob.UploadAsync(BinaryData.FromBytes(after), new BlobUploadOptions
+                var before = await Read(budget.Token);
+                var state = Copy(before.State); change(state); var after = Encode(state);
+                if (before.Bytes.AsSpan().SequenceEqual(after)) return;
+                try
                 {
-                    Conditions = etag is null ? new() { IfNoneMatch = ETag.All } : new() { IfMatch = etag.Value },
-                    HttpHeaders = new() { ContentType = "application/json" }
-                }, budget.Token);
-                return;
+                    var written = await blob.UploadAsync(BinaryData.FromBytes(after), new BlobUploadOptions
+                    {
+                        Conditions = new() { IfMatch = before.ETag },
+                        HttpHeaders = new() { ContentType = "application/json" }
+                    }, budget.Token);
+                    _cached = new(Copy(state), written.Value.ETag, after);
+                    return;
+                }
+                catch (RequestFailedException ex) when (ex.Status == 412 || ex.Status == 409 && ex.ErrorCode == "BlobAlreadyExists") { }
+                await Task.Delay(TimeSpan.FromMilliseconds(20 * (attempt + 1)), budget.Token);
             }
-            catch (RequestFailedException ex) when (ex.Status == 412 || ex.Status == 409 && ex.ErrorCode == "BlobAlreadyExists") { }
-            await Task.Delay(TimeSpan.FromMilliseconds(20 * (attempt + 1)), budget.Token);
+            throw new InvalidOperationException("Retention ledger contention; retry admission later.");
         }
-        throw new InvalidOperationException("Retention ledger contention; retry admission later.");
+        finally { _gate.Release(); }
     }
 }
 
