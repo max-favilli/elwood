@@ -165,6 +165,29 @@ public sealed class WorkCapacityTests
     }
 
     [Fact]
+    public async Task Failed_full_checkpoint_page_does_not_starve_a_later_output_page()
+    {
+        using var service = new ReviewBlobService(); var clock = new Clock(); var ledger = new Ledger(clock) { FailBatchRemoval = true };
+        for (var i = 0; i < 256; i++)
+            await ledger.RegisterAsync(new() { Id = $"checkpoint-{i:D3}", Kind = "checkpoint", ExecutionId = "gone",
+                BlobUri = service.Container.GetBlobClient("elwood/gone").Uri.ToString(), RegisteredAt = clock.Now,
+                ExpiresAt = clock.Now.AddHours(1), Bytes = 10, ETag = "leased" });
+        await ledger.RegisterAsync(new() { Id = "output", BlobUri = service.Container.GetBlobClient("elwood/output").Uri.ToString(),
+            RegisteredAt = clock.Now, ExpiresAt = clock.Now.AddHours(1), Bytes = 10, ETag = "confirmed" });
+        clock.Now += TimeSpan.FromHours(2);
+        var sweep = new BlobOutputRetention(ledger, uri => service.Container.GetBlobClient(new BlobUriBuilder(uri).BlobName), clock);
+        Assert.Equal(0, await sweep.SweepAsync());
+        Assert.NotNull(await ledger.FindEntryAsync("output"));
+        Assert.Equal(1, await sweep.SweepAsync());
+        Assert.Null(await ledger.FindEntryAsync("output"));
+        Assert.Equal(256, (await ledger.ReadAsync()).Entries.Count);
+        Assert.False((await sweep.HealthAsync()).Healthy);
+        ledger.FailBatchRemoval = false;
+        Assert.Equal(256, await sweep.SweepAsync());
+        Assert.True((await sweep.HealthAsync()).Healthy);
+    }
+
+    [Fact]
     public async Task Unconfirmed_late_write_grace_stays_charged_without_falsely_reporting_cleanup_overdue()
     {
         using var service = new ReviewBlobService(); var clock = new Clock(); var ledger = new Ledger(clock, objects: 2);
