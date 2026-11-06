@@ -47,7 +47,7 @@ public sealed class SqlIntegrationTests
             Assert.Contains("DROP TABLE", rows[0]!["tag"]!.GetValue<string>());
             var timeout = await Assert.ThrowsAsync<ConnectorException>(() => connector.DeliverAsync("sql", new SqlDestinationConfig
                 { ConnectionString = connection, StoredProcedure = "dbo.slow", CommandTimeoutSeconds = 1 }, input, "json"));
-            Assert.True(timeout.OutcomeUncertain); Assert.True(timeout.Retryable);
+            Assert.True(timeout.OutcomeUncertain, timeout.ToString()); Assert.True(timeout.Retryable, timeout.ToString());
             var missing = await Assert.ThrowsAsync<ConnectorException>(() => connector.DeliverAsync("sql", new SqlDestinationConfig
                 { ConnectionString = connection, StoredProcedure = "dbo.missing" }, input, "json"));
             Assert.True(missing.OutcomeUncertain); Assert.False(missing.Retryable);

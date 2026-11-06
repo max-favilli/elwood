@@ -43,6 +43,7 @@ public sealed class SqlConnector(Func<string, DbConnection>? connectionFactory =
         var call = HttpCallCapture.Details;
         var timer = Stopwatch.StartNew();
         var sent = false;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (call is not null)
         {
             call.Connector = "sql"; call.Operation = "storedProcedure"; call.StartedAt = DateTimeOffset.UtcNow; call.TimeoutMs = timeout * 1000;
@@ -56,7 +57,6 @@ public sealed class SqlConnector(Func<string, DbConnection>? connectionFactory =
             command.CommandType = CommandType.StoredProcedure; command.CommandText = procedure; command.CommandTimeout = timeout;
             if (command is SqlCommand sqlCommand) sqlCommand.RetryLogicProvider = SqlConfigurableRetryFactory.CreateNoneRetryProvider();
             foreach (var (name, definition) in parameters) command.Parameters.Add(Parameter(command, name, definition));
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadline.CancelAfter(TimeSpan.FromSeconds(timeout));
             await connection.OpenAsync(deadline.Token);
             sent = true;
@@ -88,16 +88,22 @@ public sealed class SqlConnector(Func<string, DbConnection>? connectionFactory =
             return (rows, metadata);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        // SqlClient can surface cancellation as SQL error 0 rather than an OCE.
+        // Preserve the caller's cancellation independently of that provider shape.
+        catch (Exception ex) when (cancellationToken.IsCancellationRequested)
+        { throw new OperationCanceledException("SQL request was canceled.", ex, cancellationToken); }
         catch (ConnectorException ex) { if (call is not null) call.Error = ex.Message; throw; }
         catch (Exception ex)
         {
             var number = (ex as SqlException)?.Number;
-            var transient = ex is OperationCanceledException or IOException || number is -2 or 20 or 64 or 233 or 10053 or 10054 or 10060 or 1205 or 40197 or 40501 or 40613 or 49918 or 49919 or 49920;
+            var expired = deadline.IsCancellationRequested;
+            var transient = expired || ex is OperationCanceledException or IOException || number is -2 or 20 or 64 or 233 or 10053 or 10054 or 10060 or 1205 or 40197 or 40501 or 40613 or 49918 or 49919 or 49920;
             // Procedures can commit one statement before a later statement fails (even a deadlock
             // or missing nested procedure). Without a transaction contract, no provider error
             // proves that the whole procedure was rolled back.
             var uncertain = sent && mayWrite;
-            var message = number is not null ? $"SQL error {number}: {ex.Message}" : $"SQL {ex.GetType().Name}: command could not complete.";
+            var message = expired ? "SQL execution budget elapsed; command could not complete." :
+                number is not null ? $"SQL error {number}: {ex.Message}" : $"SQL {ex.GetType().Name}: command could not complete.";
             // Provider errors sometimes repeat credentials embedded in connection arguments.
             try
             {
@@ -107,7 +113,7 @@ public sealed class SqlConnector(Func<string, DbConnection>? connectionFactory =
             }
             catch (ArgumentException) { message = "Invalid SQL connection configuration."; }
             if (call is not null) call.Error = message;
-            throw new ConnectorException(message, number?.ToString() ?? "sql.transport", transient, uncertain);
+            throw new ConnectorException(message, expired ? "sql.timeout" : number?.ToString() ?? "sql.transport", transient, uncertain);
         }
         finally { if (call is not null) call.DurationMs = timer.Elapsed.TotalMilliseconds; }
     }
