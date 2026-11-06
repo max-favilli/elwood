@@ -11,12 +11,22 @@ namespace Elwood.Pipeline.Async;
 /// item until recovery can claim that item, even if Redis has lost every key.
 /// </summary>
 public sealed partial class DurableWorkJournal(IWorkJournalStore store, IDocumentStore documents, TimeProvider? timeProvider = null,
-    IWorkCapacity? capacity = null)
+    IWorkCapacity? capacity = null, IWorkJournalProjection? projection = null)
 {
     internal IWorkCapacity? Capacity => capacity;
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     internal readonly TimeProvider Time = timeProvider ?? TimeProvider.System;
     internal IWorkJournalStore Store => store;
+    private long _projectionRetryAt;
+    // Cache outages cannot revoke a durable checkpoint or authorize another call.
+    // Recovery republishes the current journal state in its existing bounded scan.
+    private async Task ProjectAsync(WorkStage stage, WorkJournalItem item, CancellationToken token)
+    {
+        if (projection is null || Time.GetUtcNow().UtcTicks < Interlocked.Read(ref _projectionRetryAt)) return;
+        try { await projection.PublishAsync(stage, item, token); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch { Interlocked.Exchange(ref _projectionRetryAt, Time.GetUtcNow().AddSeconds(30).UtcTicks); }
+    }
     private const int PageSize = 128;
     private sealed record Input(string Reference, string Sha256);
     internal sealed record Header(WorkStage Stage, string[] Pages, bool Ready, string? AggregationToken = null,
@@ -252,6 +262,7 @@ public sealed partial class DurableWorkJournal(IWorkJournalStore store, IDocumen
             if (page != i / PageSize) { page = i / PageSize; inputs = await Inputs(stage, header, page, token); }
             var item = Decode<WorkJournalItem>(await store.ReadAsync(ItemKey(stage, i), token));
             ValidateItem(stage, item, inputs![i % PageSize], i); result.Add(item);
+            await ProjectAsync(stage, item, token);
         }
         return result;
     }
@@ -487,6 +498,7 @@ public sealed partial class DurableWorkJournal(IWorkJournalStore store, IDocumen
             // write, poison this session so callers cannot continue external work.
             try { await ValidateAsync(token); await _claim.SaveAsync(Encode(item), token); State = item; }
             catch { _lifetime.Cancel(); throw; }
+            await _journal.ProjectAsync(Stage, item, token);
         }
         public async ValueTask DisposeAsync()
         {

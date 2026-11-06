@@ -174,3 +174,13 @@ dotnet test dotnet/tests/Elwood.Pipeline.Redis.Tests --filter 'Category=Integrat
 ```
 
 The server is a separate process: use separate terminals for server and tests, and stop it when finished. Garnet flags are documented in [its configuration reference](https://microsoft.github.io/garnet/docs/getting-started/configuration). No cloud resources were created for these checks.
+
+### Installed distributed profile — 6 November 2026
+
+The shared API/Functions registration now supports an explicit `Elwood:Distributed:Enabled=true` opt-in with `Elwood:Azure:CapacityProfile=distributed` (or `files-25m`) and a TLS `Elwood:Redis:ConnectionString`. The standalone API additionally selects `Elwood:Hosting:Provider=azure`. Both hosts assemble accounted Blob journals/documents, durable work allowances, scoped connectors/secrets, Redis projections, item inspection/recovery and bounded physical cleanup. Ordinary flows remain on the existing durable executor; explicit source `path` or output `fanOut` selects distributed work.
+
+All 64 ledgers plus the layout/health control blobs must be bootstrapped. Admission checks native storage policy and retention health before accepting writes, with at most 30 seconds of cached successful health. Cleanup remains independent of admission. `Elwood:Retention:Partition:*` exposes bounded object, byte, hourly-write, work-item and attempt limits. Every instance must use identical limits; partitions cannot borrow capacity. Redis projections are rebuilt during bounded journal scans, and a cache outage opens a 30-second publication circuit without undoing durable checkpoints. Redis is never allowed to grant connector permission.
+
+The API has Azure Storage Queue/Service Bus consumers and independent recovery; Functions retains native queue/timer bindings. Hint lock expiry permits redelivery, while durable claims prevent concurrent item calls. Deployment validation and external RabbitMQ ingress recognize the explicitly installed capability.
+
+Verification is in progress: local build and focused activation/projection regressions pass. The new CI-only installed-host regression uses real Redis and Azurite with two independent service providers, duplicate queue deliveries, cache loss, retained accounting and physical cleanup. Its emulator substitutions replace credentials/endpoints and the ARM lifecycle probe only; it does not certify Azure RBAC, native lifecycle policy, cloud scale or provider failover. Do not treat this package as a released consumer installer until the subsequent cache, capacity and packaging work passes.

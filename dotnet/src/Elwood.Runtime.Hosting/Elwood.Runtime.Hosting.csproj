@@ -11,5 +11,6 @@
     <ProjectReference Include="../Elwood.Pipeline.Sql/Elwood.Pipeline.Sql.csproj" />
     <ProjectReference Include="../Elwood.Pipeline.RabbitMq/Elwood.Pipeline.RabbitMq.csproj" />
     <ProjectReference Include="../Elwood.Pipeline.Azure/Elwood.Pipeline.Azure.csproj" />
+    <ProjectReference Include="../Elwood.Pipeline.Redis/Elwood.Pipeline.Redis.csproj" />
   </ItemGroup>
 </Project>

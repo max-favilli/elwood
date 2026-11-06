@@ -26,6 +26,30 @@ public sealed class DurableWorkJournalTests : IDisposable
     public void Dispose() { if (Directory.Exists(_directory)) Directory.Delete(_directory, true); }
 
     [Fact]
+    public async Task Installed_projection_outage_cannot_undo_a_checkpoint_and_reconciliation_rebuilds_cold_cache()
+    {
+        var stage = await Stage();
+        var cache = new FailingProjection();
+        var journal = new DurableWorkJournal(Store, _documents, _clock, projection: cache);
+        await using (var item = await journal.TryStartAsync(stage, 0, "worker", "request"))
+            await item!.CompleteAsync(await Document("result"));
+        Assert.Equal(1, cache.Calls);
+        Assert.Equal("Completed", Assert.Single(await journal.ReadPageAsync(stage, 0)).Status);
+        Assert.Equal(1, cache.Calls); // Circuit prevents a timeout for every scanned item.
+        cache.Fail = false; _clock.Advance(TimeSpan.FromSeconds(31));
+        await journal.ReadPageAsync(stage, 0);
+        Assert.Equal("Completed", cache.Last!.Status);
+        Assert.Null(await journal.TryStartAsync(stage, 0, "replacement", "duplicate"));
+    }
+
+    private sealed class FailingProjection : IWorkJournalProjection
+    {
+        public int Calls; public bool Fail = true; public WorkJournalItem? Last;
+        public Task PublishAsync(WorkStage stage, WorkJournalItem item, CancellationToken token = default)
+        { Calls++; if (Fail) throw new IOException("Cache unavailable"); Last = item; return Task.CompletedTask; }
+    }
+
+    [Fact]
     public async Task Admission_is_immutable_and_missing_initialized_item_is_not_recreated()
     {
         var stage = await Stage();

@@ -39,7 +39,7 @@ public sealed class FunctionsHttpTests
     }
 
     private const string Token = "synthetic-management-token";
-    private static Dictionary<string, string?> Settings() => new()
+    internal static Dictionary<string, string?> Settings() => new()
     {
         ["Elwood:VerificationOnly"] = "true",
         ["Elwood:Retention:Enforced"] = "true",
@@ -74,6 +74,9 @@ public sealed class FunctionsHttpTests
     [InlineData("Elwood:Azure:OutputContainer", "states")]
     [InlineData("Elwood:Retention:BlobTargets:0:AccountUrl", "https://unverified.blob.core.windows.net/")]
     [InlineData("Elwood:Azure:BlobServiceUri", "http://insecure.example.test/")]
+    [InlineData("Elwood:Azure:CapacityProfile", "unknown")]
+    [InlineData("Elwood:Azure:CapacityProfile", "distributed")]
+    [InlineData("Elwood:Distributed:Enabled", "true")]
     public void InvalidCloudConfigurationFailsBeforeServing(string key, string value)
     {
         var settings = Settings(); settings[key] = value;

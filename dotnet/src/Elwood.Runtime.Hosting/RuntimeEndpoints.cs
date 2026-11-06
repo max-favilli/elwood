@@ -24,6 +24,8 @@ public static class RuntimeEndpoints
         {
             if (configuration.GetValue<bool>("Elwood:VerificationOnly"))
                 return Results.Json(new { status = "verification-only", message = "Cloud release verification is incomplete; synthetic testing only." }, statusCode: 503);
+            if (context.RequestServices.GetService<StackExchange.Redis.IConnectionMultiplexer>() is { IsConnected: false })
+                return Results.Json(new { status = "unavailable", message = "Shared cache connection is unavailable. Durable recovery remains enabled." }, statusCode: 503);
             if (context.RequestServices.GetService<Elwood.Pipeline.Azure.AzureRetentionReadiness>() is { } readiness)
             {
                 try { await readiness.CheckAsync(context.RequestAborted); }
@@ -82,7 +84,7 @@ public static class RuntimeEndpoints
         routes.MapPost("/api/pipelines/{id}/deploy", async (string id, RevisionRequest body, IDeploymentStore store, HttpContext context) =>
         {
             var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
-            var errors = RuntimeErrors(new PipelineParser().ParseContent(draft.Content));
+            var errors = RuntimeErrors(new PipelineParser().ParseContent(draft.Content), distributed: SupportsDistributed(context));
             if (errors.Count > 0) return Results.BadRequest(new { errors });
             return Results.Ok(await store.DeployAsync(id, body.ExpectedRevisionId, ManagementSecurity.Identity(context).Name));
         }).WithMetadata(new ManagementPermission("deploy", true));
@@ -151,12 +153,12 @@ public static class RuntimeEndpoints
                 request.HttpContext.Response.Headers["X-Elwood-Warnings"] = JsonSerializer.Serialize(result.Diagnostics.Select(d => d.ToString()));
             return Results.Bytes(output.WrittenMemory, "application/json");
         }).WithMetadata(new ManagementPermission("test", true));
-        routes.MapPost("/api/pipelines/{id}/validate", async (string id, DraftRequest body, IDeploymentStore store) =>
+        routes.MapPost("/api/pipelines/{id}/validate", async (string id, DraftRequest body, IDeploymentStore store, HttpContext context) =>
         {
             var draft = await store.GetAsync(id) ?? throw new KeyNotFoundException("Pipeline not found.");
             var content = body.Content ?? draft.Content;
             SafePath.Content(content);
-            var errors = RuntimeErrors(new PipelineParser().ParseContent(content));
+            var errors = RuntimeErrors(new PipelineParser().ParseContent(content), distributed: SupportsDistributed(context));
             return Results.Ok(new { valid = errors.Count == 0, errors, revisionId = PipelineBundle.Hash(content) });
         }).WithMetadata(new ManagementPermission("write", true));
 
@@ -263,7 +265,7 @@ public static class RuntimeEndpoints
                 }
                 catch (FormatException) { return Results.Json(new { error = "Invalid trigger credentials." }, statusCode: 401); }
             }
-            var errors = RuntimeErrors(parsed);
+            var errors = RuntimeErrors(parsed, distributed: SupportsDistributed(context));
             if (errors.Count > 0) return Results.Json(new { errors }, statusCode: 500);
             if (source.EventGrid is { } grid)
             {
@@ -347,6 +349,7 @@ public static class RuntimeEndpoints
         documentStore: context.RequestServices.GetRequiredService<IDocumentStore>(),
         sourceConnectors: context.RequestServices.GetRequiredService<RuntimeConnectors>().Sources(id, isTest), destinationConnectors: context.RequestServices.GetRequiredService<RuntimeConnectors>().Destinations(id, isTest),
         logger: context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger<SyncExecutor>());
+    static bool SupportsDistributed(HttpContext context) => context.RequestServices.GetRequiredService<DurableRuntime>().SupportsDistributedWork;
     static List<string> RuntimeErrors(ParsedPipeline parsed, bool localTest = false, bool distributed = false)
     {
         var errors = DeploymentValidation.Errors(parsed, fanOut: localTest || distributed);

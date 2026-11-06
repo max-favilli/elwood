@@ -32,6 +32,7 @@ public sealed partial class AsyncExecutor
     private readonly ExecutionConcurrencyGate? _concurrency;
     private readonly DistributedStepScheduler? _distributed;
     private readonly WorkExecutionRetention? _workRetention;
+    private readonly bool _distributedFanOutOnly;
     private readonly LocalFanOutExecutor? _localFanOut;
     private DateTime Now => _time.GetUtcNow().UtcDateTime;
 
@@ -39,7 +40,7 @@ public sealed partial class AsyncExecutor
         ISecretProvider? secretProvider = null, IEnumerable<ISourceConnector>? sourceConnectors = null,
         IEnumerable<IDestinationConnector>? destinationConnectors = null, ElwoodEngine? engine = null,
         LocalTestSession? testSession = null, TimeProvider? timeProvider = null, ContentFingerprintStore? fingerprints = null, ExecutionConcurrencyGate? concurrency = null,
-        DistributedStepScheduler? distributedWork = null, WorkExecutionRetention? workRetention = null)
+        DistributedStepScheduler? distributedWork = null, WorkExecutionRetention? workRetention = null, bool distributedFanOutOnly = false)
     {
         _states = stateStore as IRecoverableStateStore ?? throw new ArgumentException("Queued execution requires a recoverable state store with cross-worker exclusion.");
         _documents = documentStore; _queue = stepQueue; _test = testSession; _time = timeProvider ?? TimeProvider.System;
@@ -47,6 +48,7 @@ public sealed partial class AsyncExecutor
         _concurrency = concurrency;
         _distributed = distributedWork;
         _workRetention = workRetention;
+        _distributedFanOutOnly = distributedFanOutOnly;
         if (testSession is not null) _localFanOut = new(documentStore, secretProvider, sourceConnectors, destinationConnectors, engine, testSession);
         _operations = new(documentStore, secretProvider, sourceConnectors, destinationConnectors, engine, testSession) { InspectContent = InspectContent };
     }
@@ -87,6 +89,7 @@ public sealed partial class AsyncExecutor
             PipelineName = pipeline.Config.Name ?? "unknown", Status = ExecutionStatus.Running, StartedAt = Now,
             Durable = durable && !isTest && _test is null, IsTest = isTest || _test is not null, TestMode = _test?.Mode,
             WorkProfile = _distributed is not null && durable && !isTest && _test is null && executionDeadlineAt is null && pipeline.Config.Mode == "async"
+                && (!_distributedFanOutOnly || reservedReplayId is not null || pipeline.Config.Sources.Any(s => s.Trigger == "pull" && s.Path is not null) || pipeline.Config.Outputs.Any(o => o.FanOut is not null))
                 ? DistributedStepScheduler.Profile : null,
             TriggerSourceName = triggerSourceName, ReplayOf = replayOf, ForceProcessing = forceProcessing, InputHash = Hash(input),
             ExecutionDeadlineAt = executionDeadlineAt,

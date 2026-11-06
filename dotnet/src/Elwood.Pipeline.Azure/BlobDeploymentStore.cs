@@ -19,6 +19,7 @@ public sealed class BlobDeploymentStore : IDeploymentStore, IDeploymentMaintenan
     private const int MaxRevisions = 128;
     private readonly BlobClient _blob;
     private readonly bool _rabbitMqIngressEnabled;
+    private readonly bool _distributedWorkEnabled;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly SemaphoreSlim _cacheGate = new(1, 1);
     private CachedCatalog? _cached;
@@ -26,10 +27,11 @@ public sealed class BlobDeploymentStore : IDeploymentStore, IDeploymentMaintenan
         Dictionary<string, (string PipelineId, string SourceName, PipelineBundle Bundle)> Routes, HashSet<string> Conflicts);
     private static T Copy<T>(T value) => JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value, JsonOptions), JsonOptions)!;
 
-    public BlobDeploymentStore(BlobContainerClient container, string storageNamespace = "elwood", bool rabbitMqIngressEnabled = false)
+    public BlobDeploymentStore(BlobContainerClient container, string storageNamespace = "elwood", bool rabbitMqIngressEnabled = false, bool distributedWorkEnabled = false)
     {
         _blob = container.GetBlobClient(SafePath.Id(storageNamespace) + "/catalog.json");
         _rabbitMqIngressEnabled = rabbitMqIngressEnabled;
+        _distributedWorkEnabled = distributedWorkEnabled;
     }
 
     public async Task<DeploymentDefinition?> GetAsync(string id)
@@ -78,7 +80,7 @@ public sealed class BlobDeploymentStore : IDeploymentStore, IDeploymentMaintenan
         {
             var entry = Find(catalog, id); CheckRevision(entry, expectedRevision);
             var parsed = new PipelineParser().ParseContent(entry.Draft);
-            var errors = DeploymentValidation.Errors(parsed);
+            var errors = DeploymentValidation.Errors(parsed, fanOut: _distributedWorkEnabled);
             foreach (var source in parsed.Config.Sources.Where(source => source.Trigger == "queue"))
                 if (!_rabbitMqIngressEnabled || source.Rabbitmq is null)
                     errors.Add($"Source '{source.Name}': this installation has no configured ingress for this queue trigger.");

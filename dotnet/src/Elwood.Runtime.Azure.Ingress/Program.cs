@@ -2,7 +2,6 @@ extern alias AzureIdentity;
 using Azure.Core;
 using Elwood.Pipeline.Azure;
 using Elwood.Runtime.Api;
-using Elwood.Runtime.Azure.Functions;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddAzureRuntimeConfiguration();

@@ -22,13 +22,13 @@ public sealed partial class DistributedSchedulingTests : IDisposable
     private readonly Clock _clock = new();
     private DurableWorkJournal Journal => new(Store, Documents, _clock);
     private AsyncExecutor Runner(ISourceConnector source, IWorkJournalStore? journalStore = null, IRecoverableStateStore? states = null, IEnumerable<IDestinationConnector>? destinations = null, Func<Elwood.Core.ElwoodEngine>? engineFactory = null,
-        IWorkCapacity? capacity = null)
+        IWorkCapacity? capacity = null, bool fanOutOnly = false)
     {
         states ??= States; var docs = Documents;
         var journal = new DurableWorkJournal(journalStore ?? Store, docs, _clock, capacity);
         var items = new WorkItemStepExecutor(journal, docs, sourceConnectors: [source], destinationConnectors: destinations, engineFactory: engineFactory);
         return new(states, docs, _queue, sourceConnectors: [source], destinationConnectors: destinations, timeProvider: _clock,
-            distributedWork: new(states, docs, _queue, journal, items));
+            distributedWork: new(states, docs, _queue, journal, items), distributedFanOutOnly: fanOutOnly);
     }
     private static ParsedPipeline Pipeline(bool two = true, string map = "{ left: $ }", string retry = "") =>
         new PipelineParser().ParseContent(new PipelineContent { Scripts = [], Yaml = $$"""

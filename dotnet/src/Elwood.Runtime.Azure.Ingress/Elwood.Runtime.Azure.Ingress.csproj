@@ -7,6 +7,5 @@
   <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.17.1" Aliases="AzureIdentity" />
     <ProjectReference Include="../Elwood.Runtime.Hosting/Elwood.Runtime.Hosting.csproj" />
-    <Compile Include="../Elwood.Runtime.Azure.Functions/AzureRuntimeServices.cs" Link="AzureRuntimeServices.cs" />
   </ItemGroup>
 </Project>

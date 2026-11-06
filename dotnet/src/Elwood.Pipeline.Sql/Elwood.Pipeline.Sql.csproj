@@ -5,6 +5,8 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.6" />
+    <!-- SqlClient's transitive minimum predates the October 2026 PKCS fixes. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="9.0.21" />
     <ProjectReference Include="../Elwood.Pipeline/Elwood.Pipeline.csproj" />
   </ItemGroup>
 </Project>

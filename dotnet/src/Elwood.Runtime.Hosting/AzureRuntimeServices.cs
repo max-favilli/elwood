@@ -11,7 +11,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace Elwood.Runtime.Azure.Functions;
+namespace Elwood.Runtime.Api;
 
 public static class AzureRuntimeServices
 {
@@ -68,8 +68,16 @@ public static class AzureRuntimeServices
         var workQueue = Required("ElwoodWorkQueue");
         var scope = SafePath.Id(configuration["Elwood:Azure:Namespace"] ?? "elwood");
         var capacityProfile = configuration["Elwood:Azure:CapacityProfile"] ?? "guarded";
-        if (capacityProfile is not ("guarded" or "files-25m")) throw new InvalidOperationException("Unknown Azure capacity profile.");
+        if (capacityProfile is not ("guarded" or "files-25m" or "distributed")) throw new InvalidOperationException("Unknown Azure capacity profile.");
         var largeFiles = capacityProfile == "files-25m";
+        var partitioned = capacityProfile != "guarded";
+        var limits = RetentionPartitionLimits.Read(configuration, partitioned);
+        services.AddSingleton(limits);
+        var distributed = configuration.GetValue<bool>("Elwood:Distributed:Enabled");
+        if (distributed && !partitioned)
+            throw new InvalidOperationException("Distributed execution requires the files-25m or distributed capacity profile and its initialized 64-partition ledger.");
+        if (capacityProfile == "distributed" && !distributed)
+            throw new InvalidOperationException("The distributed capacity profile requires Elwood:Distributed:Enabled=true.");
         if (largeFiles) services.AddSingleton(new ExecutionConcurrencyGate(1));
         services.AddSingleton(sp =>
         {
@@ -91,7 +99,7 @@ public static class AzureRuntimeServices
         services.AddSingleton<IStateStore>(sp => sp.GetRequiredService<AzureExecutionStateStore>());
         services.AddSingleton<IDeploymentStore>(sp => new BlobDeploymentStore(
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(catalogContainer), scope,
-            rabbitMqIngressEnabled: configuration.GetValue<bool>("Elwood:RabbitMqIngressEnabled")));
+            rabbitMqIngressEnabled: configuration.GetValue<bool>("Elwood:RabbitMqIngressEnabled"), distributedWorkEnabled: distributed));
         var queueProvider = configuration["Elwood:Azure:QueueProvider"] ?? "storage";
         if (queueProvider == "serviceBus")
         {
@@ -109,21 +117,30 @@ public static class AzureRuntimeServices
         {
             var container = sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(catalogContainer);
             var legacy = container.GetBlobClient(scope + "/output-retention.json");
-            var layout = new RetentionLayout(container.GetBlobClient(scope + "/retention-layout.txt"), legacy, largeFiles ? "partitions64-v1" : "single-v1");
-            BlobRetentionLedger ledger = largeFiles
+            var layout = new RetentionLayout(container.GetBlobClient(scope + "/retention-layout.txt"), legacy, partitioned ? "partitions64-v1" : "single-v1");
+            BlobRetentionLedger ledger = partitioned
                 ? new PartitionedBlobRetentionLedger(i => new AzureBlobRetentionLedger(container.GetBlobClient($"{scope}/retention/{i:D2}.json"),
-                    maxBytes: 16L * 1024 * 1024 * 1024, maxBytesPerHour: 1024L * 1024 * 1024),
+                    maxObjects: limits.Objects, maxBytes: limits.Bytes, maxWritesPerHour: limits.WritesPerHour,
+                    maxBytesPerHour: limits.BytesPerHour, maxWorkItems: limits.WorkItems, maxWorkAttempts: limits.WorkAttempts),
                     new AzureBlobRetentionLedger(container.GetBlobClient(scope + "/retention/health.json")), layout.VerifyAsync)
-                : new AzureBlobRetentionLedger(legacy, verifyLayout: layout.VerifyAsync);
-            ledger.VerifyAdmissionAsync = sp.GetRequiredService<AzureRetentionReadiness>().CheckAsync;
+                : new AzureBlobRetentionLedger(legacy, verifyLayout: layout.VerifyAsync, maxObjects: limits.Objects, maxBytes: limits.Bytes,
+                    maxWritesPerHour: limits.WritesPerHour, maxBytesPerHour: limits.BytesPerHour, maxWorkItems: limits.WorkItems, maxWorkAttempts: limits.WorkAttempts);
+            ledger.VerifyAdmissionAsync = token => sp.GetRequiredService<RetentionAdmissionGuard>().CheckAsync(token);
             return ledger;
         });
+        services.AddSingleton(sp => new RetentionAdmissionGuard(async token =>
+        {
+            await sp.GetRequiredService<AzureRetentionReadiness>().CheckAsync(token);
+            if (!(await sp.GetRequiredService<BlobOutputRetention>().HealthAsync(token)).Healthy)
+                throw new InvalidOperationException("Retention health is unverified, failed or overdue. Repair cleanup before accepting further work.");
+        }));
         services.AddSingleton(sp => RuntimeOutputRetention.Create(sp.GetRequiredService<BlobRetentionLedger>(), configuration,
             sp.GetRequiredService<ISecretProvider>(), sp.GetRequiredService<TokenCredential>(), uri =>
             {
                 var identity = new BlobUriBuilder(uri);
                 var allowed = identity.BlobContainerName == documentContainer && identity.BlobName.StartsWith(scope + "/exec/", StringComparison.Ordinal)
-                    || identity.BlobContainerName == stateContainer && identity.BlobName.StartsWith(scope + "/states/", StringComparison.Ordinal);
+                    || identity.BlobContainerName == stateContainer && (identity.BlobName.StartsWith(scope + "/states/", StringComparison.Ordinal)
+                        || distributed && identity.BlobName.StartsWith(scope + "/work-journal/", StringComparison.Ordinal));
                 return uri.Scheme == blobUri.Scheme && uri.Authority == blobUri.Authority && allowed
                     ? sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(identity.BlobContainerName).GetBlobClient(identity.BlobName) : null;
             }));
@@ -131,6 +148,7 @@ public static class AzureRuntimeServices
         services.AddSingleton<RuntimeConnectors>();
         services.AddSingleton<ContentFingerprintStore>(sp => new AzureContentFingerprintStore(
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(catalogContainer).GetBlobClient(scope + "/fingerprints.json")));
+        if (distributed) services.AddDistributedAzureRuntime(configuration, stateContainer, scope);
         services.AddSingleton<DurableRuntime>();
         services.AddSingleton(sp => new QueuedExecutionDispatcher(sp.GetRequiredService<IStateStore>(),
             sp.GetRequiredService<DurableRuntime>().Runner, sp.GetRequiredService<ILogger<QueuedExecutionDispatcher>>()));

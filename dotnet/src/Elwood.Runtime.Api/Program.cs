@@ -13,6 +13,7 @@ using Elwood.Pipeline.Storage;
 using Microsoft.Extensions.Logging;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddAzureRuntimeConfiguration();
 
 // Configuration
 var pipelinesDir = builder.Configuration["Elwood:PipelinesDir"]
@@ -24,6 +25,21 @@ var syncBudgetSeconds = builder.Configuration.GetValue("Elwood:Sync:ExecutionBud
 if (!double.IsFinite(syncBudgetSeconds) || syncBudgetSeconds <= 0 || syncBudgetSeconds > 300)
     throw new InvalidOperationException("Elwood:Sync:ExecutionBudgetSeconds must be positive and at most 300.");
 
+// Azure API hosts share exactly the same durable profile as Functions.
+if (builder.Configuration["Elwood:Hosting:Provider"] == "azure")
+{
+    builder.Services.AddAzureRuntimeCredentials();
+    builder.Services.AddAzureDurableRuntime(builder.Configuration);
+    builder.Services.AddHostedService<AzureExecutionWorker>();
+    builder.Services.AddHostedService<ExecutionRetentionWorker>();
+    builder.Services.AddHostedService<RabbitMqTriggerWorker>();
+}
+else
+{
+    if (builder.Configuration["Elwood:Hosting:Provider"] is not (null or "filesystem"))
+        throw new InvalidOperationException("Elwood:Hosting:Provider must be azure or filesystem.");
+    if (builder.Configuration.GetValue<bool>("Elwood:Distributed:Enabled"))
+        throw new InvalidOperationException("Distributed installations require Elwood:Hosting:Provider=azure; filesystem mode is for ordinary local development.");
 // Register services
 builder.Services.AddSingleton<IPipelineStore>(sp => new FileSystemPipelineStore(pipelinesDir, sp.GetRequiredService<ILogger<FileSystemPipelineStore>>()));
 builder.Services.AddSingleton<IStateStore>(sp => new FileSystemStateStore(stateDir, sp.GetRequiredService<ILogger<FileSystemStateStore>>()));
@@ -103,6 +119,7 @@ builder.Services.AddHostedService<RabbitMqTriggerWorker>();
 builder.Services.AddSingleton<IStepQueue>(sp => sp.GetRequiredService<RuntimeStepQueue>());
 builder.Services.AddSingleton<RuntimeHttpBoundary>();
 builder.Services.AddSingleton<RuntimeHttpDispatcher>();
+}
 var app = builder.Build();
 app.Run(context => app.Services.GetRequiredService<RuntimeHttpDispatcher>().DispatchAsync(context));
 app.Run();

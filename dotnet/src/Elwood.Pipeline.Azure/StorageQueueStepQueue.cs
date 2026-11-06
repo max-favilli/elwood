@@ -13,10 +13,13 @@ namespace Elwood.Pipeline.Azure;
 /// authoritative execution state, not by promising exactly-once message delivery.
 /// The Functions host must use Base64 message encoding for this queue.
 /// </summary>
-public sealed class StorageQueueStepQueue : IStepQueue
+public sealed class StorageQueueStepQueue : IStepQueue, IQueuedStepConsumer
 {
     private readonly QueueClient _queue;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    /// <summary>For embedded hosts with an already configured Base64 queue client.</summary>
+    public StorageQueueStepQueue(QueueClient queue) => _queue = queue;
 
     public StorageQueueStepQueue(Uri queueUri, TokenCredential credential)
     {
@@ -34,6 +37,19 @@ public sealed class StorageQueueStepQueue : IStepQueue
     {
         // Partial publication is safe: every hint corresponds to committed state.
         foreach (var message in messages) await EnqueueAsync(message);
+    }
+
+    public async Task<bool> ConsumeOneAsync(Func<string, CancellationToken, Task> dispatch, CancellationToken token)
+    {
+        var response = await _queue.ReceiveMessageAsync(TimeSpan.FromMinutes(5), token);
+        var message = response.Value;
+        if (message is null) return false;
+        // A lost/expired hint is recovered from the durable index. Limit poison
+        // redeliveries without retaining arbitrary message bodies elsewhere.
+        if (message.DequeueCount <= 5) await dispatch(message.Body.ToString(), token);
+        try { await _queue.DeleteMessageAsync(message.MessageId, message.PopReceipt, token); }
+        catch (global::Azure.RequestFailedException ex) when (ex.Status == 404 || ex.ErrorCode == "PopReceiptMismatch") { }
+        return true;
     }
 
     public static string Serialize(StepMessage message)

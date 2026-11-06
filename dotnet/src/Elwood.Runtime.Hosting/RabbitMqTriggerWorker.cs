@@ -33,7 +33,7 @@ public sealed class RabbitMqTriggerWorker(IDeploymentStore catalog, DurableRunti
                         seen.Add(revisionKey);
                         if (!parsedRevisions.TryGetValue(revisionKey, out var parsed))
                             parsedRevisions[revisionKey] = parsed = new PipelineParser().ParseContent(bundle.Content, entry.Id, bundle.RevisionId);
-                        if (DeploymentValidation.Errors(parsed).Count > 0) continue;
+                        if (DeploymentValidation.Errors(parsed, fanOut: runtime.SupportsDistributedWork).Count > 0) continue;
                         foreach (var source in parsed.Config.Sources.Where(s => s.Rabbitmq is not null))
                             desired[entry.Id + "/" + source.Name + "/" + bundle.RevisionId] = (entry.Id, source.Name, source.Rabbitmq!);
                     }

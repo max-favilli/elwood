@@ -87,6 +87,8 @@ jobs:
         run: dotnet test dotnet/tests/Elwood.Pipeline.Azure.Tests --filter "Category=Integration" --verbosity normal
       - name: Distributed work-item coordination (real Redis)
         run: dotnet test dotnet/tests/Elwood.Pipeline.Redis.Tests --filter "Category=Integration" --verbosity normal
+      - name: Installed distributed host (Redis and Azurite)
+        run: dotnet test dotnet/tests/Elwood.Runtime.Hosting.Tests --filter "Category=Integration" --verbosity normal
 
   typescript:
     name: TypeScript
