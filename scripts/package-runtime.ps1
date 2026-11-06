@@ -29,6 +29,8 @@ foreach ($entry in $projects.GetEnumerator()) {
 }
 $kit = Join-Path $output 'consumer-kit'
 New-Item -ItemType Directory -Path $kit | Out-Null
+Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $kit 'LICENSE')
+Set-Content -LiteralPath (Join-Path $kit 'README.md') -Value "# Elwood $Version installation kit`n`nStart with [the pilot handoff](docs/pilot-handoff.md). Check release.json and SHA256SUMS.txt from the release before deploying. This kit contains installation resources; the separate runtime ZIPs contain the applications." -Encoding utf8
 $tracked = [string]::Join("`n", @(& git -C $root ls-files -z -- infra docs scripts))
 if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate tracked consumer resources.' }
 foreach ($relative in $tracked.Split([char]0, [StringSplitOptions]::RemoveEmptyEntries)) {

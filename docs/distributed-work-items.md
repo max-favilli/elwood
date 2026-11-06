@@ -1,8 +1,8 @@
 # Distributed work items and Redis coordination
 
-Status: **M7 active; updated 6 November 2026.** Durable journals (7.2), item execution and parent scheduling pass CI. M7.4 adds explicit YAML fan-out, bounded recovery/aggregation and sequential local real/mock parity. M7.5 implements journal-backed item inspection, selected retry commands, portal controls, bounded cleanup and Azure admission/late-upload accounting; see [its current contract and remaining gates](item-inspection-recovery-design.md). Explicit distributed replay and bounded journal status summaries are implemented. Installed-host verification, activation and consumer installation still remain before Eagle adoption. M6's measurement/cleanup and billing follow-up are complete. M6 covers the bounded Azure storage profile, not concurrent fan-out within an execution.
+Status: **M7 active; updated 6 November 2026.** Explicit Azure/Redis host registration, fan-out, item inspection/retry/replay, physical cleanup, finite admission and shared catalog caching are implemented. The installed Redis/Azurite check passes at eight items; the larger capacity campaign and versioned release remain in progress. Use the [master checklist](master-checklist.md#m7--distributed-work-items-and-redis) and [consumer handoff](pilot-handoff.md) for current readiness. The dated component evidence below records the earlier development gates, not current host-registration status.
 
-The 12 October follow-up makes failure acknowledgement idempotent for the same owner token and decision, and surfaces Redis connection/timeouts as `WorkCoordinationOutcomeUncertainException`. Reconcile a submitted operation using its original identity; never assume a lost reply means no mutation. The foundation's 25 protocol cases subsequently passed against **real Redis 7.4 in CI**, alongside two injected transport tests. See [M6 release evidence](m6-release-evidence.md#fourth-review-installer-verification--12-october-2026). The adapter remains experimental, is not wired into the runtime and is not packable.
+The 12 October follow-up makes failure acknowledgement idempotent for the same owner token and decision, and surfaces Redis connection/timeouts as `WorkCoordinationOutcomeUncertainException`. Reconcile a submitted operation using its original identity; never assume a lost reply means no mutation. The foundation's 25 protocol cases subsequently passed against **real Redis 7.4 in CI**, alongside two injected transport tests. See [M6 release evidence](m6-release-evidence.md#fourth-review-installer-verification--12-october-2026). The Redis package is now packable; the installed profile uses its projection/cache alongside the authoritative durable journal, rather than authorizing calls from Redis alone.
 
 ## Ownership and release scope
 
@@ -27,10 +27,10 @@ Keep the current storage-only profile for compatible low-volume pipelines. Add R
 
 - [x] 7.1 Coordination contract and atomic Redis implementation: item claims, global stage concurrency, fenced checkpoints, duplicate completion, explicit retry, bounded expiry recovery, ordered result inspection/aggregation ownership, finite expiry and structural corruption detection. Foundation protocol cases also pass against real Redis 7.4 in CI; the broader failure/load campaign remains 7.7.
 - [x] 7.2 Durable manifests/checkpoints and Redis-loss reconciliation. Immutable admission, fenced item sessions, durable concurrency permits, uncertainty after interrupted writes and reconstruction after lost/rolled-back cache mutations pass local and Docker CI protocol tests. Production load/provider-failover certification remains 7.7, and activation depends on 7.3–7.5.
-- [ ] 7.3 **Active:** item execution and the experimental runtime scheduler are implemented. Parent intents, indexed recovery, generation-qualified queue hints, aggregate publication and whole-step local real/mock parity pass CI. Production host registration depends on 7.5; expanded-item local testing is part of 7.4.
+- [x] 7.3 Item execution, parent intents/recovery, scoped connectors, queue hints, aggregation and shared API/Functions registration. Installation explicitly opts in; ordinary flows retain their semantics.
 - [x] 7.4 Explicit YAML fan-out, bounded scheduling, ordered source/output aggregation and local real/mock parity, preserving existing output selection. Local component/API verification passes; production activation and load certification remain later packages.
-- [ ] 7.5 Item-aware inspection, operator recovery, retention, quotas and backpressure. Read/selected-retry controls, bounded physical cleanup and Azure admission/late-upload accounting are implemented; installed-host verification and activation remain in the [current checklist](item-inspection-recovery-design.md).
-- [ ] 7.6 Immutable pipeline/route distribution cache, deployment invalidation and cold-cache correctness.
+- [x] 7.5 Journal-authoritative item inspection, selected retry, replay, portal controls, bounded cleanup, quotas/backpressure and installed-host activation. See [the design and evidence](item-inspection-recovery-design.md).
+- [x] 7.6 Hash-verified shared catalog cache with authoritative ETag invalidation, finite TTL and cold/corrupt/unavailable-cache fallback.
 - [ ] 7.7 Local and real Redis tests: thousands of items across independent workers, duplicate delivery, lost responses, expired owners, restart/failover, downstream uncertainty and retention. Report emulator/protocol tests separately from real Redis tests.
 - [ ] 7.8 Consumer Redis infrastructure/configuration, published packages, installation smoke tests and versioned Eagle/Deldo handoffs. Provisioning and cost approval stay in those projects.
 
@@ -58,7 +58,7 @@ Redis scripting atomicity prevents interleaving, not loss on server failure or r
 
 ## Current implementation and limits
 
-`IWorkItemCoordinator` is provider-neutral; `Elwood.Pipeline.Redis` implements it using one bounded Lua script. The adapter is experimental, is not packable, and is not registered in any production host. Existing deployed definitions keep their behavior; explicit new fan-out is described above. The standalone coordinator exposes ordered result references; the separate durable journal and item runner below are the authority for connector calls. An explicit scheduler connects the runner to `AsyncExecutor`, including expanded-item aggregation. Production host registration remains gated on M7.5.
+`IWorkItemCoordinator` is provider-neutral; `Elwood.Pipeline.Redis` implements it using one bounded Lua script. The standalone coordinator exposes ordered result references; the separate durable journal and item runner below are the authority for connector calls. The installed profile registers `RedisWorkJournalProjection` and the immutable catalog cache, while the scheduler connects durable item ownership to `AsyncExecutor`. Existing deployed definitions keep their behavior; explicit new fan-out is described above.
 
 Each stage has five same-slot keys: header, item records, active lease index, result references and delayed retries. Item records are created on first claim, rather than materializing the entire manifest in a script. Recovery and inspection are capped at 256 items per call. Server time governs leases. Registration accepts a deadline within seven days, leases are 100 ms–2 minutes with renewal, history expiry is finite and at most 365 days after the deadline, and a stage is bounded to 100,000 items / 1,000 concurrent owners / 100 attempts per item. These are protective ceilings, not measured production capacity promises. References are at most 2 KiB and diagnostics at most 1 KiB; callers must redact diagnostics before storage.
 
@@ -66,7 +66,7 @@ Claim and retry request IDs must be retained by their caller and reused after a 
 
 All normal writes use the same absolute expiry. Durable cleanup of partial script failures, abandoned manifests and document payloads belongs to 7.2/7.5. TTL alone is not the full retention implementation.
 
-### Durable activation gate (7.2)
+### Historical durable activation gate (7.2)
 
 Before enabling connector dispatch, implement and verify a durable admission/checkpoint protocol that remains authoritative when Redis loses an acknowledged write or rolls back to a structurally valid older state. In particular:
 
@@ -76,7 +76,7 @@ Before enabling connector dispatch, implement and verify a durable admission/che
 4. Prevent over-admission after loss of Redis's running count. Restoring only completed-item counters cannot establish a safe global concurrency limit while pre-failover workers are still active.
 5. Verify full loss, partial loss and coherent rollback during claim, external call, completion, retry and aggregation. Retain the 30-day default and independently tracked output cleanup obligations.
 
-These are the acceptance requirements for the durable journal below. Runtime activation additionally depends on 7.3–7.5 and the consumer profile; the journal is not registered in a production host.
+These were the acceptance requirements for the durable journal below. The completed 7.3–7.5 registration now supplies the journal together with its required retention, accounting and operator controls.
 
 ### Durable journal implementation (7.2)
 
@@ -92,9 +92,9 @@ The first implementation favors explicit durable fences over a Redis-only fast p
 
 The journal package (`c7bf6c7`) passed [all CI jobs on 12 October](https://github.com/max-favilli/elwood/actions/runs/38250904402), including real Redis 7.4 projection tests and actual Azurite service leases. At that commit, 18 durable-journal tests, three Azure SDK/fake-transport fencing tests and five journal/projection tests passed. The latter include 300 durably checkpointed items across 16 tasks with eight shared permits, ordered aggregation and full cache reconstruction. Local Garnet checks are additional protocol coverage, not an Azure throughput or managed Redis failover claim.
 
-### Isolated step runner (7.3, in progress)
+### Isolated step runner (historical 7.3 baseline)
 
-Historical 7.3 implementation notes below describe the runner before YAML expansion. The current 7.4 behavior and limits are recorded above; only host registration remains gated on 7.5.
+Historical 7.3 implementation notes below describe the runner before YAML expansion and host activation. Their test totals and activation warnings describe those commits; use the current checklist and installation handoff above.
 
 `WorkItemStepExecutor` freezes the pipeline revision and assembled dependencies once per stage. Each item has a separate input, checkpoint history and durable ownership; shared `ExecutionOperations` perform connector calls and DSL evaluation with `$slice` and `$index` bindings. Ordinary execution does not receive these additional bindings. Output `path` retains its existing meaning; no YAML fan-out behavior is enabled by this package.
 
@@ -114,7 +114,7 @@ The remaining 7.3 integration tasks are tracked separately so component completi
 - [x] Add bounded stage discovery and queue item messages, with recovery after a lost notification and isolation of one corrupt item. M7.4 extends whole-step scheduling with explicit expansion.
 - [x] Publish the journal's completed stage result to the pinned parent and release dependent stages idempotently, without rewriting parent state on every item checkpoint. M7.4 adds ordered many-item aggregation.
 - [x] Verify whole-step processing against synchronous local real/mock testing, including output selection and absence of fan-out-only bindings; mocks never fall through to a real connector. M7.4 adds expanded-item parity.
-- [ ] Register the distributed profile only together with item inspection, finite physical retention, admission/accounting and recovery endpoints from 7.5.
+- [x] Register the distributed profile together with item inspection, finite physical retention, admission/accounting and recovery endpoints from 7.5; verified in the 6 November installed-host campaign.
 
 ### Parent scheduling and recovery (7.3)
 

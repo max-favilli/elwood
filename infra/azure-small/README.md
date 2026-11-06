@@ -2,7 +2,7 @@
 
 `capacityProfile: files-25m` selects the large-file profile (4 GiB workers and partitioned retention), verified with three simultaneous 25 MiB generated Deldo fixtures. The default remains `guarded`. Read the [measured capacity and cost basis](../../docs/capacity-profile.md); switching a populated installation requires an explicit offline migration. Permanent hosting cost approval and real supplier/database acceptance remain pending.
 
-The profile runs .NET 10 isolated Azure Functions on Flex Consumption, using Blob checkpoints/documents/catalog, Table scheduling indexes and Storage Queue notifications. Set `queueProvider: serviceBus` for a Basic Service Bus internal queue. External RabbitMQ requires a separately billed always-running ingress host. Redis and SQL are not runtime dependencies; the lab's SQL is only a connector fixture.
+The profile runs .NET 10 isolated Azure Functions on Flex Consumption, using Blob checkpoints/documents/catalog, Table scheduling indexes and Storage Queue notifications. Set `queueProvider: serviceBus` for a Basic Service Bus internal queue. External RabbitMQ requires a separately billed always-running ingress host. Redis is optional for ordinary flows and required by the explicit distributed profile below. SQL is a business-system connector, not Elwood's state store.
 
 Read [operations and limits](../../docs/azure-operations.md), [verification evidence](../../docs/m6-release-evidence.md) and [the master checklist](../../docs/master-checklist.md) before adoption. Azure is the first supported native provider; AWS/GCP adapters are not supplied. Controlled fixtures do not certify the full pet-project workload.
 
@@ -38,6 +38,8 @@ The [Deldo/Eagle handoff](../../docs/pilot-handoff.md) describes the pilot candi
 The optional [Redis template](../azure-redis/main.bicep) takes an existing Key Vault and runtime principal ID, creates a separately billed Managed Redis instance and stores its TLS connection as a secret. Approve its regional cost before deployment. It uses `NoEviction`, finite Elwood key TTLs and authenticated public access; private networking requires consumer VNet/DNS configuration. This new template is compile-verified, not a claim of a live Managed Redis deployment. Both API/Functions registration and cold-cache/cleanup semantics are verified against Redis/Azurite in CI.
 
 After native deployment/bootstrap, require readiness 200 and run `node scripts/verify-installation.mjs --distributed` with the private runtime URL/token environment variables described in the handoff. Redis connection references remain individual settings in both runtime and RabbitMQ ingress, because App Service does not resolve a Key Vault reference nested inside JSON.
+
+For a fresh installation, deploy the main template first with the intended final `capacityProfile` but **without uploading application binaries**. Use its identity output to deploy the Redis template, then apply the main template again with `redisConnectionSecretUri` and `enableDistributedWork` as required. Initialize retention with the final profile before uploading either host. This avoids a circular dependency between the runtime identity and the secret access grant; an unconfigured app must not accept workloads between these steps.
 
 ## Installation
 

@@ -17,6 +17,8 @@ $.orders[*]
 
 Available as a **.NET library** (NuGet) and a **TypeScript/JavaScript package** (npm). Both implementations are behaviorally identical, validated by a shared conformance test suite.
 
+**Elwood Pipelines** adds YAML integrations, durable execution, HTTP/SQL/Blob/RabbitMQ connectors, explicit concurrent work items and a management portal. Start with the [Deldo and Eagle installation handoff](docs/pilot-handoff.md), including release status, operating limits and consumer acceptance checks.
+
 **[📖 Syntax Reference →](docs/syntax-reference.md)**
 
 **[🎮 Try it in the Playground →](https://max-favilli.github.io/elwood/)**
