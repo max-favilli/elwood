@@ -1,6 +1,6 @@
 # Elwood 0.8.0-rc.1: Deldo and Eagle consumer handoff
 
-Release candidate preparation is in progress. Use a published tag and its passing evidence, not an arbitrary `main` checkout. This document will name the published assets when release verification completes.
+This document describes the bounded **0.8.0-rc.1 pilot candidate**. Use the [versioned release](https://github.com/max-favilli/elwood/releases/tag/v0.8.0-rc.1), not an arbitrary `main` checkout. Publication is complete only when its runtime archives and checksums are downloadable and the Release workflow is green; absent assets mean the candidate is not yet available. Native consumer installation and business acceptance remain required before production activation.
 
 **First-pilot scope confirmed 13 November:** the first Eagle/SAP pilot is smaller; certify the wider Eagle envelope afterward. The bounded distributed profile can be adopted for that first pilot after release and its own native installation/load/retention checks. Record its actual event rate, expanded items, payload sizes and deadlines before activation. The [Eagle capacity package](eagle-capacity-plan.md) retains the later requirements: production volumes including executions above 6,600 outputs, prompt autoscaling, 100 MB ingress bodies, 200 MB structured data, 4 GB binary assets and 40-minute workflows. This release does not certify that full envelope.
 
@@ -24,6 +24,8 @@ The Redis template's cheaper `highAvailability=false` default is for development
 ## Obtain and install
 
 Use the versioned runtime ZIPs and consumer kit from the GitHub release, verify `SHA256SUMS.txt`, and retain `release.json` with deployment records. Alternatively check out the exact tag and run `scripts/package-runtime.ps1`; it refuses a dirty checkout and includes only tracked resources in the kit. Runtime hosts require .NET 10; the installation smoke uses Node.js 22+. NuGet users should reference the matching `Elwood.Pipeline`, `.Azure`, `.Sql`, `.RabbitMq` and `.Redis` candidate versions. The DSL Core stays at 0.7.26; a platform release does not change language semantics.
+
+Expected release assets: `elwood-functions-0.8.0-rc.1.zip`, `elwood-api-0.8.0-rc.1.zip`, `elwood-ingress-0.8.0-rc.1.zip`, `elwood-consumer-kit-0.8.0-rc.1.zip` and `SHA256SUMS.txt`. The kit contains the Bicep templates, bootstrap/verification scripts and this documentation. Functions is the native Azure worker package; API is the standalone host; ingress is the separate external RabbitMQ listener. Use the installer instructions to select the hosts required by your integration, not all ZIPs on the same app.
 
 Use the managed `Elwood.Cli` .NET tool for offline YAML `pipeline` commands. Native CLI downloads support standalone DSL evaluation/scripts/REPL only; use the runtime API or portal for connector execution, durable tests and distributed fan-out. See [the CLI boundary](local-testing.md#offline-cli-boundary).
 

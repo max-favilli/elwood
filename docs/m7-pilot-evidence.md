@@ -92,4 +92,10 @@ Portal revision `95c39885c584817d8ae9233fca9a0c9202a5353c` has [green CI](https:
 
 ## Consumer acceptance remains separate
 
+### Final local candidate checks — 13 November
+
+Clean source `13f69fe757ff743d11318e6fecbe2c476886bf11` produced all four versioned `0.8.0-rc.1` bundles. Checksums, MIT licenses, private-file exclusion, source provenance, hidden Functions support metadata and Core assembly version **0.7.26.0** pass. All **five HTTP API contracts** pass against the explicitly selected packaged Release API DLL, with isolated test state and loopback services. This avoids the stale Debug/dev-server problem from the earlier review. These checks cover the same runtime source as successful CI `64e9178`; subsequent candidate preparation changes only documentation/evidence.
+
+Portal `95c39885c584817d8ae9233fca9a0c9202a5353c` remains unchanged with green CI. Its **13 November** production dependency audit reports zero known advisories. The release workflow separately gates publication on CI, each native CLI executable's behavior and runtime bundle construction. A locally built archive is not a published artifact; the versioned release and final publication result remain authoritative.
+
 Use [the pilot handoff](pilot-handoff.md) for native installation/bootstrap, the installation smoke, real mapping/credential decisions and Deldo/Eagle acceptance lists. The consumer sessions own resource approval, native deployment, representative load/failover and measured monthly spending. No permanent consumer infrastructure was provisioned for this verification.
