@@ -1,6 +1,6 @@
 # Eagle capacity package
 
-Status: **required before declaring Eagle ready for live use**. Added 6 November 2026 after the owner supplied production-volume observations. No consumer infrastructure is provisioned by this package. Deldo's separately verified `files-25m` profile remains unchanged.
+Status: **wider Eagle migration and capacity certification; follows the smaller first pilot**. Added 6 November 2026 after the owner supplied production-volume observations. On 13 November the owner confirmed that the first SAP pilot is smaller and that the full envelope can be certified afterward. The first pilot may use the bounded profile once its release is published and its own load, retention runway and native installation checks pass. This does not certify the wider workload below. No consumer infrastructure is provisioned by this package. Deldo's separately verified `files-25m` profile remains unchanged.
 
 ## Workload and units
 
@@ -24,7 +24,7 @@ The exact Elwood item count requires the first pilot's YAML and cannot be obtain
 
 The fixed 64-partition Blob ledger holds at most 131,072 accounting objects. A completed 2,048-item fixture registered 42,707 objects. This covers a bounded functional pilot, not the production retention envelope above. Increasing the JSON ledger beyond its 4 MiB bound, reducing history silently or relabeling events as larger work units would not solve the requirement.
 
-The bounded maintenance changes passed a complete 2,048-item delivery/recovery/physical-cleanup run at `7061e7b`: processing took 1,820.503 seconds and cleanup 371.884 seconds. The subsequent run at `acf2694` again reached the 60-minute test deadline during cleanup after processing took 3,285.543 seconds. Preserve both observations in [the evidence](m7-pilot-evidence.md); a single pass does not establish consistent throughput, Eagle's production latency or the required retained cardinality.
+The bounded maintenance changes now pass two consecutive complete 2,048-item delivery/recovery/physical-cleanup runs at `68cd0ab` and `64e9178`: processing took 1,569.490 / 2,240.958 seconds and cleanup 305.648 / 406.697 seconds. This closes the bounded pilot's repeat-run regression gate. Preserve the earlier pass and failures in [the evidence](m7-pilot-evidence.md); emulator completion does not certify Eagle's production latency or the required retained cardinality.
 
 ### Payload and hosting audit — 6 November 2026
 
@@ -39,6 +39,14 @@ The bounded maintenance changes passed a complete 2,048-item delivery/recovery/p
 Azure Functions documents a 210 MB HTTP request maximum, a roughly 230-second HTTP response limit, Flex instance sizes up to 4 GiB, and only 0.8 GB temporary storage on Flex. Warm instances reduce startup delays; scale-out is not an instantaneous latency guarantee. These constraints mean neither a 40-minute synchronous HTTP response nor spooling a 4 GB file onto default Flex local disk is an appropriate default. Select and validate the consumer hosting profile after measuring actual transformations; no expensive tier is implicitly approved. [Microsoft hosting limits](https://learn.microsoft.com/en-us/azure/azure-functions/functions-scale).
 
 Internal queue notifications continue carrying IDs/references; they do not carry the 100 MB trigger body or multi-GB asset. Azure Storage Queue messages are limited to 64 KiB. [Microsoft queue limits](https://learn.microsoft.com/en-us/azure/storage/queues/scalability-targets).
+
+### Payload storage and queue decision — 13 November 2026
+
+Keep large content in object storage and queue only execution/item identifiers. This is the [claim-check pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/claim-check). The existing Azure queue serializer already enforces a 4 KiB envelope, including when used by Service Bus; the installer selects Storage Queue or Service Bus Basic. Large payloads do not require large internal broker messages or a Premium upgrade solely for message size. Premium may still be selected for private networking or dedicated broker performance, subject to consumer measurements and cost approval. [Service Bus tiers and limits](https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-quotas).
+
+Support two ingestion paths in the wider package: an unchanged producer sends a full body which Elwood streams into owned storage, or a capable producer uploads content first and submits a reference. The latter needs an explicit authorized reference contract; it is not permission to fetch arbitrary URLs. Pin content by version/ETag and hash, and use scoped identity access rather than putting credentials in messages. Keep a reference tied to its pipeline revision and execution. Persist the payload and recoverable scheduling state before acknowledging acceptance; a failed queue publication must be recoverable from durable state. Interrupted uploads need independent cleanup obligations.
+
+Payload retention follows the configurable 30-day execution policy and must cover permitted retry/replay windows. Do not delete the payload merely because one queue delivery completed. Producer-owned input blobs remain outside Elwood's deletion scope; acceptance must either retain an owned immutable copy or explicitly verify the external availability/immutability contract. The current streaming adapter is a foundation, not activation of either new ingress path. Moving bytes out of the broker does not by itself solve structured-transformation memory, large binary operations or scale-out latency.
 
 ## Implementation direction
 
@@ -71,9 +79,9 @@ Select the new provider through an explicit installation layout/profile. Keep th
 - [ ] Prove operation and memory bounds at production-scale metadata cardinality; exercise concurrency, throttles, lost replies, missing control rows and cleanup interruption against SDK transports and Azurite.
 - [ ] Complete an installed batch of at least 7,000 items, recovery, selected retries and physical retention. Measure normal and duplicate/burst delivery separately.
 - [ ] Publish measured limits, deployment choices, cost-model inputs and updated versioned consumer handoffs.
-- [ ] Consumer-owned native load/failover and monthly-cost acceptance using the actual pilot mappings and payload sizes.
+- [ ] Consumer-owned native load/failover and monthly-cost acceptance using representative wider-migration mappings and payload sizes. The smaller first pilot has a separate acceptance list in the handoff.
 
-No release is Eagle-production-ready while the required implementation and verification boxes above remain open. Native service pricing, provisioning approval and final business acceptance belong to the consumer sessions.
+No release is certified for the full Eagle production envelope while the required implementation and verification boxes above remain open. These are not blanket prerequisites for the smaller first pilot agreed on 13 November. Native service pricing, provisioning approval and final business acceptance belong to the consumer sessions.
 
 ## Call-site audit and first implementation package
 
@@ -100,4 +108,4 @@ The initial local regressions exercise transaction conflicts, lost replies, gene
 
 Interrupted, cancelled, oversized and uncertain writes keep independent cleanup obligations. The existing execution-prefix cleanup applies; the independent sweeper also removes the owned placeholder version without deleting replacements. Transfer lifetime is bounded to at most one hour, within the existing unconfirmed-write grace. This is storage infrastructure only: no runtime profile, trigger, connector or DSL path yet uses the new interface, and no 100 MB/200 MB/4 GB end-to-end support is claimed. The new generated 4 GiB copy check measures the transfer algorithm without allocating a complete input; real SDK emulator tests exercise multi-block storage separately. Native Azure transfer/cost acceptance remains open.
 
-Verification on 6 November at `68cd0ab`: **108 Azure adapter unit tests pass**, including 14 new streaming cases; the .NET 8 build passes with no warnings/errors. [CI 42269496635](https://github.com/max-favilli/elwood/actions/runs/42269496635) passes the real SDK/Azurite integration step, including all three new storage cases, real Redis coordination and the installed HTTPS smoke. Its full 2,048-item capacity/cleanup run is still in progress at this checkpoint; no overall CI or throughput pass is claimed. No Azure resources or software installations were added.
+Verification at `68cd0ab`: **108 Azure adapter unit tests pass**, including 14 new streaming cases; the .NET 8 build passes with no warnings/errors. [CI 42269496635](https://github.com/max-favilli/elwood/actions/runs/42269496635) and the following [CI 42270205299](https://github.com/max-favilli/elwood/actions/runs/42270205299) at `64e9178` both completed successfully, confirmed on 13 November. Each passes real SDK/Azurite storage cases, real Redis coordination, the installed HTTPS smoke and the full 2,048-item processing/cleanup run. No native Azure throughput or large-payload end-to-end claim follows from these checks. No Azure resources or software installations were added.

@@ -1,6 +1,6 @@
 # Changelog
 
-## Pipeline 0.8.0-rc.1 — pilot candidate (6 November 2026)
+## Pipeline 0.8.0-rc.1 — pilot candidate (13 November 2026)
 
 Release preparation: versioned runtime ZIPs, consumer installation kit and optional SQL/RabbitMQ/Redis packages accompany this candidate. Core remains 0.7.26 and the TypeScript DSL version is unchanged; no DSL behavior changes are included.
 
@@ -10,6 +10,7 @@ Release preparation: versioned runtime ZIPs, consumer installation kit and optio
 - Standalone API Azure consumers, shared Functions configuration, optional Managed Redis Bicep/Key Vault wiring, install smoke and separate Deldo/Eagle consumer instructions.
 - SQL adapter pins the patched PKCS dependency (9.0.21) for the October 2026 Microsoft advisories.
 - Native CLI executables now explain that YAML pipeline commands require the managed .NET tool, instead of returning a misleading YAML deserialization failure. DSL eval/run/repl remain supported and release CI exercises the native binaries.
+- Two consecutive complete 2,048-item installed-profile runs verify duplicate delivery, cold Redis recovery and physical retention. The first SAP pilot is explicitly smaller than the wider Eagle migration; large-payload and full-estate capacity certification follow separately. Internal queues carry identifiers (4 KiB maximum), with Storage Queue or Service Bus Basic; large-message Premium is not a prerequisite.
 
 See [pilot handoff](pilot-handoff.md) for the candidate's evidence, finite limits and consumer-owned native-cloud/business acceptance. Package publication is not itself production certification.
 

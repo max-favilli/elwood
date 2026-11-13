@@ -1,6 +1,6 @@
 # M7 pilot release evidence
 
-Updated 6 November 2026. **Release verification is in progress.** This document distinguishes component checks, installed-profile emulator checks, published artifacts and consumer-native acceptance. A failed run is not a certified capacity envelope.
+Updated 13 November 2026. **Two consecutive full installed-profile runs pass; release packaging/publication is in progress.** The owner confirmed a smaller first SAP pilot, with wider Eagle capacity certified afterward. This document distinguishes component checks, installed-profile emulator checks, published artifacts and consumer-native acceptance. A failed run is not a certified capacity envelope.
 
 ## Reproduction and environment
 
@@ -33,6 +33,17 @@ Azurite does not implement Azure RBAC, native lifecycle/versioning, network late
 | [42244834223](https://github.com/max-favilli/elwood/actions/runs/42244834223), `7061e7b` | Complete 2,048-item run passed. Processing 1,820.503 seconds / 928,737 SDK requests; 42,763 accounting objects / 99,921,858 bytes; peak process 557,346,816 bytes, Redis 4,659,032 bytes. Cleanup 371.884 seconds / 31,265 requests | Physical history and parent removed; only the closed work reservation remains, with 2,048 items held until its admission fence expires. All CI jobs passed. [Processing](evidence/m7-pilot/processing-7061e7b.json), [cleanup](evidence/m7-pilot/cleanup-7061e7b.json). Emulator correctness evidence, not native latency/cost certification |
 | [42245477390](https://github.com/max-favilli/elwood/actions/runs/42245477390), `acf2694` | Processing assertions passed in 3,285.543 seconds / 899,421 requests; 42,760 accounting objects / 101,617,244 bytes. Peak process 560,435,200 bytes | Full run hit 60 minutes during document cleanup again. Last cleanup snapshot: pass 2, 254.465 seconds / 9,641 requests. Other CI jobs passed. [Raw processing](evidence/m7-pilot/processing-acf2694.json). Retain the failed result; the earlier pass does not establish repeatable throughput |
 
+### Consecutive full passes confirmed 13 November
+
+| Run | Processing | Physical cleanup | Accounting and memory |
+|---|---|---|---|
+| [42269496635](https://github.com/max-favilli/elwood/actions/runs/42269496635), `68cd0ab` | 2,048 items, 1,569.490 seconds, 911,545 SDK requests | 305.648 seconds, 31,174 SDK requests | 42,759 registered objects / 99,014,653 bytes; peak process 546,017,280 bytes; Redis 4,670,360 bytes |
+| [42270205299](https://github.com/max-favilli/elwood/actions/runs/42270205299), `64e9178` | 2,048 items, 2,240.958 seconds, 933,518 SDK requests | 406.697 seconds, 31,258 SDK requests | 42,716 registered objects / 99,632,089 bytes; peak process 762,732,544 bytes; Redis 4,693,192 bytes |
+
+Both complete under the unchanged 60-minute budget and 1,610,612,736-byte managed-heap limit, including duplicated hints, cold Redis recovery and one delivery per item. Both prove removal of parent and physical history; accounting retains only one closed work reservation for 2,048 items until the original admission fence expires. Both full CI workflows and the separate shipped HTTPS installation client pass. The runs executed on 6 November; their completed results were collected on 13 November.
+
+Raw observations: [processing 68cd0ab](evidence/m7-pilot/processing-68cd0ab.json), [cleanup 68cd0ab](evidence/m7-pilot/cleanup-68cd0ab.json), [processing 64e9178](evidence/m7-pilot/processing-64e9178.json), [cleanup 64e9178](evidence/m7-pilot/cleanup-64e9178.json), and [HTTPS client 64e9178](evidence/m7-pilot/installation-client-64e9178.json). These close checklist 7.7b for the bounded pilot. Preserve the earlier failed runs above; the variability and high operation counts require consumer-native throughput/cost checks. This does not certify 7,000 items, full-estate 30-day retention, millisecond start latency or the large-payload envelope.
+
 The scheduler now ignores duplicate/busy hints that made no progress, rejects already settled hints before taking a parent claim, and uses a bounded next-dispatch cursor. Real completions observe one item and publish immediate failed-item diagnostics; periodic recovery keeps its independent bounded scan. Dedicated aggregation continuation hints publish ordered results without redispatching connectors. A 260-item out-of-order regression completes without periodic recovery.
 
 The `b202ad0` correction used the same authoritative Blob lease through a read-only guard, without rotating admission reservations or creating Table index intents. Its failed load result showed that item validation still contended with parent aggregation/recovery.
@@ -61,7 +72,7 @@ CI `42216957290` also exposed an independent SQL timeout classification failure.
 
 ## Packaging checks completed so far
 
-The streamed-payload foundation at `68cd0ab` adds 14 local regressions (108 Azure adapter unit checks in total), including a generated 4 GiB copy with 4 MiB blocks. Its .NET 8 build passes. In [CI 42269496635](https://github.com/max-favilli/elwood/actions/runs/42269496635), the real SDK/Azurite integration step passes with three new cases for a multi-block nonseekable upload/read/cleanup, empty payloads and failed partial-upload cleanup; real Redis and the installed HTTPS smoke also pass. The complete 2,048-item run is still in progress at this checkpoint. This storage adapter is not wired into a runtime profile and is not evidence of 100 MB trigger acceptance, 200 MB transformation or 4 GB end-to-end pipeline support. Those gates are tracked in the [Eagle capacity plan](eagle-capacity-plan.md).
+The streamed-payload foundation at `68cd0ab` adds 14 local regressions (108 Azure adapter unit checks in total), including a generated 4 GiB copy with 4 MiB blocks. Its .NET 8 build passes. [CI 42269496635](https://github.com/max-favilli/elwood/actions/runs/42269496635) and the following `64e9178` run pass completely, including real SDK/Azurite cases for multi-block nonseekable upload/read/cleanup, empty payloads and failed partial-upload cleanup. Real Redis, the installed HTTPS smoke and the complete 2,048-item runs pass as recorded above. This storage adapter is not wired into a runtime profile and is not evidence of 100 MB trigger acceptance, 200 MB transformation or 4 GB end-to-end pipeline support. Those later gates are tracked in the [Eagle capacity plan](eagle-capacity-plan.md).
 
 The clean `3f9958d8` checkout produced framework-dependent .NET 10 Functions, API and ingress ZIPs and a tracked-file consumer kit. All four include the MIT license; archive inspection found no `.private`, `local.settings.json` or `secrets.json` entries. The Functions archive includes its hidden `.azurefunctions` directory and native binding metadata. Core's assembly version remains **0.7.26.0**. `SHA256SUMS.txt` covers all four ZIPs, and `release.json` records the source commit. These local archives predate subsequent scheduler corrections and are **not the final release**.
 
