@@ -1,0 +1,9 @@
+{
+  "checkedAt": "2026-11-14T15:22:11.9188598+00:00",
+  "version": "0.8.0-rc.1",
+  "installation": "passed",
+  "dslEvaluation": "passed",
+  "offlinePipeline": "passed",
+  "source": "https://api.nuget.org/v3/index.json",
+  "yamlValidation": "passed"
+}

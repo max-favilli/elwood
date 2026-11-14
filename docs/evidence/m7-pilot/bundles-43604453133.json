@@ -1,0 +1,28 @@
+{
+  "coreAssembly": "0.7.26.0",
+  "version": "0.8.0-rc.1",
+  "checkedAt": "2026-11-14T14:25:36.0523149+00:00",
+  "sourceCommit": "08d4b49d3ccfe20fe301f4f9f1ba865bed6bcfe9",
+  "archives": [
+    {
+      "sha256": "72221d4bcc1bdf6ee4b2e8c3e02c3ea317806526ee68bc4d500ccab8147c43be",
+      "archive": "elwood-api-0.8.0-rc.1.zip",
+      "entries": 92
+    },
+    {
+      "sha256": "d2b7d280725bbe8fc514f73a83b4f3d763fe0bc4db60888d08c9b533b7b76258",
+      "archive": "elwood-consumer-kit-0.8.0-rc.1.zip",
+      "entries": 131
+    },
+    {
+      "sha256": "7491614d7e8bf876b32ffeb4c8bb9350a2b0e1e5631d405f68ebbb1c14ecb6d4",
+      "archive": "elwood-functions-0.8.0-rc.1.zip",
+      "entries": 148
+    },
+    {
+      "sha256": "3f088fec42f52bc9fb61673de19e2b9140fa45c18d57a1d7af6c2a0ff75c917e",
+      "archive": "elwood-ingress-0.8.0-rc.1.zip",
+      "entries": 81
+    }
+  ]
+}

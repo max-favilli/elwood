@@ -1,8 +1,8 @@
 # Changelog
 
-## Pipeline 0.8.0-rc.1 — pilot candidate (13 November 2026)
+## Pipeline 0.8.0-rc.1 — published pilot candidate (14 November 2026)
 
-Release preparation: versioned runtime ZIPs, consumer installation kit and optional SQL/RabbitMQ/Redis packages accompany this candidate. Core remains 0.7.26 and the TypeScript DSL version is unchanged; no DSL behavior changes are included.
+[Published release](https://github.com/max-favilli/elwood/releases/tag/v0.8.0-rc.1): versioned runtime ZIPs, consumer installation kit and optional SQL/RabbitMQ/Redis packages accompany this candidate. All six candidate NuGet packages and eight GitHub assets are publicly verified, including a fresh managed CLI installation. Publication uses NuGet Trusted Publishing; no stored long-lived API key is required. Core remains 0.7.26 and the TypeScript DSL version is unchanged; no DSL behavior changes are included.
 
 - Explicit distributed Azure/Redis host opt-in with durable manifests, fenced item permits, checkpoints, selected retry, acknowledged whole-execution replay and journal-backed inspection/counts.
 - Accounted internal journals/documents, 30-day configurable retention, bounded cleanup, capacity limits and fail-closed health admission. Ordinary whole-file flows retain their existing semantics.

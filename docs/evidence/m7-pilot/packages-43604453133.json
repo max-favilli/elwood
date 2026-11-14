@@ -1,0 +1,198 @@
+{
+  "packages": [
+    {
+      "dependencies": [
+        {
+          "version": "0.7.26",
+          "id": "Elwood.Core"
+        },
+        {
+          "version": "0.7.25",
+          "id": "Elwood.Json"
+        },
+        {
+          "version": "8.0.0",
+          "id": "Microsoft.Extensions.Logging.Abstractions"
+        },
+        {
+          "version": "16.3.0",
+          "id": "YamlDotNet"
+        },
+        {
+          "version": "0.7.26",
+          "id": "Elwood.Core"
+        },
+        {
+          "version": "0.7.25",
+          "id": "Elwood.Json"
+        },
+        {
+          "version": "8.0.0",
+          "id": "Microsoft.Extensions.Logging.Abstractions"
+        },
+        {
+          "version": "16.3.0",
+          "id": "YamlDotNet"
+        }
+      ],
+      "sha256": "794492213885283676c570b47afa56663dc869f0290d0de752084700bf25abd0",
+      "id": "Elwood.Pipeline",
+      "version": "0.8.0-rc.1"
+    },
+    {
+      "dependencies": [
+        {
+          "version": "0.8.0-rc.1",
+          "id": "Elwood.Pipeline"
+        },
+        {
+          "version": "1.11.1",
+          "id": "Azure.Data.AppConfiguration"
+        },
+        {
+          "version": "12.13.0",
+          "id": "Azure.Data.Tables"
+        },
+        {
+          "version": "1.17.1",
+          "id": "Azure.Identity"
+        },
+        {
+          "version": "7.20.2",
+          "id": "Azure.Messaging.ServiceBus"
+        },
+        {
+          "version": "[12.20.0, 12.21.0)",
+          "id": "Azure.Storage.Blobs"
+        },
+        {
+          "version": "12.28.1",
+          "id": "Azure.Storage.Queues"
+        },
+        {
+          "version": "2.13.23",
+          "id": "StackExchange.Redis"
+        },
+        {
+          "version": "0.8.0-rc.1",
+          "id": "Elwood.Pipeline"
+        },
+        {
+          "version": "1.11.1",
+          "id": "Azure.Data.AppConfiguration"
+        },
+        {
+          "version": "12.13.0",
+          "id": "Azure.Data.Tables"
+        },
+        {
+          "version": "1.17.1",
+          "id": "Azure.Identity"
+        },
+        {
+          "version": "7.20.2",
+          "id": "Azure.Messaging.ServiceBus"
+        },
+        {
+          "version": "[12.20.0, 12.21.0)",
+          "id": "Azure.Storage.Blobs"
+        },
+        {
+          "version": "12.28.1",
+          "id": "Azure.Storage.Queues"
+        },
+        {
+          "version": "2.13.23",
+          "id": "StackExchange.Redis"
+        }
+      ],
+      "sha256": "c7486ef3b216266a0c4181b102af4dbe4dc8ce525aa4ace400cb9020fa0d1ecc",
+      "id": "Elwood.Pipeline.Azure",
+      "version": "0.8.0-rc.1"
+    },
+    {
+      "dependencies": [
+        {
+          "version": "0.8.0-rc.1",
+          "id": "Elwood.Pipeline"
+        },
+        {
+          "version": "6.1.6",
+          "id": "Microsoft.Data.SqlClient"
+        },
+        {
+          "version": "9.0.21",
+          "id": "System.Security.Cryptography.Pkcs"
+        },
+        {
+          "version": "0.8.0-rc.1",
+          "id": "Elwood.Pipeline"
+        },
+        {
+          "version": "6.1.6",
+          "id": "Microsoft.Data.SqlClient"
+        },
+        {
+          "version": "9.0.21",
+          "id": "System.Security.Cryptography.Pkcs"
+        }
+      ],
+      "sha256": "53b975d53c384179ab4b5dafa2db9a3c2725325c7ae8bc14fe2ee099725918ed",
+      "id": "Elwood.Pipeline.Sql",
+      "version": "0.8.0-rc.1"
+    },
+    {
+      "dependencies": [
+        {
+          "version": "0.8.0-rc.1",
+          "id": "Elwood.Pipeline"
+        },
+        {
+          "version": "7.1.2",
+          "id": "RabbitMQ.Client"
+        },
+        {
+          "version": "0.8.0-rc.1",
+          "id": "Elwood.Pipeline"
+        },
+        {
+          "version": "7.1.2",
+          "id": "RabbitMQ.Client"
+        }
+      ],
+      "sha256": "f71e0f762526c6405eb5f8e37235d37275afbfc19bbced1e6f7355d17159799a",
+      "id": "Elwood.Pipeline.RabbitMq",
+      "version": "0.8.0-rc.1"
+    },
+    {
+      "dependencies": [
+        {
+          "version": "0.8.0-rc.1",
+          "id": "Elwood.Pipeline"
+        },
+        {
+          "version": "2.13.23",
+          "id": "StackExchange.Redis"
+        },
+        {
+          "version": "0.8.0-rc.1",
+          "id": "Elwood.Pipeline"
+        },
+        {
+          "version": "2.13.23",
+          "id": "StackExchange.Redis"
+        }
+      ],
+      "sha256": "c42e92813fbb6c1a25816818389b4dcca7dc30a3d4937b941ca3cbba11e7e6bc",
+      "id": "Elwood.Pipeline.Redis",
+      "version": "0.8.0-rc.1"
+    },
+    {
+      "dependencies": [],
+      "sha256": "0e568834770363479c274ba30247b12ff51ec154981c026545004798ad564bd4",
+      "id": "Elwood.Cli",
+      "version": "0.8.0-rc.1"
+    }
+  ],
+  "checkedAt": "2026-11-14T15:25:30.4043744+00:00"
+}

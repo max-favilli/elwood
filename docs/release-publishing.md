@@ -2,6 +2,8 @@
 
 NuGet publication uses [Trusted Publishing](https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing). GitHub issues an OIDC token and `NuGet/login@v1` exchanges it for a short-lived publishing credential. No long-lived `NUGET_API_KEY` Actions secret is required. npm authentication is unchanged.
 
+Verified on 14 November 2026: [release run 43604453133](https://github.com/max-favilli/elwood/actions/runs/43604453133) used this policy to publish all six `0.8.0-rc.1` candidate packages. Public downloads and a fresh CLI installation passed after NuGet validation/indexing completed. [Recorded evidence](m7-pilot-evidence.md#successful-full-release-retry--14-november).
+
 ## One-time NuGet account setup
 
 Create a Trusted Publishing policy in the NuGet account that owns the Elwood packages:
