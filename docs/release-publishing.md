@@ -18,7 +18,15 @@ Create a Trusted Publishing policy in the NuGet account that owns the Elwood pac
 
 Set repository Actions **variable** `NUGET_USER` to the NuGet profile username associated with the policy, not an email address or GitHub username unless those names happen to match. This username is not a credential. Do not paste tokens into issues, chat, logs or repository files. After a successful OIDC publication, the obsolete stored API key can be revoked/deleted.
 
-Only the NuGet job receives `id-token: write`; only the GitHub Release job receives `contents: write`. The workflow requests the one-hour NuGet credential after packing and all verification gates, and exposes it only to the push steps. Core publication and public availability are checked before dependent packages are pushed.
+Only the NuGet authentication/publishing jobs receive `id-token: write`; only the GitHub Release job receives `contents: write`. Authentication is checked before expensive builds/tests, and that temporary credential is discarded. The publishing job requests a fresh one-hour credential after packing and all verification gates, and exposes it only to the push steps. Core publication and public availability are checked before dependent packages are pushed.
+
+To check the policy independently without building or publishing:
+
+```powershell
+gh workflow run release.yml --repo max-favilli/elwood --ref main -f tag=v0.8.0-rc.1 -f verify-nuget-login-only=true
+```
+
+This confirms NuGet accepts the workflow identity and issues a temporary credential. Actual package publishing permissions and public availability are verified by the complete release, not by this authentication check. Authentication-only runs use a separate concurrency group and do not cancel or hold up an existing release.
 
 ## Normal release and recovery
 

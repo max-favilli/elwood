@@ -9,12 +9,16 @@ on:
         description: Existing version tag to verify and publish (without moving it)
         required: true
         type: string
+      verify-nuget-login-only:
+        description: Verify NuGet policy authentication without building or publishing
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-${{ inputs.tag || github.ref_name }}${{ inputs.verify-nuget-login-only && '-nuget-login' || '' }}
   cancel-in-progress: false
 
 jobs:
@@ -40,9 +44,27 @@ jobs:
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+  nuget-auth:
+    name: Verify NuGet Trusted Publishing policy
+    needs: source
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - name: Require NuGet account configuration
+        env:
+          NUGET_USER: ${{ vars.NUGET_USER }}
+        run: test -n "$NUGET_USER" || { echo 'Set the NUGET_USER repository variable to the NuGet profile username that owns the trusted publishing policy.'; exit 1; }
+      # Discard this credential. The publishing job requests a fresh one after tests.
+      - name: Verify policy accepts this workflow identity
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
   test:
     name: Test
-    needs: source
+    needs: [source, nuget-auth]
+    if: inputs.verify-nuget-login-only != true
     uses: ./.github/workflows/ci.yml
     with:
       source-ref: ${{ needs.source.outputs.commit }}
@@ -165,7 +187,8 @@ jobs:
 
   native-binaries:
     name: Native AOT (${{ matrix.os }})
-    needs: source
+    needs: [source, nuget-auth]
+    if: inputs.verify-nuget-login-only != true
     strategy:
       matrix:
         include:
@@ -205,7 +228,8 @@ jobs:
 
   runtime-bundles:
     name: Runtime and consumer installation kit
-    needs: source
+    needs: [source, nuget-auth]
+    if: inputs.verify-nuget-login-only != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
